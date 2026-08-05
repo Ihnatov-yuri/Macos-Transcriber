@@ -1,0 +1,315 @@
+import Foundation
+
+/// "Super" dual-ASR merge — fully local.
+///
+/// Runs TWO speech-to-text engines on every chunk concurrently (defaults:
+/// Parakeet v3 multilingual × Parakeet v2 English-specialist — genuinely
+/// different weights), then has Gemma 4 (local MLX, TEXT mode — its reliable
+/// mode) arbitrate a merged "best fit" transcript:
+///   - keep what both engines agree on,
+///   - resolve conflicts by contextual plausibility,
+///   - never introduce content found in neither.
+///
+/// Sub-engines are user-selectable (Detail → RUN → MERGE A / MERGE B) and
+/// stored in UserDefaults (`ensemble.engineA` / `ensemble.engineB`, shared
+/// with UIPrefs). Roughly 2× the compute of a single engine plus one Gemma
+/// text call per chunk — for when accuracy matters more than speed.
+actor EnsembleBackend: ASRBackend {
+    nonisolated let id = "ensemble"
+    private(set) var isReady = false
+
+    private unowned let factory: BackendFactory
+
+    private var kindA: BackendFactory.Kind = .parakeet
+    private var kindB: BackendFactory.Kind = .parakeetV2
+    private var engineA: ASRBackend?
+    private var engineB: ASRBackend?
+    private var arbiter: ASRBackend?     // Gemma 4, text mode
+
+    init(factory: BackendFactory) {
+        self.factory = factory
+    }
+
+    static func storedKind(_ key: String, fallback: BackendFactory.Kind) -> BackendFactory.Kind {
+        guard let raw = UserDefaults.standard.string(forKey: key),
+              let kind = BackendFactory.Kind(rawValue: raw)
+        else { return fallback }
+        return kind
+    }
+
+    // MARK: - Lifecycle
+
+    /// `modelPath` is the Gemma model directory — used for the merge arbiter
+    /// and for Gemma if it's picked as a sub-engine.
+    func load(modelPath: URL?) async throws {
+        let a = Self.storedKind("ensemble.engineA", fallback: .parakeet)
+        let b = Self.storedKind("ensemble.engineB", fallback: .parakeetV2)
+        guard a != b else {
+            throw ASRError.backendUnavailable(reason: "Super merge needs two different engines.")
+        }
+        guard a != .ensemble, b != .ensemble,
+              a.isLocal, b.isLocal,
+              a.supportsAudio, b.supportsAudio else {
+            throw ASRError.backendUnavailable(
+                reason: "Super merge sub-engines must be local speech engines (Parakeet v3/v2, Whisper, Gemma LiteRT)."
+            )
+        }
+
+        // Always re-run: sub-engine loads are cheap no-ops when already
+        // loaded, and the arbiter must re-resolve if Settings → text engine
+        // changed mid-session.
+        kindA = a
+        kindB = b
+        AppLog.info("ensemble", "loading \(a.rawValue) + \(b.rawValue)")
+
+        let ea = factory.backend(for: a)
+        try await ea.load(modelPath: nil)
+        let eb = factory.backend(for: b)
+        try await eb.load(modelPath: nil)
+        engineA = ea
+        engineB = eb
+
+        // Arbiter: the configured local text engine (LiteRT Gemma is much
+        // faster than MLX). Load is best-effort — without it we fall back to
+        // preferring engine A rather than failing the run.
+        let arbKind = Self.storedKind("ui.textEngine", fallback: .gemmaLiteRT)
+        let resolvedArb: BackendFactory.Kind =
+            (arbKind.supportsTextGeneration && arbKind.isLocal) ? arbKind : .gemmaLiteRT
+        let arb = factory.backend(for: resolvedArb)
+        if await !arb.isReady {
+            try? await arb.load(modelPath: nil)
+        }
+        arbiter = await arb.isReady ? arb : nil
+        if arbiter == nil {
+            AppLog.warn("ensemble", "Gemma arbiter unavailable — merge falls back to engine A output")
+        }
+        isReady = true
+    }
+
+    func release() async {
+        engineA = nil
+        engineB = nil
+        arbiter = nil
+        isReady = false
+    }
+
+    // MARK: - Audio in
+
+    func transcribeChunk(
+        samples: [Float],
+        languages: Set<String>,
+        translateTo: String?,
+        diarize: Bool,
+        previousContext: String?,
+        speakerHints: [SpeakerHint]
+    ) async throws -> String {
+        guard isReady, let engineA, let engineB else {
+            throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
+        }
+
+        // FAST PATH — both sub-engines expose word confidences (Parakeet,
+        // Whisper). Merge at the word level on the CPU (ROVER-style):
+        // milliseconds per chunk instead of a 40–130 s Gemma call. Gemma
+        // only arbitrates chunks where the engines disagree wildly.
+        if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
+            async let taskA = pa.transcribeDetailed(samples: samples, languages: languages)
+            async let taskB = pb.transcribeDetailed(samples: samples, languages: languages)
+            if let a = try? await taskA, let b = try? await taskB {
+                return await mergeDetailed(a, b, context: previousContext)
+            }
+            // fall through to the generic text path on error
+        }
+
+        // GENERIC PATH — at least one sub-engine has no word confidences
+        // (e.g. Gemma audio). Text-level compare + Gemma arbitration.
+        async let taskA = engineA.transcribeChunk(
+            samples: samples, languages: languages, translateTo: nil,
+            diarize: false, previousContext: previousContext, speakerHints: []
+        )
+        async let taskB = engineB.transcribeChunk(
+            samples: samples, languages: languages, translateTo: nil,
+            diarize: false, previousContext: previousContext, speakerHints: []
+        )
+        let textA = ((try? await taskA) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let textB = ((try? await taskB) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if textA.isEmpty && textB.isEmpty { return "" }
+        if textA.isEmpty { return textB }
+        if textB.isEmpty { return textA }
+
+        let similarity = Self.tokenSimilarity(textA, textB)
+        if similarity >= 0.85 {
+            AppLog.info("ensemble", String(format: "chunk agreement %.2f — skipping arbiter (A wins)", similarity))
+            return textA
+        }
+        return await gemmaMerge(textA: textA, textB: textB, context: previousContext)
+    }
+
+    // MARK: - Word-level confidence merge (fast path)
+
+    private func mergeDetailed(
+        _ a: DetailedTranscription,
+        _ b: DetailedTranscription,
+        context: String? = nil
+    ) async -> String {
+        if a.text.isEmpty { return b.text }
+        if b.text.isEmpty { return a.text }
+
+        // If either engine returned no scored words (some long-form paths
+        // drop token timings), word-level similarity would read 0.00 and
+        // EVERY chunk would escalate to slow Gemma arbitration. Fall back to
+        // text-level similarity in that case.
+        let haveWords = !a.words.isEmpty && !b.words.isEmpty
+        let similarity = haveWords
+            ? Self.diceSimilarity(a.words.map(\.norm), b.words.map(\.norm))
+            : Self.tokenSimilarity(a.text, b.text)
+        if !haveWords {
+            AppLog.warn("ensemble", "scored words missing (A=\(a.words.count) B=\(b.words.count)) — text-level gate \(String(format: "%.2f", similarity))")
+            if similarity >= 0.85 { return a.text }
+            return await gemmaMerge(textA: a.text, textB: b.text, context: context)
+        }
+        if similarity < 0.5 {
+            // Diagnostic for the systematic 0.00-agreement mystery: show what
+            // the two engines' normalized words actually look like.
+            AppLog.warn("ensemble", "low dice \(String(format: "%.2f", similarity)) — A[0..5]=\(a.words.prefix(5).map(\.norm)) B[0..5]=\(b.words.prefix(5).map(\.norm))")
+        }
+        if similarity >= 0.999 {
+            AppLog.info("ensemble", String(format: "agreement %.2f — engine A verbatim", similarity))
+            return a.text
+        }
+        // NOTE: no more ≥0.85 verbatim shortcut — a chunk that agrees on all
+        // but one word ("OWASP 10" vs "overas 10") is precisely where the
+        // vote earns its keep, and the vote costs milliseconds.
+        // Wild disagreement (different language pick, hallucinated segment…)
+        // is the one case worth a slow LLM look — and it's rare.
+        if similarity < 0.5, arbiter != nil {
+            AppLog.info("ensemble", String(format: "agreement %.2f — hard conflict, Gemma arbitrates", similarity))
+            return await gemmaMerge(textA: a.text, textB: b.text, context: context)
+        }
+        let merged = Self.roverMerge(a.words, b.words)
+        AppLog.info("ensemble", String(format: "agreement %.2f — confidence-voted merge (%d/%d words → %d)", similarity, a.words.count, b.words.count, merged.split(separator: " ").count))
+        return merged.isEmpty ? a.text : merged
+    }
+
+    /// ROVER-style two-system merge: align the word sequences (edit-distance
+    /// DP over normalized words), then at each divergence keep the reading
+    /// with the higher recognizer confidence. Single-engine insertions
+    /// survive only above a confidence floor. Pure CPU, O(n·m) on ~100-word
+    /// chunks — effectively instant.
+    static func roverMerge(
+        _ a: [ScoredWord],
+        _ b: [ScoredWord]
+    ) -> String {
+        let n = a.count, m = b.count
+        guard n > 0, m > 0 else { return (n > 0 ? a : b).map(\.surface).joined(separator: " ") }
+        var dp = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
+        for i in 0...n { dp[i][0] = i }
+        for j in 0...m { dp[0][j] = j }
+        for i in 1...n {
+            for j in 1...m {
+                let sub = dp[i-1][j-1] + (a[i-1].norm == b[j-1].norm ? 0 : 1)
+                dp[i][j] = min(sub, dp[i-1][j] + 1, dp[i][j-1] + 1)
+            }
+        }
+        let insertionFloor: Float = 0.55
+        var i = n, j = m
+        var reversed: [String] = []
+        while i > 0 || j > 0 {
+            if i > 0, j > 0,
+               dp[i][j] == dp[i-1][j-1] + (a[i-1].norm == b[j-1].norm ? 0 : 1)
+            {
+                // Match or substitution → higher-confidence surface wins.
+                reversed.append(a[i-1].confidence >= b[j-1].confidence
+                                ? a[i-1].surface : b[j-1].surface)
+                i -= 1; j -= 1
+            } else if i > 0, dp[i][j] == dp[i-1][j] + 1 {
+                if a[i-1].confidence >= insertionFloor { reversed.append(a[i-1].surface) }
+                i -= 1
+            } else {
+                if b[j-1].confidence >= insertionFloor { reversed.append(b[j-1].surface) }
+                j -= 1
+            }
+        }
+        return reversed.reversed().joined(separator: " ")
+    }
+
+    // MARK: - Gemma arbitration (slow path)
+
+    private func gemmaMerge(textA: String, textB: String, context: String? = nil) async -> String {
+        guard let arbiter else { return textA }
+        // The bigger picture: the conversation's preceding merged text lets
+        // the arbiter judge which conflicting reading fits the discussion —
+        // names, topic, register — instead of judging the chunk in isolation.
+        let contextBlock = context.map { tail in
+            """
+            Preceding transcript (context ONLY — do not repeat or transcribe it):
+            …\(tail.suffix(400))
+
+            """
+        } ?? ""
+        do {
+            let merged = try await arbiter.generateText(
+                systemInstruction: """
+                You merge two automatic speech-recognition transcripts of the SAME audio segment into one best transcript. Rules:
+                - Keep content the transcripts agree on.
+                - Where they conflict, choose the reading that fits the preceding conversation context and is more plausible.
+                - Never include content that appears in neither transcript. Never repeat the context. Never summarize, never comment.
+                Output ONLY the merged transcript text.
+                """,
+                userMessage: contextBlock + """
+                Transcript A (\(kindA.displayName)):
+                \(textA)
+
+                Transcript B (\(kindB.displayName)):
+                \(textB)
+                """,
+                // Bound output to ~1.3× the longer input (≈3 chars/token) so
+                // the merge can't balloon past its sources.
+                maxTokens: min(1200, max(160, Int(Double(max(textA.count, textB.count)) * 1.3 / 3)))
+            )
+            let cleaned = merged.trimmingCharacters(in: .whitespacesAndNewlines)
+            AppLog.info("ensemble", "gemma merge: A=\(textA.count)ch B=\(textB.count)ch → \(cleaned.count)ch")
+            return cleaned.isEmpty ? textA : cleaned
+        } catch {
+            AppLog.warn("ensemble", "arbiter merge failed (\(error.localizedDescription)) — using engine A")
+            return textA
+        }
+    }
+
+    /// Dice coefficient over normalized word tokens (case/punctuation
+    /// stripped): 1.0 = same words, 0 = disjoint. Word-order insensitive —
+    /// fine for an agreement gate.
+    static func tokenSimilarity(_ a: String, _ b: String) -> Double {
+        func tokens(_ s: String) -> [String] {
+            s.lowercased()
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { !$0.isEmpty }
+        }
+        return diceSimilarity(tokens(a), tokens(b))
+    }
+
+    static func diceSimilarity(_ ta: [String], _ tb: [String]) -> Double {
+        let ta = ta.filter { !$0.isEmpty }, tb = tb.filter { !$0.isEmpty }
+        guard !ta.isEmpty, !tb.isEmpty else { return 0 }
+        var counts: [String: Int] = [:]
+        for t in ta { counts[t, default: 0] += 1 }
+        var common = 0
+        for t in tb where (counts[t] ?? 0) > 0 {
+            counts[t]! -= 1
+            common += 1
+        }
+        return 2.0 * Double(common) / Double(ta.count + tb.count)
+    }
+
+    // MARK: - Text generation (not supported)
+
+    func generateText(
+        systemInstruction: String,
+        userMessage: String,
+        maxTokens: Int
+    ) async throws -> String {
+        throw ASRError.backendUnavailable(
+            reason: "The merge engine is speech-to-text only. Text generation uses Gemma 4."
+        )
+    }
+}

@@ -42,7 +42,6 @@ enum TextDestutter {
 
     static func collapseLine(_ line: String) -> String {
         var tokens = line.split(separator: " ", omittingEmptySubsequences: true)
-        guard tokens.count > 1 else { return line }
         tokens.removeAll { token in
             let n = token.lowercased().trimmingCharacters(
                 in: CharacterSet(charactersIn: ",;.!?"))
@@ -64,8 +63,11 @@ enum TextDestutter {
                     guard out.count >= n, i + n <= tokens.count else { continue }
                     let prev = out.suffix(n)
                     let next = tokens[i ..< i + n]
+                    // A sentence end ANYWHERE in the first copy means the
+                    // "echo" starts a new sentence ("Thank you. Thank you.")
+                    // — a deliberate repeat, not a stutter.
                     guard prev.map(norm) == next.map(norm),
-                          !prev.dropLast().contains(where: endsSentence),
+                          !prev.contains(where: endsSentence),
                           !next.dropLast().contains(where: endsSentence),
                           prev.allSatisfy({ !norm($0).isEmpty })
                     else { continue }
@@ -86,9 +88,10 @@ enum TextDestutter {
                 run += 1
             }
             if run >= 2 || (run == 1 && !legitDoubles.contains(norm(last))) {
-                // Keep the final repeat — it carries the phrase's punctuation.
-                out.removeLast()
-                out.append(tokens[i + run - 1])
+                // Keep the FIRST occurrence — it carries sentence-initial
+                // capitalization ("For for for" → "For"). A repeat carrying
+                // .!? can never match norm equality, so no punctuation is
+                // lost by dropping the rest.
                 i += run
             }
         }

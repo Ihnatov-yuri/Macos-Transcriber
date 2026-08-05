@@ -88,12 +88,11 @@ final class PostProcessor: @unchecked Sendable {
         // models cannot reliably strip "for for for for" from a 27-minute
         // transcript no matter what the prompt says, and the shorter input
         // also cuts generation time.
-        let transcript = TextDestutter.collapse(
-            recording.segments
-                .sorted { $0.startSeconds < $1.startSeconds }
-                .map(\.text)
-                .joined(separator: "\n")
-        )
+        let rawTranscript = recording.segments
+            .sorted { $0.startSeconds < $1.startSeconds }
+            .map(\.text)
+            .joined(separator: "\n")
+        let transcript = TextDestutter.collapse(rawTranscript)
         let transcriptWithSpeakers = TextDestutter.collapse(
             recording.segments
                 .sorted { $0.startSeconds < $1.startSeconds }
@@ -105,8 +104,10 @@ final class PostProcessor: @unchecked Sendable {
         )
 
         // Guard: presets on an empty/near-empty transcript produce garbage
-        // ("please provide the transcript…"). Fail fast instead.
-        guard transcript.count >= 40 else {
+        // ("please provide the transcript…"). Fail fast instead. Measured on
+        // the RAW text so a short-but-real recording isn't misreported as
+        // empty just because destutter shrank it.
+        guard rawTranscript.count >= 40 else {
             await setStatus(key, .failed("Transcript is empty — run transcription first."))
             AppLog.warn("postproc", "preset=\(presetId) skipped: transcript only \(transcript.count) chars")
             return

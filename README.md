@@ -1,4 +1,4 @@
-# Transcriberr
+# <img src="docs/icon.png" width="42" align="center" alt=""> Transcriberr
 
 A native macOS transcription studio. Everything runs **on-device** on Apple Silicon: speech recognition, speaker diarization, and LLM post-processing — no audio or text ever leaves the Mac unless you explicitly configure a cloud engine.
 

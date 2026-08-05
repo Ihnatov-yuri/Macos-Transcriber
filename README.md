@@ -58,7 +58,7 @@ open .build/xcode/Build/Products/Release/Transcriberr.app
 
 ## Credits
 
-Created by **Yuri Ihnatov** — [github.com/Ihnatov-yuri](https://github.com/Ihnatov-yuri)
+Created by **Yuri Ihnatov** — [ihnatov.nl](https://ihnatov.nl) · [github.com/Ihnatov-yuri](https://github.com/Ihnatov-yuri)
 
 Built on [FluidAudio](https://github.com/FluidInference/FluidAudio) (Parakeet + diarization CoreML), [WhisperKit](https://github.com/argmaxinc/WhisperKit), and Google's [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM).
 

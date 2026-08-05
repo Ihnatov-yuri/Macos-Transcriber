@@ -52,6 +52,18 @@ struct TranscriberrApp: App {
             ]
         )
         credits.append(NSAttributedString(
+            string: "ihnatov.nl",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .link: URL(string: "https://ihnatov.nl")!,
+            ]
+        ))
+        credits.append(NSAttributedString(
+            string: "  ·  ",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.secondaryLabelColor]
+        ))
+        credits.append(NSAttributedString(
             string: "github.com/Ihnatov-yuri",
             attributes: [
                 .font: NSFont.systemFont(ofSize: 11),

@@ -1,0 +1,32 @@
+{
+  "medical": {
+    "en": ["amoxicillin", "ibuprofen", "metformin", "paracetamol", "warfarin", "atorvastatin", "lisinopril", "omeprazole", "salbutamol", "azithromycin", "myocardial infarction", "ischemic stroke", "hypertension", "tachycardia", "bradycardia", "pneumonia", "sepsis", "DVT", "PE", "CABG", "PCI", "MRI", "CT", "X-ray", "ICU", "ED", "OR", "BP", "HR", "SpO2"],
+    "ar": ["أموكسيسيلين", "إيبوبروفين", "ميتفورمين", "احتشاء عضلة القلب", "السكتة الدماغية", "ارتفاع ضغط الدم"],
+    "uk": ["амоксицилін", "ібупрофен", "метформін", "інфаркт міокарда", "інсульт", "гіпертонія"],
+    "nl": ["amoxicilline", "ibuprofen", "metformine", "hartinfarct", "beroerte", "hoge bloeddruk"]
+  },
+  "it": {
+    "en": ["Kubernetes", "Docker", "Terraform", "Helm", "Ansible", "Prometheus", "Grafana", "PostgreSQL", "Redis", "Kafka", "RabbitMQ", "GraphQL", "WebSocket", "OAuth", "JWT", "TLS", "HTTPS", "DNS", "CDN", "S3", "EC2", "Lambda", "RDS", "CloudFront", "Datadog", "Sentry", "GitHub", "GitLab", "Bitbucket", "CircleCI", "TypeScript", "JavaScript", "Rust", "Golang", "Python", "Kotlin", "Swift", "SwiftUI", "Jetpack Compose"],
+    "ar": ["كوبرنيتس", "دوكر", "غيت هاب"],
+    "uk": ["Kubernetes", "Docker", "GitHub"],
+    "nl": ["Kubernetes", "Docker", "GitHub"]
+  },
+  "construction": {
+    "en": ["rebar", "formwork", "scaffolding", "wet trades", "drywall", "subcontractor", "RFI", "submittal", "punch list", "BIM", "CAD", "PSI", "kPa", "OSHA", "PPE", "lift plan", "tower crane", "structural steel", "post-tensioning", "ready-mix"],
+    "ar": ["خرسانة", "حديد التسليح", "سقالة"],
+    "uk": ["бетон", "арматура", "риштування"],
+    "nl": ["beton", "wapeningsstaal", "steiger"]
+  },
+  "legal": {
+    "en": ["pro bono", "habeas corpus", "subpoena", "deposition", "voir dire", "amicus brief", "stare decisis", "in camera", "force majeure", "indemnification", "estoppel", "discovery", "tort", "negligence", "breach of contract"],
+    "ar": ["حكم", "قضية", "محكمة الاستئناف"],
+    "uk": ["позов", "апеляція", "Верховний суд"],
+    "nl": ["dagvaarding", "hoger beroep", "Hoge Raad"]
+  },
+  "finance": {
+    "en": ["EBITDA", "ARR", "MRR", "CAGR", "TAM", "SAM", "SOM", "LTV", "CAC", "P/E", "EPS", "yield curve", "duration", "convexity", "swap spread", "credit default swap", "S&P 500", "NASDAQ", "FTSE", "DAX", "MOEX", "QSE"],
+    "ar": ["بورصة قطر", "أسهم", "سندات"],
+    "uk": ["облігації", "акції", "ставка рефінансування"],
+    "nl": ["AEX", "obligaties", "aandelen"]
+  }
+}

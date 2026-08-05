@@ -1,0 +1,113 @@
+name: Transcriberr
+options:
+  bundleIdPrefix: nl.ihnatov
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    GENERATE_INFOPLIST_FILE: YES
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: "0.1.0"
+
+# Gemma4Swift transitively brings mlx-swift, mlx-swift-lm, swift-transformers.
+# Sherpa-onnx for diarization (pending diarization-research recommendation).
+packages:
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    from: 0.14.0
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit
+    from: 0.9.0
+  LiteRTLM:
+    url: https://github.com/google-ai-edge/LiteRT-LM
+    from: 0.12.0
+
+targets:
+  Transcriberr:
+    type: application
+    platform: macOS
+    sources:
+      - path: Transcriberr
+    resources:
+      - path: Transcriberr/Resources
+    dependencies:
+      - package: FluidAudio
+        product: FluidAudio
+      - package: WhisperKit
+        product: WhisperKit
+      - package: LiteRTLM
+        product: LiteRTLM
+    info:
+      path: Transcriberr/Info.plist
+      properties:
+        CFBundleDisplayName: Transcriberr
+        LSMinimumSystemVersion: "15.0"
+        LSApplicationCategoryType: public.app-category.productivity
+        NSMicrophoneUsageDescription: Transcriberr records audio from your microphone to transcribe it locally on this Mac.
+        NSDocumentsFolderUsageDescription: Transcriberr saves recordings, transcripts, and sidecar files alongside your audio.
+        NSHumanReadableCopyright: ""
+    entitlements:
+      path: Transcriberr/Transcriberr.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-write: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: nl.ihnatov.Transcriberr
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_STRICT_CONCURRENCY: minimal
+        SWIFT_OBJC_BRIDGING_HEADER: Transcriberr/Transcriberr-Bridging-Header.h
+
+  # CLI test harness — exercises the audio pipeline (recorder + decoder +
+  # noise suppression) without the SwiftUI / SwiftData stack. Build:
+  #   xcodebuild -scheme TranscriberrCLI -derivedDataPath .build/xcode build
+  # Then run the binary in .build/xcode/Build/Products/Debug/transcriberrcli.
+  TranscriberrCLI:
+    type: tool
+    platform: macOS
+    sources:
+      - path: TranscriberrCLI
+      - path: Transcriberr/Audio
+      - path: Transcriberr/Utility/AppLog.swift
+      - path: Transcriberr/Utility/ExceptionTrap.h
+      - path: Transcriberr/Utility/ExceptionTrap.m
+      - path: Transcriberr/ASR/Stores/RecorderSettings.swift
+    dependencies:
+      - package: FluidAudio
+        product: FluidAudio
+      - package: WhisperKit
+        product: WhisperKit
+      - package: LiteRTLM
+        product: LiteRTLM
+    info:
+      path: TranscriberrCLI/Info.plist
+      properties:
+        CFBundleDisplayName: TranscriberrCLI
+        LSMinimumSystemVersion: "15.0"
+        NSMicrophoneUsageDescription: Transcriberrcli records audio from your microphone for pipeline tests.
+    entitlements:
+      path: TranscriberrCLI/TranscriberrCLI.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
+        com.apple.security.files.user-selected.read-write: true
+    settings:
+      base:
+        PRODUCT_NAME: transcriberrcli
+        PRODUCT_BUNDLE_IDENTIFIER: nl.ihnatov.TranscriberrCLI
+        SWIFT_STRICT_CONCURRENCY: minimal
+        SWIFT_OBJC_BRIDGING_HEADER: Transcriberr/Transcriberr-Bridging-Header.h
+        # Skip the playback / waveform extraction code paths that depend
+        # on AVPlayer in the GUI target — easier than carving the audio
+        # folder up further.
+        OTHER_SWIFT_FLAGS: "-D TRANSCRIBERR_CLI"

@@ -1,0 +1,31 @@
+# Xcode / SPM
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+build/
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# User-specific
+xcuserdata/
+*.xcuserstate
+
+# Models (downloaded at runtime)
+Transcriberr/Resources/Models/*
+!Transcriberr/Resources/Models/.gitkeep
+
+# Secrets
+*.env
+secrets.plist
+
+# Tooling
+.tuist/
+
+# User data — audio + logs contain transcript content, never commit
+Recordings/
+*.log
+*.profraw
+.claude/

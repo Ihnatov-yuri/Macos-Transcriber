@@ -486,22 +486,96 @@ struct VocabularyByLanguageEditor: View {
 
 struct SnippetsSettingsTab: View {
     @Environment(AppContainer.self) private var container
+
     var body: some View {
-        List {
-            ForEach(container.snippetStore.snippets) { snip in
-                VStack(alignment: .leading) {
-                    Text(snip.name).font(AppFont.mono(12, weight: .semibold))
-                    Text(snip.body).font(AppFont.fraunces(13, italic: false)).foregroundStyle(AppColor.inkSoft)
+        Form {
+            Section {
+                Text("""
+                Snippets are reusable text blocks for prompts. Define one here, then \
+                write {snippet:name} inside any preset or prompt template (Settings → \
+                Presets / Prompts). Before the model runs, the placeholder is replaced \
+                with the snippet's text.
+
+                Example: a snippet named team containing "Yuri, Nicole, Kees" lets any \
+                preset say "Speakers may include: {snippet:team}" — update the team in \
+                one place, every preset follows.
+                """)
+                .font(AppFont.fraunces(13, italic: false))
+                .foregroundStyle(AppColor.inkSoft)
+            }
+            Section("Your snippets") {
+                ForEach(container.snippetStore.snippets.indices, id: \.self) { idx in
+                    snippetRow(idx)
+                }
+                TapButton {
+                    var s = container.snippetStore.snippets
+                    s.append(Snippet(name: "name-me", body: ""))
+                    container.snippetStore.snippets = s
+                } label: {
+                    Text("Add snippet").foregroundStyle(AppColor.accent)
+                }
+                if container.snippetStore.snippets.isEmpty {
+                    Text("No snippets yet — most people never need one. This is a power tool for heavy preset users.")
+                        .font(AppFont.fraunces(12, italic: true))
+                        .foregroundStyle(AppColor.inkSoft)
                 }
             }
-            TapButton {
-                var s = container.snippetStore.snippets
-                s.append(Snippet(name: "untitled-\(s.count + 1)", body: ""))
-                container.snippetStore.snippets = s
-            } label: {
-                Text("Add snippet").foregroundStyle(AppColor.accent)
-            }
         }
+    }
+
+    @ViewBuilder
+    private func snippetRow(_ idx: Int) -> some View {
+        let snippets = container.snippetStore.snippets
+        if idx < snippets.count {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    TextField("name", text: Binding(
+                        get: { container.snippetStore.snippets[safe: idx]?.name ?? "" },
+                        set: { v in
+                            var s = container.snippetStore.snippets
+                            guard idx < s.count else { return }
+                            s[idx].name = v.replacingOccurrences(of: " ", with: "-")
+                            container.snippetStore.snippets = s
+                        }
+                    ))
+                    .font(AppFont.mono(12, weight: .semibold))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 170)
+                    Text("use as {snippet:\(snippets[idx].name)}")
+                        .font(AppFont.mono(10, weight: .regular))
+                        .foregroundStyle(AppColor.inkSoft)
+                        .textSelection(.enabled)
+                    Spacer()
+                    TapButton {
+                        var s = container.snippetStore.snippets
+                        guard idx < s.count else { return }
+                        s.remove(at: idx)
+                        container.snippetStore.snippets = s
+                    } label: {
+                        Text("Delete").font(AppFont.mono(10, weight: .semibold))
+                            .foregroundStyle(AppColor.accent)
+                    }
+                }
+                TextField("snippet text (what replaces the placeholder)", text: Binding(
+                    get: { container.snippetStore.snippets[safe: idx]?.body ?? "" },
+                    set: { v in
+                        var s = container.snippetStore.snippets
+                        guard idx < s.count else { return }
+                        s[idx].body = v
+                        container.snippetStore.snippets = s
+                    }
+                ), axis: .vertical)
+                .lineLimit(2...6)
+                .font(AppFont.fraunces(13, italic: false))
+            }
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
 

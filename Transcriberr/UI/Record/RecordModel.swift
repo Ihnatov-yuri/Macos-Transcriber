@@ -21,6 +21,16 @@ final class RecordModel {
     var liveEnabled: Bool { didSet { container.uiPrefs.liveEnabled = liveEnabled } }
     var liveEngine: BackendFactory.Kind { didSet { container.uiPrefs.liveEngine = liveEngine } }
     var liveLanguages: Set<String> { didSet { container.uiPrefs.lastLanguages = liveLanguages } }
+    /// Meeting mode: capture system audio (the other participants, tapped
+    /// digitally) alongside the mic. Live transcription is unavailable in
+    /// this mode — the live worker feeds off WavRecorder's chunk stream.
+    var meetingMode: Bool { didSet { UserDefaults.standard.set(meetingMode, forKey: "ui.meetingMode") } }
+    /// Which recorder the CURRENT session started with (the toggle may move
+    /// mid-recording; stop must go to the recorder that started).
+    private var activeMeeting = false
+    /// Exposed so the record screen can pick the right waveform source.
+    var meetingActive: Bool { activeMeeting }
+    private var isStopping = false
     var lastError: String?
 
     init(container: AppContainer) {
@@ -33,10 +43,11 @@ final class RecordModel {
         self.liveEnabled = container.uiPrefs.liveEnabled
         self.liveEngine = container.uiPrefs.liveEngine
         self.liveLanguages = container.uiPrefs.lastLanguages
+        self.meetingMode = UserDefaults.standard.bool(forKey: "ui.meetingMode")
     }
 
-    var elapsedMs: Int64 { container.recorder.elapsedMs }
-    var level: Float { container.recorder.level }
+    var elapsedMs: Int64 { activeMeeting ? container.meetingRecorder.elapsedMs : container.recorder.elapsedMs }
+    var level: Float { activeMeeting ? container.meetingRecorder.level : container.recorder.level }
 
     func toggleRecord() async {
         switch uiState {
@@ -51,23 +62,28 @@ final class RecordModel {
 
     func pause() {
         guard uiState == .recording else { return }
-        container.recorder.pause()
+        if activeMeeting { container.meetingRecorder.pause() } else { container.recorder.pause() }
         uiState = .paused
     }
 
     func resume() {
         guard uiState == .paused else { return }
-        container.recorder.resume()
+        if activeMeeting { container.meetingRecorder.resume() } else { container.recorder.resume() }
         uiState = .recording
     }
 
     private func beginRecording() async {
         lastError = nil
         do {
-            try await container.recorder.start()
+            activeMeeting = meetingMode
+            if activeMeeting {
+                try await container.meetingRecorder.start()
+            } else {
+                try await container.recorder.start()
+            }
             uiState = .recording
 
-            if liveEnabled {
+            if liveEnabled, !activeMeeting {
                 liveWorker.clear()
                 await liveWorker.start(
                     engine: liveEngine,
@@ -79,19 +95,33 @@ final class RecordModel {
         } catch {
             lastError = error.localizedDescription
             uiState = .idle
+            activeMeeting = false
         }
     }
 
     private func endRecording() async {
+        // Stop suspends at several awaits with uiState still .recording — a
+        // double-press must not run a second stop and save a duplicate row.
+        guard !isStopping else { return }
+        isStopping = true
+        defer { isStopping = false }
         lastError = nil
         await liveWorker.stop()
         do {
-            guard let url = try await container.recorder.stop() else {
+            let wasMeeting = activeMeeting
+            let url: URL?
+            if wasMeeting {
+                url = try await container.meetingRecorder.stop()
+            } else {
+                url = try await container.recorder.stop()
+            }
+            guard let url else {
                 uiState = .idle
                 return
             }
-            let duration = Double(container.recorder.elapsedMs) / 1000
-            let title = "Recording \(DateFormatter.short.string(from: Date()))"
+            let duration = Double(wasMeeting ? container.meetingRecorder.elapsedMs
+                                             : container.recorder.elapsedMs) / 1000
+            let title = "\(wasMeeting ? "Meeting" : "Recording") \(DateFormatter.short.string(from: Date()))"
             let recording = Recording(title: title, audioPath: url.path, durationSeconds: duration)
             try container.repository.save(recording)
             uiState = .finished(url)

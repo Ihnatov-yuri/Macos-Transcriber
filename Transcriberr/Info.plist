@@ -24,6 +24,8 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Meeting mode records the audio other apps play (your meeting participants) so calls can be transcribed locally on this Mac.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Transcriberr saves recordings, transcripts, and sidecar files alongside your audio.</string>
 	<key>NSHumanReadableCopyright</key>

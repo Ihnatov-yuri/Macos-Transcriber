@@ -164,7 +164,11 @@ final class PostProcessor: @unchecked Sendable {
             setStatus(key, .running)
             let backend = factory.backend(for: kind)
             if await !backend.isReady {
-                try await backend.load(modelPath: modelDirectory)
+                // Bounded: a wedged load would otherwise block the FIFO
+                // forever and pin every queued preset at QUEUED.
+                try await Self.withTimeout(seconds: 180) {
+                    try await backend.load(modelPath: modelDirectory)
+                }
             }
             let markdown: String
             if rewritePresets.contains(presetId) {
@@ -233,6 +237,13 @@ final class PostProcessor: @unchecked Sendable {
         let source = preset.userTemplate.contains("{transcript_with_speakers}")
             ? transcriptWithSpeakers : transcript
         let windows = Self.windows(source, maxChars: Self.chunkMaxChars)
+        guard !windows.isEmpty else {
+            throw NSError(
+                domain: "PostProcessor", code: -4,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "No speech content left after cleanup — nothing to rewrite."]
+            )
+        }
         var stitched: [String] = []
         var failures = 0
         for (i, w) in windows.enumerated() {
@@ -270,6 +281,12 @@ final class PostProcessor: @unchecked Sendable {
                     stitched.append(w)
                     failures += 1
                 }
+            } catch ASRError.chunkTimeout {
+                // A timed-out native generation keeps running (inference does
+                // not observe Swift cancellation) — continuing would starve
+                // every following chunk against it. Abort the whole run.
+                AppLog.error("postproc", "chunk \(i + 1)/\(windows.count) timed out — aborting run (engine busy/wedged)")
+                throw ASRError.chunkTimeout
             } catch {
                 AppLog.warn("postproc", "chunk \(i + 1)/\(windows.count) failed (\(error.localizedDescription)) — keeping source text for this span")
                 stitched.append(w)
@@ -293,13 +310,31 @@ final class PostProcessor: @unchecked Sendable {
             if line.count <= maxChars { pieces.append(String(line)); continue }
             var current = ""
             for s in line.split(separator: ". ", omittingEmptySubsequences: true) {
-                let sentence = s.hasSuffix(".") ? String(s) : String(s) + "."
+                let str = String(s)
+                let sentence = (str.hasSuffix(".") || str.hasSuffix("?") || str.hasSuffix("!") || str.hasSuffix("…"))
+                    ? str : str + "."
                 if current.count + sentence.count + 1 > maxChars, !current.isEmpty {
                     pieces.append(current); current = ""
                 }
                 current += (current.isEmpty ? "" : " ") + sentence
             }
             if !current.isEmpty { pieces.append(current) }
+        }
+        // Safety: a piece with no sentence punctuation at all (unpunctuated
+        // ASR output, CJK text) can still exceed maxChars — hard-split at
+        // whitespace so no window ever overruns the model's budget.
+        pieces = pieces.flatMap { piece -> [String] in
+            guard piece.count > maxChars else { return [piece] }
+            var out: [String] = []
+            var cur = ""
+            for word in piece.split(separator: " ", omittingEmptySubsequences: true) {
+                if cur.count + word.count + 1 > maxChars, !cur.isEmpty {
+                    out.append(cur); cur = ""
+                }
+                cur += (cur.isEmpty ? "" : " ") + word
+            }
+            if !cur.isEmpty { out.append(cur) }
+            return out
         }
         var windows: [String] = []
         var cur = ""

@@ -41,11 +41,20 @@ enum TextDestutter {
     }
 
     static func collapseLine(_ line: String) -> String {
-        var tokens = line.split(separator: " ", omittingEmptySubsequences: true)
-        tokens.removeAll { token in
+        let rawTokens = line.split(separator: " ", omittingEmptySubsequences: true)
+        // Drop fillers, but carry a filler's sentence-ending punctuation back
+        // to the previous word — otherwise "Okay, um. Okay" loses its
+        // boundary and the stutter pass would merge a deliberate restart.
+        var tokens: [Substring] = []
+        for token in rawTokens {
             let n = token.lowercased().trimmingCharacters(
                 in: CharacterSet(charactersIn: ",;.!?"))
-            return fillers.contains(n)
+            guard fillers.contains(n) else { tokens.append(token); continue }
+            if endsSentence(token), let last = tokens.last, !endsSentence(last), let punct = token.last {
+                var t = String(last)
+                while let c = t.last, ",;".contains(c) { t.removeLast() }
+                tokens[tokens.count - 1] = (t + String(punct))[...]
+            }
         }
         guard tokens.count > 1 else { return tokens.joined(separator: " ") }
         var out: [Substring] = []

@@ -28,6 +28,7 @@ final class AppContainer: @unchecked Sendable {
 
     // MARK: - Audio
     let recorder: WavRecorder
+    let meetingRecorder: MeetingRecorder
     let audioPlayer: AudioPlayerController
 
     // MARK: - ASR
@@ -73,6 +74,7 @@ final class AppContainer: @unchecked Sendable {
         apiKeys       = APIKeyStore()
 
         recorder = WavRecorder()
+        meetingRecorder = MeetingRecorder()
         audioPlayer = AudioPlayerController()
 
         backendFactory = BackendFactory(

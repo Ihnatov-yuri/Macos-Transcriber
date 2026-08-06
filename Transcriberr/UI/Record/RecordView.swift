@@ -134,7 +134,8 @@ struct RecordView: View {
         // the right gets the accent; older bars fade into ink-soft. Mirrors
         // the Android record-screen meter rhythm.
         GeometryReader { geo in
-            let bars = m.container.recorder.peakHistory
+            let bars = m.meetingActive ? m.container.meetingRecorder.peakHistory
+                                       : m.container.recorder.peakHistory
             let cols = bars.count
             let gap: CGFloat = 2
             let barWidth = max(2, (geo.size.width - CGFloat(cols - 1) * gap) / CGFloat(cols))
@@ -213,6 +214,8 @@ struct RecordView: View {
                         active: m.autoTranscribe) { m.autoTranscribe.toggle() }
                 TagPair(label: "LIVE", value: m.liveEnabled ? "ON" : "OFF",
                         active: m.liveEnabled) { m.liveEnabled.toggle() }
+                TagPair(label: "MEETING", value: m.meetingMode ? "ON" : "OFF",
+                        active: m.meetingMode) { m.meetingMode.toggle() }
                 TagPair(label: "MIC",
                         value: RecorderSettings.shared.micSensitivity.label,
                         active: RecorderSettings.shared.micSensitivity != .auto) {

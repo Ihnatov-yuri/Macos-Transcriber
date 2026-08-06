@@ -45,9 +45,10 @@
   <!-- Diarize -->
   <line x1="640" y1="163" x2="688" y2="163" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
   <rect x="692" y="120" width="150" height="86" fill="none" stroke="#1A1918" stroke-width="2"/>
-  <text x="710" y="150" font-size="13" fill="#1A1918" font-weight="bold">DIARIZE</text>
-  <text x="710" y="172" font-size="10.5" fill="#8a857c">who spoke when,</text>
-  <text x="710" y="188" font-size="10.5" fill="#8a857c">names inferred</text>
+  <text x="710" y="146" font-size="13" fill="#1A1918" font-weight="bold">WHO SPOKE</text>
+  <text x="710" y="166" font-size="10" fill="#8a857c">split by voice, label</text>
+  <text x="710" y="180" font-size="10" fill="#8a857c">every word ("diarize"),</text>
+  <text x="710" y="194" font-size="10" fill="#8a857c">catch names from talk</text>
 
   <!-- Versions -->
   <line x1="842" y1="163" x2="890" y2="163" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
@@ -60,8 +61,9 @@
   <!-- bottom row: versions ↓ destutter → presets -->
   <path d="M 969 214 L 969 252" fill="none" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
   <rect x="894" y="258" width="150" height="70" fill="none" stroke="#1A1918" stroke-width="2"/>
-  <text x="912" y="286" font-size="13" fill="#1A1918" font-weight="bold">DESTUTTER</text>
-  <text x="912" y="306" font-size="10.5" fill="#8a857c">code, not model</text>
+  <text x="912" y="282" font-size="12" fill="#1A1918" font-weight="bold">REMOVE STUTTERS</text>
+  <text x="912" y="300" font-size="10" fill="#8a857c">"for for for" → "for",</text>
+  <text x="912" y="314" font-size="10" fill="#8a857c">um/uh out · pure code</text>
   <line x1="894" y1="293" x2="854" y2="293" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
   <rect x="654" y="258" width="196" height="70" fill="none" stroke="#E24A2E" stroke-width="2"/>
   <text x="672" y="286" font-size="13" fill="#E24A2E" font-weight="bold">LLM PRESETS</text>

@@ -10,9 +10,12 @@ enum AppLog {
     private static let osLogger = Logger(subsystem: subsystem, category: "general")
 
     static let logFileURL: URL = {
+        // ~/Library/Logs is the macOS home for app logs. The old location
+        // (~/Documents/Transcriberr) doubles as the project folder AND the
+        // recordings home — a transcript-bearing log does not belong there.
         let dir = FileManager.default
-            .urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Transcriberr", isDirectory: true)
+            .urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs/Transcriberr", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("transcriberr.log")
     }()

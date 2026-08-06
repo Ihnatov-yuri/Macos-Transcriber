@@ -39,6 +39,13 @@ struct RecordView: View {
 
                     Spacer().frame(height: AppMetric.l)
 
+                    optionsRow(model)
+                        .padding(.horizontal, AppMetric.sheetPadding)
+
+                    Spacer().frame(height: AppMetric.m)
+                    HairlineSoft()
+                    Spacer().frame(height: AppMetric.m)
+
                     timerStrip(model)
                     waveform(model)
                     waveformAxis(model)
@@ -48,13 +55,6 @@ struct RecordView: View {
                     Spacer().frame(height: AppMetric.m)
 
                     lastHeardCard(model)
-                        .padding(.horizontal, AppMetric.sheetPadding)
-
-                    Spacer().frame(height: AppMetric.l)
-                    HairlineSoft()
-                    Spacer().frame(height: AppMetric.m)
-
-                    optionsRow(model)
                         .padding(.horizontal, AppMetric.sheetPadding)
 
                     Spacer().frame(height: AppMetric.xl)
@@ -208,30 +208,49 @@ struct RecordView: View {
     @ViewBuilder
     private func optionsRow(_ m: RecordModel) -> some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("OPTIONS").monoLabel(10, color: AppColor.inkSoft)
+            Text("RECORDING OPTIONS · TAP A VALUE TO CHANGE")
+                .monoLabel(10, color: AppColor.inkSoft)
             HStack(alignment: .top, spacing: AppMetric.l) {
-                TagPair(label: "AUTO-RUN", value: m.autoTranscribe ? "ON" : "OFF",
-                        active: m.autoTranscribe) { m.autoTranscribe.toggle() }
-                TagPair(label: "LIVE", value: m.liveEnabled ? "ON" : "OFF",
-                        active: m.liveEnabled) { m.liveEnabled.toggle() }
-                TagPair(label: "MEETING", value: m.meetingMode ? "ON" : "OFF",
-                        active: m.meetingMode) { m.meetingMode.toggle() }
-                TagPair(label: "MIC",
-                        value: RecorderSettings.shared.micSensitivity.label,
-                        active: RecorderSettings.shared.micSensitivity != .auto) {
-                    cycleMicSensitivity()
-                }
+                option("AUTO-RUN", m.autoTranscribe ? "ON" : "OFF",
+                       active: m.autoTranscribe,
+                       hint: "transcribe as soon\nas you press stop") { m.autoTranscribe.toggle() }
+                option("LIVE", m.liveEnabled ? "ON" : "OFF",
+                       active: m.liveEnabled,
+                       hint: "rough live text\nwhile you record") { m.liveEnabled.toggle() }
+                option("MEETING", m.meetingMode ? "ON" : "OFF",
+                       active: m.meetingMode,
+                       hint: "also record system\naudio (calls, zoom)") { m.meetingMode.toggle() }
+                option("MIC BOOST", RecorderSettings.shared.micSensitivity.label,
+                       active: RecorderSettings.shared.micSensitivity != .auto,
+                       hint: "input volume · auto\nor fixed 2–6×") { cycleMicSensitivity() }
                 if m.liveEnabled {
-                    TagPair(label: "ENGINE", value: m.liveEngine.displayName.uppercased(),
-                            active: false) { cycleEngine(m) }
-                    TagPair(label: "LANG",
-                            value: m.liveLanguages.isEmpty
-                                ? "AUTO"
-                                : m.liveLanguages.sorted().joined(separator: ",").uppercased(),
-                            active: !m.liveLanguages.isEmpty) { cycleLanguage(m) }
+                    option("ENGINE", m.liveEngine.displayName.uppercased(),
+                           active: false,
+                           hint: "engine for the\nlive preview") { cycleEngine(m) }
+                    option("LANG", m.liveLanguages.isEmpty
+                               ? "AUTO"
+                               : m.liveLanguages.sorted().joined(separator: ",").uppercased(),
+                           active: !m.liveLanguages.isEmpty,
+                           hint: "spoken language\nfor live preview") { cycleLanguage(m) }
                 }
                 Spacer()
             }
+        }
+    }
+
+    /// One option pill + a permanent two-line explanation underneath — the
+    /// cycling pills were unlabeled mystery buttons ("MIC AUTO") before.
+    @ViewBuilder
+    private func option(
+        _ label: String, _ value: String, active: Bool,
+        hint: String, action: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TagPair(label: label, value: value, active: active, action: action)
+            Text(hint)
+                .monoLabel(8, color: AppColor.inkSoft.opacity(0.75))
+                .lineSpacing(1)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

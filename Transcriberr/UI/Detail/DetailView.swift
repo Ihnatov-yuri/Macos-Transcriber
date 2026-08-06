@@ -993,7 +993,7 @@ struct OutputPane: View {
     }
 
     private var isBusy: Bool {
-        runStatus == .loading || runStatus == .running
+        runStatus == .queued || runStatus == .loading || runStatus == .running
     }
 
     var body: some View {
@@ -1003,6 +1003,10 @@ struct OutputPane: View {
                 // Live status so a multi-minute Gemma generation never looks
                 // like a dead button.
                 switch runStatus {
+                case .queued:
+                    PulseDot(diameter: 6)
+                    Text("QUEUED — WAITING FOR PREVIOUS GENERATION…")
+                        .monoLabel(10, color: AppColor.inkSoft)
                 case .loading:
                     PulseDot(diameter: 6)
                     Text("LOADING TEXT MODEL…").monoLabel(10, color: AppColor.inkSoft)

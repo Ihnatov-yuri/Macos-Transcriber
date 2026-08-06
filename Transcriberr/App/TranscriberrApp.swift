@@ -73,7 +73,7 @@ struct TranscriberrApp: App {
         NSApp.orderFrontStandardAboutPanel(options: [
             .credits: credits,
             NSApplication.AboutPanelOptionKey(rawValue: "Copyright"):
-                "© 2026 Yuri Ihnatov · Apache-2.0",
+                "© 2026 Yuri Ihnatov · PolyForm Noncommercial 1.0.0",
         ])
     }
 }

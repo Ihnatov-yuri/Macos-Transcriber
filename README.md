@@ -65,4 +65,6 @@ Built on [FluidAudio](https://github.com/FluidInference/FluidAudio) (Parakeet + 
 
 ## License
 
-Apache-2.0
+**PolyForm Noncommercial 1.0.0** — free for personal, hobby, research, and other noncommercial use. Business/commercial use requires a separate license: [atoman@gmail.com](mailto:atoman@gmail.com).
+
+(The [Android app](https://github.com/Ihnatov-yuri) remains Apache-2.0.)

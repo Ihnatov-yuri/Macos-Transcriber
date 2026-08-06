@@ -23,10 +23,15 @@ private final class PostProcTimeoutClaim: @unchecked Sendable {
 @Observable
 final class PostProcessor: @unchecked Sendable {
     enum Status: Sendable, Equatable {
-        case idle, loading, running, done, failed(String)
+        case idle, queued, loading, running, done, failed(String)
     }
 
     private(set) var status: [String: Status] = [:]   // key = recordingId|presetId
+
+    /// FIFO tail: generations run strictly one at a time. The LiteRT engine
+    /// is a single shared resource — two concurrent generateText calls
+    /// starve each other (seen live: a parallel CLEAN returned 0 chars).
+    @MainActor private var queueTail: Task<Void, Never>?
 
     private let factory: BackendFactory
     private let prompts: PromptStore
@@ -63,8 +68,8 @@ final class PostProcessor: @unchecked Sendable {
         // Gemma text generation on a long transcript takes minutes. Repeated
         // GENERATE presses were queueing extra multi-minute runs behind the
         // first on the same actor — swallow duplicates while one is in flight.
-        if status[key] == .loading || status[key] == .running {
-            AppLog.info("postproc", "preset=\(presetId) already in flight — ignoring duplicate request")
+        if [.queued, .loading, .running].contains(status[key] ?? .idle) {
+            AppLog.info("postproc", "preset=\(presetId) already queued/in flight — ignoring duplicate request")
             return
         }
         guard let preset = presets.preset(presetId) else {
@@ -80,7 +85,33 @@ final class PostProcessor: @unchecked Sendable {
             await setStatus(key, .failed("LiteRT Gemma model not downloaded — Settings → Models."))
             return
         }
-        await setStatus(key, .loading)
+        // Enqueue behind whatever is already generating and return — the
+        // button press must not block the UI for the whole queue.
+        setStatus(key, .queued)
+        AppLog.info("postproc", "queued preset=\(presetId) backend=\(kind.rawValue)")
+        let prior = queueTail
+        queueTail = Task { @MainActor [weak self] in
+            await prior?.value
+            await self?.perform(preset: preset, recording: recording, kind: kind,
+                                modelDirectory: modelDirectory, key: key)
+        }
+        return
+    }
+
+    @MainActor
+    private func perform(
+        preset: PostProcessingPreset,
+        recording: Recording,
+        kind: BackendFactory.Kind,
+        modelDirectory: URL?,
+        key: String
+    ) async {
+        let presetId = preset.id
+        guard recording.modelContext != nil else {
+            setStatus(key, .failed("Recording was deleted."))
+            return
+        }
+        setStatus(key, .loading)
         AppLog.info("postproc", "run preset=\(presetId) backend=\(kind.rawValue)")
 
         // Build templates. Stutters and hesitation fillers are collapsed
@@ -113,48 +144,53 @@ final class PostProcessor: @unchecked Sendable {
             return
         }
 
-        var user = preset.userTemplate
-            .replacingOccurrences(of: "{transcript_with_speakers}", with: transcriptWithSpeakers)
-            .replacingOccurrences(of: "{transcript}", with: transcript)
-        user = snippets.substitute(user)
         // User vocabulary: exact spellings for names/terms — lets CLEAN and
         // CONTEXT-REWRITE fix entity mishearings with confidence instead of
         // leaving them ("only correct when certain" is satisfiable now).
         let runLangs = Set((recording.runLanguages ?? "").split(separator: ",").map(String.init))
         let vocab = prompts.vocabulary(for: runLangs).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !vocab.isEmpty {
-            user = "Vocabulary (authoritative spellings — use these exact forms wherever the transcript garbles them): \(vocab.prefix(800))\n\n" + user
-        }
+        let vocabPrefix = vocab.isEmpty ? ""
+            : "Vocabulary (authoritative spellings — use these exact forms wherever the transcript garbles them): \(vocab.prefix(800))\n\n"
         let system = snippets.substitute(preset.systemTemplate)
 
-        // Token budget. Rewrite-style presets must reproduce the WHOLE
-        // transcript — a flat cap truncates long recordings (a 21k-char
-        // transcript was getting chopped at ~6k chars). Scale with input for
-        // those; summaries stay bounded.
+        // Rewrite-style presets must reproduce the WHOLE transcript. A small
+        // local model cannot faithfully copy 20k+ chars in one generation —
+        // attention drifts, words drop, endings turn telegraphic. So they run
+        // CHUNKED: one speaker-turn window at a time, each with the tail of
+        // the already-processed text as history. Summaries stay single-shot.
         let rewritePresets: Set<String> = ["clean", "context_rewrite", "translate_polish"]
-        let maxTokens: Int
-        if rewritePresets.contains(presetId) {
-            maxTokens = min(8000, max(1000, Int(Double(user.count) * 1.25 / 3)))
-        } else {
-            maxTokens = 1500
-        }
-        // Local generation runs ~5–10 tok/s — give long rewrites the time
-        // they actually need before calling them wedged.
-        let timeout: TimeInterval = max(360, Double(maxTokens) / 4.0 + 120)
 
         do {
-            await setStatus(key, .running)
+            setStatus(key, .running)
             let backend = factory.backend(for: kind)
             if await !backend.isReady {
                 try await backend.load(modelPath: modelDirectory)
             }
-            AppLog.info("postproc", "preset=\(presetId) generating (system=\(system.count)ch user=\(user.count)ch maxTokens=\(maxTokens) timeout=\(Int(timeout))s) — long transcripts take minutes")
-            let markdown = try await Self.withTimeout(seconds: timeout) {
-                try await backend.generateText(
-                    systemInstruction: system,
-                    userMessage: user,
-                    maxTokens: maxTokens
+            let markdown: String
+            if rewritePresets.contains(presetId) {
+                markdown = try await runChunked(
+                    preset: preset,
+                    backend: backend,
+                    system: system,
+                    vocabPrefix: vocabPrefix,
+                    transcriptWithSpeakers: transcriptWithSpeakers,
+                    transcript: transcript
                 )
+            } else {
+                var user = preset.userTemplate
+                    .replacingOccurrences(of: "{transcript_with_speakers}", with: transcriptWithSpeakers)
+                    .replacingOccurrences(of: "{transcript}", with: transcript)
+                user = vocabPrefix + snippets.substitute(user)
+                let maxTokens = 1500
+                let timeout: TimeInterval = max(360, Double(maxTokens) / 4.0 + 120)
+                AppLog.info("postproc", "preset=\(presetId) single-shot (user=\(user.count)ch maxTokens=\(maxTokens) timeout=\(Int(timeout))s)")
+                markdown = try await Self.withTimeout(seconds: timeout) {
+                    try await backend.generateText(
+                        systemInstruction: system,
+                        userMessage: user,
+                        maxTokens: maxTokens
+                    )
+                }
             }
             // An empty/token generation must never replace a stored output —
             // seen live: a wedged long-context run returned "" and silently
@@ -174,6 +210,107 @@ final class PostProcessor: @unchecked Sendable {
             AppLog.error("postproc", "preset=\(presetId) failed: \(error.localizedDescription)")
             await setStatus(key, .failed(error.localizedDescription))
         }
+    }
+
+    /// Chunked rewrite: split into speaker-turn windows, process each with
+    /// the tail of the ALREADY-PROCESSED output as history ("a step before"),
+    /// stitch the results. Short spans are where a small model is faithful;
+    /// history keeps names, spellings, and sentence flow continuous across
+    /// window boundaries. A dud window falls back to its (already
+    /// destuttered) source text so content is never lost.
+    private static let chunkMaxChars = 2600
+    private static let historyTailChars = 400
+
+    @MainActor
+    private func runChunked(
+        preset: PostProcessingPreset,
+        backend: any ASRBackend,
+        system: String,
+        vocabPrefix: String,
+        transcriptWithSpeakers: String,
+        transcript: String
+    ) async throws -> String {
+        let source = preset.userTemplate.contains("{transcript_with_speakers}")
+            ? transcriptWithSpeakers : transcript
+        let windows = Self.windows(source, maxChars: Self.chunkMaxChars)
+        var stitched: [String] = []
+        var failures = 0
+        for (i, w) in windows.enumerated() {
+            var user = preset.userTemplate
+                .replacingOccurrences(of: "{transcript_with_speakers}", with: w)
+                .replacingOccurrences(of: "{transcript}", with: w)
+            user = snippets.substitute(user)
+            if let prev = stitched.last {
+                let tail = String(prev.suffix(Self.historyTailChars))
+                user = """
+                CONTEXT — the already-processed text immediately before this \
+                part. Use it only for continuity (names, spellings, sentence \
+                flow); do NOT repeat or re-output any of it:
+                «\(tail)»
+
+                """ + user
+            }
+            user = vocabPrefix + user
+            let maxTokens = min(2500, max(600, w.count * 125 / 300 + 200))
+            let timeout: TimeInterval = max(180, Double(maxTokens) / 4.0 + 90)
+            AppLog.info("postproc", "preset=\(preset.id) chunk \(i + 1)/\(windows.count) (\(w.count)ch maxTokens=\(maxTokens))")
+            do {
+                let out = try await Self.withTimeout(seconds: timeout) {
+                    try await backend.generateText(
+                        systemInstruction: system,
+                        userMessage: user,
+                        maxTokens: maxTokens
+                    )
+                }
+                let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.count >= max(40, w.count / 10) {
+                    stitched.append(trimmed)
+                } else {
+                    AppLog.warn("postproc", "chunk \(i + 1)/\(windows.count) returned \(trimmed.count)ch — keeping source text for this span")
+                    stitched.append(w)
+                    failures += 1
+                }
+            } catch {
+                AppLog.warn("postproc", "chunk \(i + 1)/\(windows.count) failed (\(error.localizedDescription)) — keeping source text for this span")
+                stitched.append(w)
+                failures += 1
+            }
+        }
+        guard failures < windows.count else {
+            throw NSError(
+                domain: "PostProcessor", code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "All \(windows.count) chunks failed — engine wedged?"]
+            )
+        }
+        return stitched.joined(separator: "\n")
+    }
+
+    /// Pack speaker-turn lines into ≤ maxChars windows without splitting a
+    /// turn; a single oversized turn is split at sentence boundaries.
+    static func windows(_ text: String, maxChars: Int) -> [String] {
+        var pieces: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            if line.count <= maxChars { pieces.append(String(line)); continue }
+            var current = ""
+            for s in line.split(separator: ". ", omittingEmptySubsequences: true) {
+                let sentence = s.hasSuffix(".") ? String(s) : String(s) + "."
+                if current.count + sentence.count + 1 > maxChars, !current.isEmpty {
+                    pieces.append(current); current = ""
+                }
+                current += (current.isEmpty ? "" : " ") + sentence
+            }
+            if !current.isEmpty { pieces.append(current) }
+        }
+        var windows: [String] = []
+        var cur = ""
+        for p in pieces {
+            if cur.count + p.count + 1 > maxChars, !cur.isEmpty {
+                windows.append(cur); cur = ""
+            }
+            cur += (cur.isEmpty ? "" : "\n") + p
+        }
+        if !cur.isEmpty { windows.append(cur) }
+        return windows
     }
 
     /// All status mutations hop to the main actor — the dictionary drives

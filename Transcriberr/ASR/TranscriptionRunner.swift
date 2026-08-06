@@ -99,11 +99,35 @@ final class TranscriptionRunner: @unchecked Sendable {
         AppLog.info("runner", "start \(params.file.lastPathComponent) backend=\(params.backend.rawValue) modelDir=\(params.modelDirectory?.path ?? "nil") diarize=\(params.diarize) hybrid=\(params.hybridDiarize) translate=\(params.translateTo ?? "—")")
 
         // ---------- decode + chunk ----------
+        // Meeting recordings carry raw per-source tracks (<base>.mic.wav /
+        // <base>.sys.wav). When both exist, transcribe SPLIT: each track is
+        // chunked on its own (same shared timeline), everything from the mic
+        // track is ground-truth "you", and diarization only has to untangle
+        // the system track. Crosstalk can't blur identities across files.
         continuation.yield(.stage(text: "Decoding audio…", fraction: 0.02))
         let decoder = AudioDecoder()
-        let (samples, chunks, duration): ([Float], [AudioDecoder.Chunk], Double)
+        let micURL = params.file.deletingPathExtension().appendingPathExtension("mic.wav")
+        let sysURL = params.file.deletingPathExtension().appendingPathExtension("sys.wav")
+        let splitTracks = FileManager.default.fileExists(atPath: micURL.path)
+            && FileManager.default.fileExists(atPath: sysURL.path)
+        let samples: [Float]
+        let chunks: [AudioDecoder.Chunk]
+        let duration: Double
+        var micChunkIndices: Set<Int> = []
         do {
-            (samples, chunks, duration) = try await decoder.decodeAndChunk(file: params.file)
+            if splitTracks {
+                let (_, micChunks, micDur) = try await decoder.decodeAndChunk(file: micURL)
+                let (sysSamples, sysChunks, sysDur) = try await decoder.decodeAndChunk(file: sysURL)
+                let tagged = (micChunks.map { ($0, true) } + sysChunks.map { ($0, false) })
+                    .sorted { $0.0.startSeconds < $1.0.startSeconds }
+                chunks = tagged.map(\.0)
+                micChunkIndices = Set(tagged.enumerated().compactMap { $1.1 ? $0 : nil })
+                samples = sysSamples          // diarization sees only the others
+                duration = max(micDur, sysDur)
+                AppLog.info("runner", "split-track meeting: \(micChunks.count) mic + \(sysChunks.count) sys chunks")
+            } else {
+                (samples, chunks, duration) = try await decoder.decodeAndChunk(file: params.file)
+            }
         } catch {
             AppLog.error("runner", "decode failed: \(error.localizedDescription)")
             throw error
@@ -127,7 +151,9 @@ final class TranscriptionRunner: @unchecked Sendable {
             do {
                 diarSegments = try await diarization.run(
                     samples: samples,
-                    numClusters: params.expectedSpeakers,
+                    numClusters: splitTracks
+                        ? max(0, params.expectedSpeakers - 1)
+                        : params.expectedSpeakers,
                     threshold: 0.5
                 )
                 AppLog.info("runner", "diar pre-pass produced \(diarSegments.count) regions")
@@ -248,6 +274,19 @@ final class TranscriptionRunner: @unchecked Sendable {
                 chunkEnd: chunk.endSeconds,
                 diarize: params.diarize
             )
+            // Split-track: everything from a mic chunk IS the user, by
+            // construction — label it now so the finalize step (which only
+            // fills nil speaker keys) leaves the ground truth alone.
+            if micChunkIndices.contains(idx) {
+                let myName = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
+                    .trimmingCharacters(in: .whitespaces)
+                parsed = parsed.map { seg in
+                    var s = seg
+                    s.speakerKey = "ME"
+                    s.speakerName = myName.isEmpty ? "Me" : myName
+                    return s
+                }
+            }
             // Cross-chunk near-duplicate guard: LLM engines occasionally
             // re-emit the previous chunk's tail (context echo) or loop a
             // near-identical line across consecutive chunks ("…and um
@@ -302,6 +341,26 @@ final class TranscriptionRunner: @unchecked Sendable {
             )
         }
 
+        // ---------- split-track echo guard ----------
+        // Without headphones the mic also hears the speakers, so the mic
+        // track can contain a degraded acoustic copy of what the sys track
+        // already transcribed cleanly. Drop ME segments that time-overlap a
+        // sys segment with near-identical text — the digital copy wins.
+        if splitTracks {
+            let sysSegs = allSegments.filter { $0.speakerKey != "ME" }
+            allSegments = allSegments.filter { seg in
+                guard seg.speakerKey == "ME" else { return true }
+                let isEcho = sysSegs.contains { o in
+                    o.endSeconds > seg.startSeconds && o.startSeconds < seg.endSeconds
+                        && Self.nearDuplicate(o.text, seg.text)
+                }
+                if isEcho {
+                    AppLog.info("runner", "dropping mic-echo segment @\(Int(seg.startSeconds))s")
+                }
+                return !isEcho
+            }
+        }
+
         // ---------- finalize ----------
         if params.diarize {
             if !diarSegments.isEmpty {
@@ -331,7 +390,9 @@ final class TranscriptionRunner: @unchecked Sendable {
                 AppLog.info("runner", "inferred speaker names: \(names)")
                 allSegments = allSegments.map { seg in
                     var s = seg
-                    if let key = s.speakerKey, let name = names[key] { s.speakerName = name }
+                    if let key = s.speakerKey, let name = names[key], s.speakerName == nil {
+                        s.speakerName = name
+                    }
                     return s
                 }
             }

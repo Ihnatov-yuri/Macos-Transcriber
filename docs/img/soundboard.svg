@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" font-family="Menlo, ui-monospace, monospace">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="400" fill="#F4EFE3"/>
+  <text x="40" y="52" font-size="15" letter-spacing="3" fill="#1A1918" font-weight="bold">MEETING MODE — PLUG INTO THE SOUNDBOARD</text>
+  <text x="40" y="72" font-size="11" fill="#8a857c">not a mic pointed at the speakers — the digital feed, tapped before it ever becomes sound</text>
+
+  <rect x="40" y="120" width="230" height="84" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="58" y="150" font-size="13" fill="#1A1918" font-weight="bold">YOUR MIC</text>
+  <text x="58" y="172" font-size="10.5" fill="#8a857c">your side of the call</text>
+  <circle cx="246" cy="146" r="5" fill="#E24A2E"/>
+
+  <rect x="40" y="236" width="230" height="84" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="58" y="266" font-size="13" fill="#1A1918" font-weight="bold">SYSTEM AUDIO TAP</text>
+  <text x="58" y="288" font-size="10.5" fill="#8a857c">zoom / teams / meet —</text>
+  <text x="58" y="302" font-size="10.5" fill="#8a857c">everyone else, bit-perfect</text>
+
+  <line x1="270" y1="162" x2="366" y2="196" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="270" y1="278" x2="366" y2="244" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <rect x="372" y="178" width="250" height="84" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="390" y="208" font-size="13" fill="#E24A2E" font-weight="bold">AGGREGATE DEVICE</text>
+  <text x="390" y="230" font-size="10.5" fill="#8a857c">two metronomes, one conductor</text>
+  <text x="390" y="244" font-size="10.5" fill="#8a857c">(single clock, drift-compensated)</text>
+
+  <line x1="622" y1="220" x2="676" y2="220" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="680" y="178" width="180" height="84" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="698" y="208" font-size="13" fill="#1A1918" font-weight="bold">DOWNMIX</text>
+  <text x="698" y="230" font-size="10.5" fill="#8a857c">all channels → mono</text>
+  <text x="698" y="244" font-size="10.5" fill="#8a857c">→ 16 kHz</text>
+
+  <line x1="860" y1="220" x2="914" y2="220" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="918" y="178" width="240" height="84" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="936" y="208" font-size="13" fill="#1A1918" font-weight="bold">STANDARD WAV</text>
+  <text x="936" y="230" font-size="10.5" fill="#8a857c">same pipeline as every</text>
+  <text x="936" y="244" font-size="10.5" fill="#8a857c">recording — nothing changes</text>
+
+  <text x="40" y="368" font-size="10" fill="#8a857c">the other participants never see a thing — capture happens inside your mac, after their audio arrives ·</text>
+  <text x="40" y="382" font-size="10" fill="#8a857c">one macOS permission prompt, first use only</text>
+</svg>

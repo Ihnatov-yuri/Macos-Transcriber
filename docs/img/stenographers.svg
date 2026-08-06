@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" font-family="Menlo, ui-monospace, monospace">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#E24A2E" stroke-width="1.6"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="560" fill="#F4EFE3"/>
+  <text x="40" y="52" font-size="15" letter-spacing="3" fill="#1A1918" font-weight="bold">SUPER MODE — TWO STENOGRAPHERS AND AN EDITOR-IN-CHIEF</text>
+  <text x="40" y="72" font-size="11" fill="#8a857c">ROVER-style merge: align the two tapes, take the surer word, arbitrate real disputes</text>
+
+  <!-- Tape A -->
+  <text x="40" y="128" font-size="11" fill="#1A1918" font-weight="bold">STENOGRAPHER A</text>
+  <text x="168" y="128" font-size="9" fill="#8a857c">(parakeet · confidence per word)</text>
+  <g font-size="12">
+    <rect x="40" y="140" width="104" height="40" fill="none" stroke="#1A1918" stroke-width="1.4"/><text x="58" y="164" fill="#1A1918">we'll</text>
+    <rect x="148" y="140" width="104" height="40" fill="none" stroke="#1A1918" stroke-width="1.4"/><text x="166" y="164" fill="#1A1918">review</text>
+    <rect x="256" y="140" width="120" height="40" fill="none" stroke="#1A1918" stroke-width="1.4"/><text x="274" y="164" fill="#1A1918">security</text>
+    <rect x="380" y="140" width="130" height="40" fill="none" stroke="#E24A2E" stroke-width="2"/><text x="398" y="158" fill="#E24A2E">a wasp</text><text x="398" y="173" font-size="9" fill="#8a857c">conf .41</text>
+    <rect x="514" y="140" width="104" height="40" fill="none" stroke="#1A1918" stroke-width="1.4"/><text x="532" y="164" fill="#1A1918">ten</text>
+  </g>
+  <!-- Tape B -->
+  <text x="40" y="234" font-size="11" fill="#1A1918" font-weight="bold">STENOGRAPHER B</text>
+  <text x="168" y="234" font-size="9" fill="#8a857c">(whisper · confidence per word)</text>
+  <g font-size="12">
+    <rect x="40" y="246" width="104" height="40" fill="none" stroke="#1A1918" stroke-width="1.4"/><text x="58" y="270" fill="#1A1918">we'll</text>
+    <rect x="148" y="246" width="104" height="40" fill="none" stroke="#1A1918" stroke-width="1.4"/><text x="166" y="270" fill="#1A1918">review</text>
+    <rect x="256" y="246" width="120" height="40" fill="none" stroke="#1A1918" stroke-width="1.4"/><text x="274" y="270" fill="#1A1918">security</text>
+    <rect x="380" y="246" width="130" height="40" fill="none" stroke="#E24A2E" stroke-width="2"/><text x="398" y="264" fill="#E24A2E">OWASP</text><text x="398" y="279" font-size="9" fill="#8a857c">conf .47</text>
+    <rect x="514" y="246" width="104" height="40" fill="none" stroke="#1A1918" stroke-width="1.4"/><text x="532" y="270" fill="#1A1918">10</text>
+  </g>
+
+  <!-- alignment ties -->
+  <g stroke="#b7b2a8" stroke-width="1" stroke-dasharray="3 3">
+    <line x1="92" y1="180" x2="92" y2="246"/><line x1="200" y1="180" x2="200" y2="246"/>
+    <line x1="316" y1="180" x2="316" y2="246"/><line x1="445" y1="180" x2="445" y2="246"/>
+    <line x1="566" y1="180" x2="566" y2="246"/>
+  </g>
+  <text x="640" y="216" font-size="10" fill="#8a857c">← slide the tapes until</text>
+  <text x="655" y="230" font-size="10" fill="#8a857c">matching words line up</text>
+
+  <!-- dispute path to arbiter -->
+  <path d="M 445 286 L 445 330" fill="none" stroke="#E24A2E" stroke-width="1.6" marker-end="url(#arrR)"/>
+  <rect x="330" y="336" width="380" height="76" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="350" y="364" font-size="12" fill="#E24A2E" font-weight="bold">EDITOR-IN-CHIEF (local LLM)</text>
+  <text x="350" y="384" font-size="10.5" fill="#8a857c">has read the whole case file — the surrounding</text>
+  <text x="350" y="398" font-size="10.5" fill="#8a857c">transcript says they're discussing web security → "OWASP"</text>
+
+  <!-- merged tape -->
+  <path d="M 520 412 L 520 448" fill="none" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text x="40" y="470" font-size="11" fill="#1A1918" font-weight="bold">THE RECORD</text>
+  <g font-size="12">
+    <rect x="40" y="482" width="104" height="40" fill="#1A1918"/><text x="58" y="506" fill="#F4EFE3">we'll</text>
+    <rect x="148" y="482" width="104" height="40" fill="#1A1918"/><text x="166" y="506" fill="#F4EFE3">review</text>
+    <rect x="256" y="482" width="120" height="40" fill="#1A1918"/><text x="274" y="506" fill="#F4EFE3">security</text>
+    <rect x="380" y="482" width="130" height="40" fill="#E24A2E"/><text x="398" y="506" fill="#F4EFE3">OWASP</text>
+    <rect x="514" y="482" width="104" height="40" fill="#1A1918"/><text x="532" y="506" fill="#F4EFE3">10</text>
+  </g>
+  <text x="660" y="500" font-size="10" fill="#8a857c">agreement → straight in · confidence picks close calls ·</text>
+  <text x="660" y="514" font-size="10" fill="#8a857c">the editor-in-chief rules only on genuine disputes</text>
+</svg>

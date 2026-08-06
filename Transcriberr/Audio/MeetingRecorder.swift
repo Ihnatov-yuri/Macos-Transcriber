@@ -67,6 +67,14 @@ final class MeetingRecorder: @unchecked Sendable {
     private var tapDesc: CATapDescription?
     nonisolated(unsafe) private var converter: AVAudioConverter?
     nonisolated(unsafe) private var audioFile: AVAudioFile?
+    /// Raw per-source tracks saved alongside the mix: <base>.mic.wav (you)
+    /// and <base>.sys.wav (everyone else). The mix stays the primary
+    /// recording; the tracks preserve ground truth for split-track
+    /// (re-)transcription — even for meetings recorded before that ships.
+    nonisolated(unsafe) private var micConverter: AVAudioConverter?
+    nonisolated(unsafe) private var micFile: AVAudioFile?
+    nonisolated(unsafe) private var sysConverter: AVAudioConverter?
+    nonisolated(unsafe) private var sysFile: AVAudioFile?
     nonisolated(unsafe) private var paused = false
     nonisolated(unsafe) private var framesSeen: Int64 = 0
     private var nativeRate: Double = 48_000
@@ -98,6 +106,8 @@ final class MeetingRecorder: @unchecked Sendable {
             ioQueue.sync {
                 self.converter = nil
                 self.audioFile = nil
+                self.micConverter = nil; self.micFile = nil
+                self.sysConverter = nil; self.sysFile = nil
             }
             fileURL = nil
             throw error
@@ -114,6 +124,10 @@ final class MeetingRecorder: @unchecked Sendable {
         // Drain any in-flight IO callback, then flush the converter tail.
         ioQueue.sync {
             self.flushConverterTail()
+            self.flushTrackTail(converter: self.micConverter, file: self.micFile)
+            self.flushTrackTail(converter: self.sysConverter, file: self.sysFile)
+            self.micConverter = nil; self.micFile = nil
+            self.sysConverter = nil; self.sysFile = nil
             if let open = self.meOpenAt {
                 self.meIntervals.append([open, Double(self.framesSeen) / self.nativeRate])
                 self.meOpenAt = nil
@@ -182,14 +196,32 @@ final class MeetingRecorder: @unchecked Sendable {
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Transcriberr/Recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let name = "meeting_\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString.prefix(8)).wav"
-        let url = dir.appendingPathComponent(name)
+        let base = "meeting_\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString.prefix(8))"
+        let url = dir.appendingPathComponent(base + ".wav")
         let file = try AVAudioFile(forWriting: url, settings: target.settings,
                                    commonFormat: .pcmFormatFloat32, interleaved: false)
+        guard let mConv = AVAudioConverter(from: nativeMono, to: target),
+              let sConv = AVAudioConverter(from: nativeMono, to: target) else {
+            throw MeetingError.coreAudio("Track converter setup", -1)
+        }
+        mConv.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
+        mConv.sampleRateConverterQuality = AVAudioQuality.high.rawValue
+        sConv.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
+        sConv.sampleRateConverterQuality = AVAudioQuality.high.rawValue
+        let mFile = try AVAudioFile(
+            forWriting: dir.appendingPathComponent(base + ".mic.wav"),
+            settings: target.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let sFile = try AVAudioFile(
+            forWriting: dir.appendingPathComponent(base + ".sys.wav"),
+            settings: target.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
 
         ioQueue.sync {
             self.converter = conv
             self.audioFile = file
+            self.micConverter = mConv
+            self.micFile = mFile
+            self.sysConverter = sConv
+            self.sysFile = sFile
             self.paused = false
             self.framesSeen = 0
             self.chunkBuffer.removeAll(keepingCapacity: true)
@@ -207,7 +239,7 @@ final class MeetingRecorder: @unchecked Sendable {
         }, "Audio IO callback")
         procID = pid
         try check(AudioDeviceStart(aggID, procID), "Audio device start")
-        AppLog.info("meeting", "recording mic + system audio @\(Int(nativeRate)) Hz → \(name)")
+        AppLog.info("meeting", "recording mic + system audio @\(Int(nativeRate)) Hz → \(base).wav (+ .mic/.sys tracks)")
     }
 
     private func teardownCoreAudio() {
@@ -244,26 +276,33 @@ final class MeetingRecorder: @unchecked Sendable {
         // Buffer order follows the aggregate's composition: the mic subdevice
         // first, the system tap after — measure their energy separately for
         // the "me" timeline before the identities blur into the mix.
-        var mono = [Float](repeating: 0, count: frames)
-        var micSq: Float = 0
-        var tapSq: Float = 0
+        var micMono = [Float](repeating: 0, count: frames)
+        var sysMono = [Float](repeating: 0, count: frames)
         for (bi, b) in list.enumerated() {
             guard let raw = b.mData else { continue }
             let ch = max(1, Int(b.mNumberChannels))
             let n = min(frames, Int(b.mDataByteSize) / (4 * ch))
             let p = raw.assumingMemoryBound(to: Float.self)
-            var sq: Float = 0
             for f in 0..<n {
                 var s: Float = 0
                 for c in 0..<ch { s += p[f * ch + c] }
                 let m = s / Float(ch)
-                mono[f] += m
-                sq += m * m
+                if bi == 0 { micMono[f] += m } else { sysMono[f] += m }
             }
-            if bi == 0 { micSq = sq / Float(max(1, frames)) } else { tapSq += sq / Float(max(1, frames)) }
         }
-        updateMeTimeline(micRMS: micSq.squareRoot(), tapRMS: tapSq.squareRoot(),
+        var mono = [Float](repeating: 0, count: frames)
+        var micSq: Float = 0
+        var sysSq: Float = 0
+        for f in 0..<frames {
+            mono[f] = micMono[f] + sysMono[f]
+            micSq += micMono[f] * micMono[f]
+            sysSq += sysMono[f] * sysMono[f]
+        }
+        updateMeTimeline(micRMS: (micSq / Float(frames)).squareRoot(),
+                         tapRMS: (sysSq / Float(frames)).squareRoot(),
                          t: Double(framesSeen) / nativeRate)
+        writeTrack(micMono, converter: micConverter, file: micFile)
+        writeTrack(sysMono, converter: sysConverter, file: sysFile)
 
         var sumSq: Float = 0
         var peak: Float = 0
@@ -362,6 +401,42 @@ final class MeetingRecorder: @unchecked Sendable {
                     WavRecorder.Chunk(samples: head, startTimeSeconds: max(0, startSec)))
             }
         }
+    }
+
+    /// Convert one source's samples to 16 kHz and append to its track file.
+    /// Same streaming discipline as the mix path, no chunk feed.
+    private func writeTrack(_ samples: [Float], converter: AVAudioConverter?, file: AVAudioFile?) {
+        guard let converter, let file,
+              let inBuf = AVAudioPCMBuffer(pcmFormat: converter.inputFormat,
+                                           frameCapacity: AVAudioFrameCount(samples.count)) else { return }
+        inBuf.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { src in
+            inBuf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
+        }
+        let outCap = AVAudioFrameCount(Double(samples.count) * 16_000 / nativeRate) + 64
+        guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
+                                            frameCapacity: outCap) else { return }
+        var fed = false
+        var err: NSError?
+        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in
+            if fed { outStatus.pointee = .noDataNow; return nil }
+            fed = true
+            outStatus.pointee = .haveData
+            return inBuf
+        }
+        if status != .error, outBuf.frameLength > 0 { try? file.write(from: outBuf) }
+    }
+
+    private func flushTrackTail(converter: AVAudioConverter?, file: AVAudioFile?) {
+        guard let converter, let file,
+              let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
+                                            frameCapacity: 4096) else { return }
+        var err: NSError?
+        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in
+            outStatus.pointee = .endOfStream
+            return nil
+        }
+        if status != .error, outBuf.frameLength > 0 { try? file.write(from: outBuf) }
     }
 
     private func flushConverterTail() {

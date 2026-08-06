@@ -21,17 +21,30 @@ final class DiarizationRunner: @unchecked Sendable {
     }
 
     nonisolated(unsafe) private var manager: OfflineDiarizerManager?
+    /// numSpeakers the current manager was configured with (0 = auto).
+    nonisolated(unsafe) private var configuredClusters: Int = -1
 
     init() {}
 
     var isReady: Bool { manager != nil }
 
-    /// One-time setup. Safe to call repeatedly — `prepareModels()` is idempotent.
-    func prepare() async throws {
-        if manager == nil {
-            let m = OfflineDiarizerManager(config: OfflineDiarizerConfig())
+    /// Setup for a given expected-speaker count. The count is baked into the
+    /// clustering config, so a changed count rebuilds the manager (models are
+    /// disk-cached — rebuild costs seconds, not a re-download).
+    func prepare(numClusters: Int = 0) async throws {
+        if manager == nil || configuredClusters != numClusters {
+            var cfg = OfflineDiarizerConfig()
+            if numClusters > 0 {
+                // Exact speaker count from the user's SPEAKERS stepper —
+                // the clusterer must produce exactly this many voices
+                // instead of choosing its own via the distance threshold.
+                cfg.clustering.numSpeakers = numClusters
+            }
+            let m = OfflineDiarizerManager(config: cfg)
             try await m.prepareModels()
             manager = m
+            configuredClusters = numClusters
+            AppLog.info("diar", "diarizer ready (numSpeakers=\(numClusters > 0 ? String(numClusters) : "auto"))")
         }
     }
 
@@ -41,7 +54,7 @@ final class DiarizationRunner: @unchecked Sendable {
         numClusters: Int = 0,
         threshold: Float = 0.5
     ) async throws -> [SpeakerSegment] {
-        try await prepare()
+        try await prepare(numClusters: numClusters)
         guard let manager else { return [] }
 
         let result = try await manager.process(audio: samples)

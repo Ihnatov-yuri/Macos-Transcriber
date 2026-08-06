@@ -1,4 +1,12 @@
 import Foundation
+
+/// Anything that emits the recorder's 5-second 16 kHz chunk feed. Lets the
+/// live worker consume the mic recorder OR the meeting recorder unchanged.
+protocol LiveChunkSource: AnyObject {
+    var chunks: AsyncStream<WavRecorder.Chunk> { get }
+}
+extension WavRecorder: LiveChunkSource {}
+extension MeetingRecorder: LiveChunkSource {}
 import Observation
 
 /// Streaming Gemma 4 over the recorder's 5-second chunk feed.
@@ -24,12 +32,12 @@ final class LiveTranscriber: @unchecked Sendable {
     private(set) var lines: [LiveLine] = []
 
     private let factory: BackendFactory
-    private weak var recorder: WavRecorder?
+    private weak var source: (any LiveChunkSource)?
     private var consumer: Task<Void, Never>?
 
-    init(factory: BackendFactory, recorder: WavRecorder) {
+    init(factory: BackendFactory, recorder: any LiveChunkSource) {
         self.factory = factory
-        self.recorder = recorder
+        self.source = recorder
     }
 
     func start(
@@ -48,8 +56,8 @@ final class LiveTranscriber: @unchecked Sendable {
             return
         }
         status = .running
-        guard let recorder else { return }
-        let chunkStream = recorder.chunks
+        guard let source else { return }
+        let chunkStream = source.chunks
         consumer = Task { @MainActor [weak self] in
             for await chunk in chunkStream {
                 guard let self else { break }
@@ -135,4 +143,10 @@ final class LiveTranscriber: @unchecked Sendable {
             ))
         }
     }
+}
+
+
+extension LiveTranscriber {
+    /// Point the live worker at the recorder that is about to start.
+    func attach(_ newSource: any LiveChunkSource) { source = newSource }
 }

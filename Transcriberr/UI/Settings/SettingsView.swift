@@ -34,6 +34,7 @@ struct SettingsView: View {
 /// selectable as an EXPERIMENTAL audio engine (known to hallucinate).
 struct EnginesSettingsTab: View {
     @Environment(AppContainer.self) private var container
+    @AppStorage("ui.myName") private var myName = ""
 
     private var audioEngines: [BackendFactory.Kind] {
         BackendFactory.Kind.allCases.filter(\.supportsAudio)
@@ -47,6 +48,13 @@ struct EnginesSettingsTab: View {
 
     var body: some View {
         Form {
+            Section {
+                TextField("My name", text: $myName, prompt: Text("e.g. Yuri"))
+            } header: {
+                Text("You")
+            } footer: {
+                Text("Meeting mode knows which voice came from your microphone — it labels that speaker with this name automatically.")
+            }
             Section("Speech-to-text") {
                 Picker("Default engine", selection: Binding(
                     get: { container.uiPrefs.defaultBackend },

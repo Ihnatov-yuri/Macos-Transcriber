@@ -83,7 +83,8 @@ final class RecordModel {
             }
             uiState = .recording
 
-            if liveEnabled, !activeMeeting {
+            if liveEnabled {
+                liveWorker.attach(activeMeeting ? container.meetingRecorder : container.recorder)
                 liveWorker.clear()
                 await liveWorker.start(
                     engine: liveEngine,

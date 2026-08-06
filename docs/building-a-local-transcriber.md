@@ -6,19 +6,7 @@
 
 Before the war stories, the map. Every recording flows through one pipeline, and every hard-won lesson below lives at one of these stations:
 
-```mermaid
-flowchart LR
-    A[🎙 Record<br/>mic or meeting tap] --> B[Decode + VAD<br/>silence-aware chunks]
-    B --> C{ASR engines}
-    C --> C1[Parakeet<br/>ANE, 100× realtime]
-    C --> C2[Whisper large-v3<br/>multilingual]
-    C --> C3[Gemma LiteRT<br/>prompt-steerable]
-    C --> C4[Super<br/>two engines + referee]
-    C1 & C2 & C3 & C4 --> D[Diarize + name speakers<br/>pyannote CoreML]
-    D --> E[Versioned transcript<br/>every run snapshotted]
-    E --> F[Destutter<br/>deterministic cleanup]
-    F --> G[Presets via local LLM<br/>chunked, queued]
-```
+![The pipeline: record → decode → engines → diarize → versions → destutter → presets](img/pipeline.svg)
 
 ## Hardship #1: The model that lied convincingly
 
@@ -36,18 +24,7 @@ No prompt fixes this, because it isn't a comprehension failure — it's attentio
 2. **Never ask a small model for a long output.** Rewrites run per speaker-turn window (~2,600 chars) and are stitched back together.
 3. **Pass the baton, not just the race.** Each window's prompt includes the tail of the *already-processed* previous window — like a relay runner who takes the baton at full stride because she watched the last twenty meters of the runner before her. Names, spellings, and sentence flow stay continuous across the seams:
 
-```mermaid
-flowchart LR
-    T[Destuttered transcript] --> W1[Window 1]
-    T --> W2[Window 2]
-    T --> W3[Window 3]
-    W1 -->|clean| O1[Output 1]
-    O1 -.->|"last 400 chars<br/>(the baton)"| W2
-    W2 -->|clean| O2[Output 2]
-    O2 -.->|baton| W3
-    W3 -->|clean| O3[Output 3]
-    O1 & O2 & O3 --> S[Stitched result]
-```
+![Chunked rewrites: each window's output passes its tail to the next prompt](img/baton.svg)
 
 A failed window falls back to its source text — content can never be lost, only left unpolished. And because the local engine is one kitchen with one chef, generations are queued FIFO: orders wait on the rail instead of two cooks fighting over the same stove (we watched that fight once — it produced an empty plate).
 
@@ -76,16 +53,7 @@ Every ASR engine — Parakeet on the Neural Engine, Whisper large-v3, Gemma — 
 - Where they wrote different words, the editor checks **how sure each stenographer felt** at that moment (per-word confidence) and takes the surer one.
 - Where the disagreement is genuine — both hesitant, or one heard "OWASP" and the other heard "a wasp" — the editor walks down the hall to the **editor-in-chief who has read the whole case file** (the local LLM, given the surrounding transcript as context) and lets him rule.
 
-```mermaid
-flowchart TD
-    A[Engine A words<br/>+ confidence] --> AL[Align the two tapes<br/>edit-distance DP]
-    B[Engine B words<br/>+ confidence] --> AL
-    AL --> Q{How much do<br/>they agree?}
-    Q -->|identical| V[✓ straight into the record]
-    Q -->|differ, one is surer| C[take the confident word]
-    Q -->|genuine dispute| R[🧑‍⚖️ editor-in-chief:<br/>LLM arbitrates with<br/>surrounding context]
-    V & C & R --> M[Merged transcript]
-```
+![Super mode: two word tapes aligned, disputes arbitrated by a context-aware LLM](img/stenographers.svg)
 
 The subtle bug worth sharing: our first merge trusted agreement too early and threw away the one word only Whisper caught ("OWASP 10"). Verbatim shortcuts are only safe at near-certainty; everything else deserves a vote. An editor who rubber-stamps whenever the two tapes *look* similar will miss exactly the words that mattered.
 
@@ -93,12 +61,7 @@ The subtle bug worth sharing: our first merge trusted agreement too early and th
 
 Recording a video call with a microphone pointed at your speakers is bootleg concert taping: echo, keyboard noise, your own voice twice. The right move is the sound engineer's: **plug into the soundboard.** macOS 14.4+ lets an app tap the audio other apps are playing — digitally, before it ever reaches the speakers. Transcriberr pairs that tap with the microphone in one aggregate device so both share a single clock (two metronomes, one conductor — no drift), downmixes, and feeds the exact same 16 kHz pipeline as any recording:
 
-```mermaid
-flowchart LR
-    M[🎙 Your mic] --> AGG[Aggregate device<br/>one clock, drift-compensated]
-    S[🔊 System audio tap<br/>Zoom / Teams / Meet,<br/>captured digitally] --> AGG
-    AGG --> DM[Downmix to mono] --> CV[Convert to 16 kHz] --> W[Standard WAV<br/>→ normal pipeline]
-```
+![Meeting mode: mic + system-audio tap share one clock, then the normal pipeline](img/soundboard.svg)
 
 Because the same pipeline consumes it, meetings get transcription, diarization, versions, and presets for free — the capture layer is new, everything downstream is untouched.
 

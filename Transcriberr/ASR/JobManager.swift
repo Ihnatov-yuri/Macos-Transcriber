@@ -38,6 +38,46 @@ final class TranscriptionJobManager: @unchecked Sendable {
             && !title.contains(" with ") && !title.contains(":") && title.count < 80
     }
 
+    /// Meeting recordings carry a mic-dominance sidecar (<wav>.me.json) —
+    /// ground truth for which diarized speaker is the user. Assign the
+    /// configured name (Settings → Engines → My name) to the speaker whose
+    /// turns overlap the mic timeline most, unless that speaker was already
+    /// named by inference or by hand.
+    @MainActor
+    private func applySelfNameIfMeeting(_ recording: Recording) {
+        let myName = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        guard !myName.isEmpty else { return }
+        let wav = URL(fileURLWithPath: recording.audioPath)
+        let sidecar = wav.deletingPathExtension().appendingPathExtension("me.json")
+        guard let data = try? Data(contentsOf: sidecar),
+              let intervals = try? JSONDecoder().decode([[Double]].self, from: data),
+              !intervals.isEmpty else { return }
+
+        var overlap: [String: Double] = [:]
+        var total: [String: Double] = [:]
+        for seg in recording.segments {
+            guard let key = seg.speaker else { continue }
+            total[key, default: 0] += max(0, seg.endSeconds - seg.startSeconds)
+            for iv in intervals where iv.count == 2 {
+                overlap[key, default: 0] += max(0, min(seg.endSeconds, iv[1]) - max(seg.startSeconds, iv[0]))
+            }
+        }
+        guard let best = overlap.max(by: { $0.value < $1.value }),
+              best.value >= 3,
+              best.value >= 0.3 * (total[best.key] ?? .greatestFiniteMagnitude)
+        else {
+            AppLog.info("job", "meeting self-name: no speaker matches the mic timeline confidently")
+            return
+        }
+        let alreadyNamed = recording.segments.contains {
+            $0.speaker == best.key && ($0.speakerName?.isEmpty == false)
+        }
+        guard !alreadyNamed else { return }
+        try? repository.setSpeakerName(myName, for: best.key, in: recording)
+        AppLog.info("job", "meeting self-name: \(best.key) → \(myName) (\(Int(best.value))s mic overlap)")
+    }
+
     @MainActor
     private func autoTitle(recording: Recording, segments: [Segment], params: TranscriptionRunner.Params) async {
         await autoTitler?(recording, segments, params)
@@ -175,6 +215,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                             AppLog.warn("job", "final reconcile failed: \(error.localizedDescription)")
                         }
                     }
+                    applySelfNameIfMeeting(recording)
                     // Every completed run becomes an immutable version tagged
                     // with its engine, so runs from different engines can be
                     // compared (Detail → VERSIONS) and restored.

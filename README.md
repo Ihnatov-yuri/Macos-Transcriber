@@ -45,6 +45,7 @@ xcodegen generate
 xcodebuild -project Transcriberr.xcodeproj -scheme Transcriberr \
     -configuration Release -destination "platform=macOS" \
     -derivedDataPath .build/xcode build
+./scripts/package.sh   # re-sign embedded dylibs (required — see script)
 open .build/xcode/Build/Products/Release/Transcriberr.app
 ```
 

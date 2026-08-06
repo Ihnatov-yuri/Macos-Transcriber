@@ -156,6 +156,17 @@ final class PostProcessor: @unchecked Sendable {
                     maxTokens: maxTokens
                 )
             }
+            // An empty/token generation must never replace a stored output —
+            // seen live: a wedged long-context run returned "" and silently
+            // wiped the previous CLEAN document.
+            let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.count >= 40 else {
+                throw NSError(
+                    domain: "PostProcessor", code: -2,
+                    userInfo: [NSLocalizedDescriptionKey:
+                        "Model returned \(trimmed.count) chars — kept the previous output. Try again."]
+                )
+            }
             try persist(markdown: markdown, preset: preset, recording: recording)
             AppLog.info("postproc", "preset=\(presetId) done (\(markdown.count) chars)")
             await setStatus(key, .done)

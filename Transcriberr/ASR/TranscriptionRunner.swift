@@ -195,10 +195,12 @@ final class TranscriptionRunner: @unchecked Sendable {
             switch params.backend {
             case .parakeet, .parakeetV2, .whisper: return 3
             case .ensemble:
-                // Max-quality toggle (Settings → Engines → Super): sequential
-                // chunks so Gemma arbitration gets the preceding merged
-                // transcript as context. Default = 3-wide pipeline for speed.
-                return UserDefaults.standard.bool(forKey: "ui.superMaxQuality") ? 1 : 3
+                // Always pipeline. Max quality no longer serializes chunks —
+                // measured: 98% of chunks agree and never needed context, so
+                // sequential mode paid 20 minutes for 5 arbitrations. Quality
+                // now comes from the SECOND pass: disputed chunks arbitrated
+                // with context from BOTH sides of the finished transcript.
+                return 3
             default: return 1
             }
         }()
@@ -213,6 +215,19 @@ final class TranscriptionRunner: @unchecked Sendable {
                 )
             }
         }
+        // Two-pass max quality: capture per-chunk agreement + raw A/B texts
+        // during the first pass so disputes can be arbitrated afterwards.
+        final class RichBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var map: [Int: (agreement: Double, textA: String, textB: String)] = [:]
+            func set(_ idx: Int, _ v: (Double, String, String)) { lock.lock(); map[idx] = v; lock.unlock() }
+            func all() -> [Int: (agreement: Double, textA: String, textB: String)] { lock.lock(); defer { lock.unlock() }; return map }
+        }
+        let ensembleTwoPass = params.backend == .ensemble
+            && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+        let richBox = RichBox()
+        var perChunkParsed: [Int: [RawSegment]] = [:]
+
         var pipelineResults: [Int: String] = [:]
         if pipelineWidth > 1 {
             try await withThrowingTaskGroup(of: (Int, String).self) { group in
@@ -220,6 +235,17 @@ final class TranscriptionRunner: @unchecked Sendable {
                 func submit(_ idx: Int) {
                     let chunk = chunks[idx]
                     let hints = hintsFor(chunk)
+                    if ensembleTwoPass, let ens = backend as? EnsembleBackend {
+                        group.addTask { [self] in
+                            let rich = try await withChunkTimeout(seconds: 300) {
+                                try await ens.transcribeChunkRich(
+                                    samples: chunk.samples, languages: params.languages)
+                            }
+                            richBox.set(idx, (rich.agreement, rich.textA, rich.textB))
+                            return (idx, rich.text)
+                        }
+                        return
+                    }
                     group.addTask { [self] in
                         let raw = try await runChunkWithRetry(
                             backend: backend, params: params,
@@ -306,6 +332,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 deduped.append(seg)
             }
             parsed = deduped
+            perChunkParsed[idx] = parsed
             allSegments.append(contentsOf: parsed)
             // Build the cross-chunk continuation tail from the *parsed* text,
             // not the raw model output. parseSegments already discarded any
@@ -332,6 +359,58 @@ final class TranscriptionRunner: @unchecked Sendable {
             }
         }
         AppLog.info("runner", "first pass done — \(allSegments.count) segments, \(lowConfidenceChunks.count) low-confidence chunks")
+
+        // ---------- max-quality second pass: arbitrate disputed chunks ----------
+        // Agreement < 0.8 (was < 0.5 inline): moderate disagreements now get
+        // the expensive judgment too, because it's only spent where engines
+        // actually fight — and the arbiter sees text BEFORE AND AFTER the
+        // disputed chunk plus the user's vocabulary.
+        if ensembleTwoPass, let ens = backend as? EnsembleBackend {
+            let rich = richBox.all()
+            let disputes = rich.filter { $0.value.agreement < 0.8
+                && !$0.value.textA.isEmpty && !$0.value.textB.isEmpty }
+                .keys.sorted()
+            AppLog.info("runner", "max-quality pass: \(disputes.count) disputed chunks of \(chunks.count)")
+            for (k, idx) in disputes.enumerated() {
+                try Task.checkCancellation()
+                guard let info = rich[idx] else { continue }
+                let chunk = chunks[idx]
+                continuation.yield(.stage(
+                    text: "Arbitrating disputed chunk \(k + 1)/\(disputes.count)…",
+                    fraction: 0.90 + 0.05 * Double(k) / Double(max(1, disputes.count))
+                ))
+                let ctx = neighborContext(around: chunk, in: allSegments)
+                let ruled = await ens.arbitrate(
+                    textA: info.textA, textB: info.textB,
+                    context: ctx, languages: params.languages)
+                guard !ruled.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                var parsed = parseSegments(
+                    rawText: ruled,
+                    chunkStart: chunk.startSeconds,
+                    chunkEnd: chunk.endSeconds,
+                    diarize: params.diarize
+                )
+                if micChunkIndices.contains(idx) {
+                    let myName = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
+                        .trimmingCharacters(in: .whitespaces)
+                    parsed = parsed.map { seg in
+                        var s = seg
+                        s.speakerKey = "ME"
+                        s.speakerName = myName.isEmpty ? "Me" : myName
+                        return s
+                    }
+                }
+                perChunkParsed[idx] = parsed
+            }
+            if !disputes.isEmpty {
+                // Rebuild in chunk order (already time-sorted across tracks)
+                // and drop arbitrated chunks from the refinement list — they
+                // just received the most expensive treatment available.
+                allSegments = chunks.indices.flatMap { perChunkParsed[$0] ?? [] }
+                let disputed = Set(disputes)
+                lowConfidenceChunks.removeAll { disputed.contains($0.idx) }
+            }
+        }
 
         // ---------- second pass on low-confidence chunks ----------
         if !lowConfidenceChunks.isEmpty {

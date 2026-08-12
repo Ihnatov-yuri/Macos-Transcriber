@@ -147,6 +147,68 @@ actor EnsembleBackend: ASRBackend {
 
     // MARK: - Word-level confidence merge (fast path)
 
+    /// One chunk's first-pass result for the two-pass max-quality flow:
+    /// vote-merged text plus everything the second pass needs to arbitrate.
+    struct RichChunk: Sendable {
+        let text: String
+        let agreement: Double
+        let textA: String
+        let textB: String
+    }
+
+    /// First pass of max-quality Super: transcribe A∥B and VOTE-merge only —
+    /// no inline Gemma. Disputed chunks (low agreement) are arbitrated later
+    /// by the runner with context from BOTH sides of the finished transcript.
+    func transcribeChunkRich(
+        samples: [Float],
+        languages: Set<String>
+    ) async throws -> RichChunk {
+        guard isReady, let engineA, let engineB else {
+            throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
+        }
+        if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
+            async let taskA = pa.transcribeDetailed(samples: samples, languages: languages)
+            async let taskB = pb.transcribeDetailed(samples: samples, languages: languages)
+            if let a = try? await taskA, let b = try? await taskB {
+                if a.text.isEmpty { return RichChunk(text: b.text, agreement: 1, textA: a.text, textB: b.text) }
+                if b.text.isEmpty { return RichChunk(text: a.text, agreement: 1, textA: a.text, textB: b.text) }
+                let haveWords = !a.words.isEmpty && !b.words.isEmpty
+                let similarity = haveWords
+                    ? Self.diceSimilarity(a.words.map(\.norm), b.words.map(\.norm))
+                    : Self.tokenSimilarity(a.text, b.text)
+                let voted = haveWords ? Self.roverMerge(a.words, b.words) : a.text
+                return RichChunk(
+                    text: voted.isEmpty ? a.text : voted,
+                    agreement: similarity,
+                    textA: a.text, textB: b.text
+                )
+            }
+        }
+        // Generic fallback (an engine without word confidences).
+        let textA = ((try? await engineA.transcribeChunk(
+            samples: samples, languages: languages, translateTo: nil,
+            diarize: false, previousContext: nil, speakerHints: [])) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let textB = ((try? await engineB.transcribeChunk(
+            samples: samples, languages: languages, translateTo: nil,
+            diarize: false, previousContext: nil, speakerHints: [])) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if textA.isEmpty { return RichChunk(text: textB, agreement: 1, textA: textA, textB: textB) }
+        if textB.isEmpty { return RichChunk(text: textA, agreement: 1, textA: textA, textB: textB) }
+        return RichChunk(text: textA, agreement: Self.tokenSimilarity(textA, textB), textA: textA, textB: textB)
+    }
+
+    /// Second pass of max-quality Super: Gemma rules on a disputed chunk with
+    /// surrounding-transcript context and the user's vocabulary.
+    func arbitrate(
+        textA: String,
+        textB: String,
+        context: String?,
+        languages: Set<String>
+    ) async -> String {
+        await gemmaMerge(textA: textA, textB: textB, context: context, languages: languages)
+    }
+
     private func mergeDetailed(
         _ a: DetailedTranscription,
         _ b: DetailedTranscription,
@@ -235,8 +297,28 @@ actor EnsembleBackend: ASRBackend {
 
     // MARK: - Gemma arbitration (slow path)
 
-    private func gemmaMerge(textA: String, textB: String, context: String? = nil) async -> String {
+    private func gemmaMerge(
+        textA: String,
+        textB: String,
+        context: String? = nil,
+        languages: Set<String> = []
+    ) async -> String {
         guard let arbiter else { return textA }
+        // Authoritative entity spellings — the exact words engines fight over.
+        var vocabBlock = ""
+        let d = UserDefaults.standard
+        var vocabParts: [String] = []
+        if let g = d.string(forKey: "prompt.vocabulary"), !g.trimmingCharacters(in: .whitespaces).isEmpty {
+            vocabParts.append(g)
+        }
+        if let js = d.string(forKey: "prompt.vocabulary.byLang"),
+           let map = try? JSONDecoder().decode([String: String].self, from: Data(js.utf8)) {
+            let keys = languages.isEmpty ? Array(map.keys) : Array(languages)
+            for k in keys.sorted() { if let v = map[k], !v.isEmpty { vocabParts.append(v) } }
+        }
+        if !vocabParts.isEmpty {
+            vocabBlock = "Vocabulary (authoritative spellings — prefer the reading matching these): \(vocabParts.joined(separator: ", ").prefix(600))\n\n"
+        }
         // The bigger picture: the conversation's preceding merged text lets
         // the arbiter judge which conflicting reading fits the discussion —
         // names, topic, register — instead of judging the chunk in isolation.
@@ -256,7 +338,7 @@ actor EnsembleBackend: ASRBackend {
                 - Never include content that appears in neither transcript. Never repeat the context. Never summarize, never comment.
                 Output ONLY the merged transcript text.
                 """,
-                userMessage: contextBlock + """
+                userMessage: vocabBlock + contextBlock + """
                 Transcript A (\(kindA.displayName)):
                 \(textA)
 

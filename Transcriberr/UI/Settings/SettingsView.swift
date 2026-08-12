@@ -95,11 +95,11 @@ struct EnginesSettingsTab: View {
                 )) {
                     ForEach(mergeOptions, id: \.rawValue) { Text($0.displayName).tag($0) }
                 }
-                Toggle("Max quality (slower): sequential chunks + conversation context for arbitration", isOn: Binding(
+                Toggle("Max quality: arbitrate every disputed chunk with surrounding context + vocabulary", isOn: Binding(
                     get: { container.uiPrefs.superMaxQuality },
                     set: { container.uiPrefs.superMaxQuality = $0 }
                 ))
-                Text("Both engines transcribe every chunk; disagreements are settled word-by-word by recognizer confidence. Gemma 4 arbitrates only hard conflicts — with Max quality on, it also sees the preceding transcript when doing so.")
+                Text("Both engines transcribe every chunk in parallel; disagreements are settled word-by-word by recognizer confidence. With Max quality on, chunks where the engines disagree (agreement < 0.8) get a second pass: Gemma rules with transcript context from both sides and your vocabulary.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Speaker turns") {

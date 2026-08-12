@@ -392,9 +392,20 @@ final class TranscriptionRunner: @unchecked Sendable {
         // disputed chunk plus the user's vocabulary.
         if ensembleTwoPass, let ens = backend as? EnsembleBackend {
             let rich = richBox.all()
+            // Worst disagreements first, bounded: cross-family engine pairs
+            // (Whisper+Gemma on Ukrainian) can dispute 70% of chunks — 22
+            // unbounded sequential Gemma calls froze a run for tens of
+            // minutes. Spend the expensive judgment where it matters most.
             let disputes = rich.filter { $0.value.agreement < 0.8
                 && !$0.value.textA.isEmpty && !$0.value.textB.isEmpty }
-                .keys.sorted()
+                .sorted { $0.value.agreement < $1.value.agreement }
+                .prefix(10)
+                .map(\.key)
+                .sorted()
+            let totalDisputed = rich.filter { $0.value.agreement < 0.8 }.count
+            if totalDisputed > disputes.count {
+                AppLog.info("runner", "arbitrating worst \(disputes.count) of \(totalDisputed) disputes (bounded)")
+            }
             AppLog.info("runner", "max-quality pass: \(disputes.count) disputed chunks of \(chunks.count)")
             for (k, idx) in disputes.enumerated() {
                 try Task.checkCancellation()
@@ -405,9 +416,21 @@ final class TranscriptionRunner: @unchecked Sendable {
                     fraction: 0.90 + 0.05 * Double(k) / Double(max(1, disputes.count))
                 ))
                 let ctx = neighborContext(around: chunk, in: allSegments)
-                let ruled = await ens.arbitrate(
-                    textA: info.textA, textB: info.textB,
-                    context: ctx, languages: params.languages)
+                // Bounded: an unwatched arbitration hung the entire disputes
+                // phase when Gemma wedged. On timeout, recover the engine and
+                // keep the confidence-voted text for this chunk.
+                let ruled: String
+                do {
+                    ruled = try await withChunkTimeout(seconds: 120) {
+                        await ens.arbitrate(
+                            textA: info.textA, textB: info.textB,
+                            context: ctx, languages: params.languages)
+                    }
+                } catch {
+                    AppLog.warn("runner", "arbitration wedged on chunk \(idx + 1) — recovering, keeping voted text")
+                    try? await ens.recoverWedge(modelPath: nil)
+                    continue
+                }
                 guard !ruled.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
                 var parsed = parseSegments(
                     rawText: ruled,

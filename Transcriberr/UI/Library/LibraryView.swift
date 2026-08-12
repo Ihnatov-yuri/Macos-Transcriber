@@ -186,6 +186,22 @@ struct LibraryView: View {
                         let url = URL(fileURLWithPath: rec.audioPath)
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
+                    if rows.count > 1 {
+                        Menu("Merge with…") {
+                            ForEach(rows.filter { $0.id != rec.id }, id: \.id) { other in
+                                Button("\(other.title)") {
+                                    Task { @MainActor in
+                                        do {
+                                            let merged = try await container.repository.merge(rec, other)
+                                            selection = merged
+                                        } catch {
+                                            AppLog.error("library", "merge failed: \(error.localizedDescription)")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Divider()
                     Button("Delete", role: .destructive) {
                         if selection?.id == rec.id { selection = nil }

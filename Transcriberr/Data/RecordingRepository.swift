@@ -48,6 +48,7 @@ final class RecordingRepository: @unchecked Sendable {
     /// ("SPEAKER_00" in each file is usually two different humans). "ME" is
     /// exempt — it is the same user in both recordings by definition.
     /// Originals are left untouched.
+    @MainActor
     func merge(_ a: Recording, _ b: Recording) async throws -> Recording {
         let decoder = AudioDecoder()
         let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: a.audioPath))
@@ -151,11 +152,25 @@ final class RecordingRepository: @unchecked Sendable {
                 maxIdx = max(maxIdx, n)
             }
         }
+        var bMaxIdx = -1
+        for seg in b.segments {
+            if let key = seg.speaker, key.hasPrefix("SPEAKER_"),
+               let n = Int(key.dropFirst("SPEAKER_".count)) {
+                bMaxIdx = max(bMaxIdx, n)
+            }
+        }
         func remap(_ key: String?) -> String? {
             guard let key else { return nil }
-            guard key != "ME", key.hasPrefix("SPEAKER_"),
-                  let n = Int(key.dropFirst("SPEAKER_".count)) else { return key }
-            return String(format: "SPEAKER_%02d", n + maxIdx + 1)
+            if key == "ME" { return key }               // same user in both
+            if key.hasPrefix("SPEAKER_"), let n = Int(key.dropFirst("SPEAKER_".count)) {
+                return String(format: "SPEAKER_%02d", n + maxIdx + 1)
+            }
+            if key == "GUEST" {
+                // b's guest is (usually) a different human than a's guest —
+                // give them a fresh key past everyone.
+                return String(format: "SPEAKER_%02d", maxIdx + 1 + bMaxIdx + 1)
+            }
+            return key
         }
 
         var copies: [Segment] = []

@@ -72,6 +72,9 @@ actor GemmaLiteRTBackend: ASRBackend {
     func release() async {
         engine = nil
         isReady = false
+        // A wedged native call may hold the engine lock forever — the whole
+        // point of a rebuild is to move past it. Unblock the queue.
+        resetEngineLock()
     }
 
     /// Find the .litertlm bundle: explicit file → dir scan → default cache.
@@ -121,8 +124,8 @@ actor GemmaLiteRTBackend: ASRBackend {
 
         // Same exclusivity as generateText — ASR and text generations share
         // one engine and must never interleave conversations on it.
-        await acquireEngine()
-        defer { releaseEngine() }
+        let lockGen = await acquireEngine()
+        defer { releaseEngine(lockGen) }
 
         let sampler = try SamplerConfig(topK: 1, topP: 0.95, temperature: 0.1)
         let conversation = try await engine.createConversation(with: ConversationConfig(
@@ -162,15 +165,35 @@ actor GemmaLiteRTBackend: ASRBackend {
     // generation at a time, strict FIFO.
     private var engineBusy = false
     private var engineWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Bumped whenever the engine is torn down: a WEDGED native call holds
+    /// the lock forever (it never returns to run its defer), so release()
+    /// resets the lock — and the generation stamp makes the zombie's
+    /// eventual release a no-op instead of corrupting the new holder.
+    private var lockGeneration = 0
 
-    private func acquireEngine() async {
-        if !engineBusy { engineBusy = true; return }
+    private func acquireEngine() async -> Int {
+        if !engineBusy { engineBusy = true; return lockGeneration }
         await withCheckedContinuation { engineWaiters.append($0) }
+        return lockGeneration
     }
 
-    private func releaseEngine() {
+    private func releaseEngine(_ generation: Int) {
+        guard generation == lockGeneration else { return }   // zombie holder
         if engineWaiters.isEmpty { engineBusy = false }
         else { engineWaiters.removeFirst().resume() }
+    }
+
+    /// Called from release()/teardown: unblock the queue — waiters resume
+    /// against the freshly rebuilt engine instead of starving behind a hung
+    /// native call that will never come back.
+    private func resetEngineLock() {
+        lockGeneration += 1
+        if engineWaiters.isEmpty {
+            engineBusy = false
+        } else {
+            engineBusy = true
+            engineWaiters.removeFirst().resume()
+        }
     }
 
     func generateText(
@@ -181,8 +204,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         guard isReady, let engine else {
             throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
         }
-        await acquireEngine()
-        defer { releaseEngine() }
+        let lockGen = await acquireEngine()
+        defer { releaseEngine(lockGen) }
         func attempt() async throws -> String {
             let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)
             let conversation = try await engine.createConversation(with: ConversationConfig(

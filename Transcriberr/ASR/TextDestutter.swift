@@ -23,7 +23,7 @@ enum TextDestutter {
 
     /// Words that repeat legitimately in fluent English at run length 2.
     private static let legitDoubles: Set<String> = [
-        "that", "had", "very", "really", "no", "yeah", "bye", "ha", "so",
+        "that", "had", "very", "really", "no", "yes", "yeah", "bye", "ha", "so",
     ]
 
     /// Pure hesitation sounds — dropped outright before stutter collapse

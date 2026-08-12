@@ -913,6 +913,23 @@ struct TranscriptPane: View {
                     .padding(.vertical, AppMetric.l)
             }
         } else {
+            VStack(spacing: 0) {
+            if isRunning {
+                // Mid-run the transcript is a RAW DRAFT: speakers, echo
+                // cleanup, and turn merging all happen in the finalize step
+                // after the last chunk. Without this banner every mid-run
+                // glance looks like a bug report.
+                HStack(spacing: 8) {
+                    PulseDot(diameter: 5)
+                    Text("LIVE DRAFT — SPEAKERS, ECHO CLEANUP AND TURN MERGING APPLY WHEN THE RUN FINISHES")
+                        .monoLabel(9, color: AppColor.inkSoft)
+                    Spacer()
+                }
+                .padding(.horizontal, AppMetric.sheetPadding)
+                .padding(.vertical, 6)
+                .background(AppColor.paper)
+                HairlineSoft()
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -948,6 +965,7 @@ struct TranscriptPane: View {
                         proxy.scrollTo(new, anchor: .center)
                     }
                 }
+            }
             }
         }
     }

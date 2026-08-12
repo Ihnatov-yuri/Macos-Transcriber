@@ -370,6 +370,12 @@ final class TranscriptionRunner: @unchecked Sendable {
                 let rms = (energy / Float(max(1, chunk.samples.count))).squareRoot()
                 if rms < 0.004 && parsedJoined.count < 30 {
                     AppLog.info("runner", "chunk \(idx + 1) low confidence but near-silent (rms \(String(format: "%.4f", rms))) — skipping refinement")
+                } else if splitTracks {
+                    // Refinement pre-dates split-track: its re-parse loses the
+                    // ME label and its time-range splice deletes the OTHER
+                    // track's overlapping segments. Disputes/scrubs cover
+                    // split runs; skip until refinement is track-aware.
+                    AppLog.info("runner", "chunk \(idx + 1) low confidence — refinement skipped on split-track run")
                 } else {
                     AppLog.warn("runner", "chunk \(idx + 1) low confidence (score=\(String(format: "%.2f", confidence.score))) — \(confidence.reasons.joined(separator: ", "))")
                     lowConfidenceChunks.append((idx, chunk, parsedJoined))
@@ -574,7 +580,9 @@ final class TranscriptionRunner: @unchecked Sendable {
                 let toks = seg.text.lowercased()
                     .split(whereSeparator: { !$0.isLetter })
                     .map(String.init)
-                return toks.isEmpty || toks.allSatisfy { fillerWords.contains($0) }
+                let hasDigits = seg.text.contains(where: \.isNumber)
+                return (toks.isEmpty && !hasDigits)
+                    || (!toks.isEmpty && toks.allSatisfy { fillerWords.contains($0) } && !hasDigits)
             }
 
             // De-chunk: the 30 s chunk windows are an implementation detail —

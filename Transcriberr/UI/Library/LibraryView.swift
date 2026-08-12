@@ -200,6 +200,10 @@ struct LibraryView: View {
                                             selection = merged
                                         } catch {
                                             AppLog.error("library", "merge failed: \(error.localizedDescription)")
+                                            let alert = NSAlert()
+                                            alert.messageText = "Merge failed"
+                                            alert.informativeText = error.localizedDescription
+                                            alert.runModal()
                                         }
                                     }
                                 }

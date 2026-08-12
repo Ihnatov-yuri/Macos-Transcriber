@@ -316,7 +316,9 @@ final class MeetingRecorder: @unchecked Sendable {
         // they speak is pure room echo (the audible 12% floor of v1.7).
         // Asymmetric ramps: open near-instantly when the user speaks so no
         // syllable is clipped; close gently so it never pumps.
-        let micActive = micRMS > 0.004 && micRMS > tapRMS * 1.5
+        // Open on relative dominance OR clear absolute speech energy — a
+        // loud far side must not be able to gate out the user's interjection.
+        let micActive = micRMS > 0.02 || (micRMS > 0.004 && micRMS > tapRMS * 1.5)
         let target: Float = (micActive || tapRMS < 0.004) ? 1.0 : 0.0
         micGain += (target - micGain) * (target > micGain ? 0.6 : 0.15)
         if micGain < 0.999 {

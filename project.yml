@@ -16,7 +16,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: "2.1"
+    MARKETING_VERSION: "2.2"
 
 # Gemma4Swift transitively brings mlx-swift, mlx-swift-lm, swift-transformers.
 # Sherpa-onnx for diarization (pending diarization-research recommendation).
@@ -90,10 +90,9 @@ targets:
     sources:
       - path: TranscriberrCLI
       - path: Transcriberr/Audio
-      - path: Transcriberr/Utility/AppLog.swift
-      - path: Transcriberr/Utility/ExceptionTrap.h
-      - path: Transcriberr/Utility/ExceptionTrap.m
-      - path: Transcriberr/ASR/Stores/RecorderSettings.swift
+      - path: Transcriberr/ASR
+      - path: Transcriberr/Data
+      - path: Transcriberr/Utility
     dependencies:
       - package: FluidAudio
         product: FluidAudio

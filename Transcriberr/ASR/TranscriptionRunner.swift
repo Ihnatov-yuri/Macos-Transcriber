@@ -51,6 +51,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         var diarize: Bool
         var hybridDiarize: Bool
         var expectedSpeakers: Int
+        var expectedSpeakersExact: Bool
 
         init(
             file: URL,
@@ -60,7 +61,8 @@ final class TranscriptionRunner: @unchecked Sendable {
             translateTo: String? = nil,
             diarize: Bool = false,
             hybridDiarize: Bool = false,
-            expectedSpeakers: Int = 0
+            expectedSpeakers: Int = 0,
+            expectedSpeakersExact: Bool = false
         ) {
             self.file = file
             self.backend = backend
@@ -70,6 +72,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             self.diarize = diarize
             self.hybridDiarize = hybridDiarize
             self.expectedSpeakers = expectedSpeakers
+            self.expectedSpeakersExact = expectedSpeakersExact
         }
     }
 
@@ -154,7 +157,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                     numClusters: splitTracks
                         ? max(0, params.expectedSpeakers - 1)
                         : params.expectedSpeakers,
-                    threshold: 0.5
+                    exact: params.expectedSpeakersExact
                 )
                 AppLog.info("runner", "diar pre-pass produced \(diarSegments.count) regions")
             } catch {

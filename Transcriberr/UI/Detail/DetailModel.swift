@@ -15,6 +15,7 @@ final class DetailModel {
     var hybridDiarize: Bool { didSet { persistRunSettings() } }
     var backend: BackendFactory.Kind { didSet { persistRunSettings() } }
     var expectedSpeakers: Int = 0 { didSet { persistRunSettings() } }
+    var speakersExact: Bool = false { didSet { persistRunSettings() } }
 
     var lastError: String?
 
@@ -33,6 +34,7 @@ final class DetailModel {
             .flatMap { $0.supportsAudio ? $0 : nil }
             ?? container.uiPrefs.defaultBackend
         self.expectedSpeakers = recording.runExpectedSpeakers ?? 0
+        self.speakersExact = recording.runSpeakersExact ?? false
     }
 
     /// Write the panel's state back onto the recording so it survives
@@ -43,6 +45,7 @@ final class DetailModel {
         recording.runDiarize = diarize
         recording.runHybridDiarize = hybridDiarize
         recording.runExpectedSpeakers = expectedSpeakers
+        recording.runSpeakersExact = speakersExact
         recording.translateToEnglish = translateToEnglish
         try? container.repository.save(recording)
     }
@@ -94,7 +97,8 @@ final class DetailModel {
             translateTo: translateToEnglish ? "English" : nil,
             diarize: diarize,
             hybridDiarize: hybridDiarize,
-            expectedSpeakers: expectedSpeakers
+            expectedSpeakers: expectedSpeakers,
+            expectedSpeakersExact: speakersExact
         )
         container.jobManager.enqueue(recording, params: params)
     }

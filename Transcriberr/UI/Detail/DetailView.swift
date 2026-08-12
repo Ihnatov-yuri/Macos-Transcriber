@@ -110,6 +110,17 @@ struct DetailView: View {
                                     .monoLabel(9, color: AppColor.ink)
                             }
                         }
+                        .contextMenu {
+                            // The last 10% of diarization errors are fixed by
+                            // a human in two clicks, not by a better clusterer.
+                            ForEach(speakers.filter { $0.key != entry.key }, id: \.key) { other in
+                                Button("Merge into \(other.display)") {
+                                    guard let repo = model?.container.repository else { return }
+                                    try? repo.mergeSpeakers(
+                                        entry.key, into: other.key, in: recording)
+                                }
+                            }
+                        }
 
                     }
                     Text("RENAME ↗").monoLabel(9, color: AppColor.inkMuted)
@@ -523,12 +534,21 @@ struct DetailView: View {
             HairlineSoft()
             if m.diarize {
                 LedgerRow("SPEAKERS") {
-                    Stepper(
-                        m.expectedSpeakers == 0 ? "Auto-detect" : "\(m.expectedSpeakers)",
-                        value: Binding(get: { m.expectedSpeakers }, set: { m.expectedSpeakers = $0 }),
-                        in: 0...8
-                    )
-                    .frame(maxWidth: 200, alignment: .leading)
+                    HStack(spacing: 12) {
+                        Stepper(
+                            m.expectedSpeakers == 0 ? "Auto-detect" : "\(m.expectedSpeakers)",
+                            value: Binding(get: { m.expectedSpeakers }, set: { m.expectedSpeakers = $0 }),
+                            in: 0...8
+                        )
+                        if m.expectedSpeakers > 0 {
+                            TapButton { m.speakersExact.toggle() } label: {
+                                Text(m.speakersExact ? "EXACTLY \(m.expectedSpeakers)" : "UP TO \(m.expectedSpeakers)")
+                                    .monoLabel(9, color: m.speakersExact ? AppColor.accent : AppColor.inkSoft)
+                            }
+                            .help("UP TO: the diarizer may find fewer. EXACTLY: it re-tries with a finer ear until it can tell this many voices apart (never invents phantoms).")
+                        }
+                    }
+                    .frame(maxWidth: 320, alignment: .leading)
                 }
                 HairlineSoft()
             }
@@ -847,6 +867,11 @@ struct TranscriptPane: View {
     }
 
     /// ID of the most recently transcribed segment — for live auto-scroll.
+    /// True while the user is scrolled near the bottom — only then does the
+    /// live transcript follow new chunks. Auto-scroll that fights a reading
+    /// user is the "wobble".
+    @State private var nearBottom = true
+
     private var tailID: UUID? {
         recording.segments
             .sorted { $0.startSeconds < $1.startSeconds }
@@ -902,12 +927,19 @@ struct TranscriptPane: View {
                     }
                     .padding(.horizontal, AppMetric.sheetPadding)
                 }
+                .onScrollGeometryChange(for: Bool.self) { geo in
+                    geo.contentOffset.y + geo.containerSize.height
+                        >= geo.contentSize.height - 140
+                } action: { _, isNear in
+                    nearBottom = isNear
+                }
                 .onChange(of: tailID) { _, new in
-                    // New chunk arrived → scroll to bottom.
-                    guard let new else { return }
-                    withAnimation(.easeOut(duration: 0.25)) {
-                        proxy.scrollTo(new, anchor: .bottom)
-                    }
+                    // New chunk arrived → follow, but ONLY if the user is
+                    // already at the bottom, and without animation — an
+                    // animated chase re-triggered every chunk reads as
+                    // wobble, and it hijacks the scroll wheel mid-read.
+                    guard let new, nearBottom else { return }
+                    proxy.scrollTo(new, anchor: .bottom)
                 }
                 .onChange(of: activeID) { _, new in
                     // Playback advanced → follow the active segment.

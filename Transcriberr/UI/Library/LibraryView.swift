@@ -165,7 +165,11 @@ struct LibraryView: View {
 
     private var listRows: some View {
         let rows = filtered
-        return LazyVStack(spacing: 0) {
+        // Plain VStack, deliberately: LazyVStack re-estimates row heights
+        // whenever @Query re-fires (every chunk append during a run), which
+        // made the scroll position wobble. The library is small; laziness
+        // bought nothing and cost stability.
+        return VStack(spacing: 0) {
             if rows.isEmpty {
                 Text(query.isEmpty
                      ? "NO RECORDINGS YET · TAP + IMPORT"

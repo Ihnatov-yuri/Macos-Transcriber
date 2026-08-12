@@ -21,8 +21,9 @@ final class DiarizationRunner: @unchecked Sendable {
     }
 
     nonisolated(unsafe) private var manager: OfflineDiarizerManager?
-    /// numSpeakers the current manager was configured with (0 = auto).
+    /// (maxSpeakers, threshold) the current manager was configured with.
     nonisolated(unsafe) private var configuredClusters: Int = -1
+    nonisolated(unsafe) private var configuredThreshold: Double = -1
 
     init() {}
 
@@ -31,42 +32,64 @@ final class DiarizationRunner: @unchecked Sendable {
     /// Setup for a given expected-speaker count. The count is baked into the
     /// clustering config, so a changed count rebuilds the manager (models are
     /// disk-cached — rebuild costs seconds, not a re-download).
-    func prepare(numClusters: Int = 0) async throws {
-        if manager == nil || configuredClusters != numClusters {
+    func prepare(numClusters: Int = 0, threshold: Double = 0.6) async throws {
+        if manager == nil || configuredClusters != numClusters || configuredThreshold != threshold {
             var cfg = OfflineDiarizerConfig()
             if numClusters > 0 {
                 // UPPER BOUND, deliberately not an exact quota. Forcing an
                 // exact count manufactures speakers: a forced 5-way split of
                 // a 2-voice meeting invents three phantoms by splitting real
                 // voices. "5 speakers" means "at most 5" — the clusterer may
-                // still find fewer.
+                // still find fewer. (Exact mode narrows the threshold instead
+                // — see run(samples:numClusters:exact:).)
                 cfg.clustering.maxSpeakers = numClusters
             }
+            cfg.clustering.threshold = threshold
             let m = OfflineDiarizerManager(config: cfg)
             try await m.prepareModels()
             manager = m
             configuredClusters = numClusters
-            AppLog.info("diar", "diarizer ready (numSpeakers=\(numClusters > 0 ? String(numClusters) : "auto"))")
+            configuredThreshold = threshold
+            AppLog.info("diar", "diarizer ready (maxSpeakers=\(numClusters > 0 ? String(numClusters) : "auto") threshold=\(threshold))")
         }
     }
 
     /// Run on a pre-decoded 16 kHz mono Float32 buffer.
+    ///
+    /// exact=true: "the room really has numClusters voices" — if the first
+    /// pass distinguishes fewer, re-run with a finer distance threshold (a
+    /// gentler force than a hard quota: it lets genuinely different voices
+    /// split, but never slices one voice into phantoms to fill a quota).
+    /// Gives up honestly after three attempts.
     func run(
         samples: [Float],
         numClusters: Int = 0,
-        threshold: Float = 0.5
+        exact: Bool = false
     ) async throws -> [SpeakerSegment] {
-        try await prepare(numClusters: numClusters)
-        guard let manager else { return [] }
-
-        let result = try await manager.process(audio: samples)
-        return result.segments.map {
-            SpeakerSegment(
-                startSeconds: Double($0.startTimeSeconds),
-                endSeconds: Double($0.endTimeSeconds),
-                speakerId: normalize($0.speakerId)
-            )
+        let thresholds: [Double] = (exact && numClusters > 1) ? [0.6, 0.45, 0.34] : [0.6]
+        var out: [SpeakerSegment] = []
+        for (attempt, th) in thresholds.enumerated() {
+            try await prepare(numClusters: numClusters, threshold: th)
+            guard let manager else { return [] }
+            let result = try await manager.process(audio: samples)
+            out = result.segments.map {
+                SpeakerSegment(
+                    startSeconds: Double($0.startTimeSeconds),
+                    endSeconds: Double($0.endTimeSeconds),
+                    speakerId: normalize($0.speakerId)
+                )
+            }
+            let found = Set(out.map(\.speakerId)).count
+            if !exact || numClusters <= 1 || found >= numClusters {
+                if attempt > 0 {
+                    AppLog.info("diar", "exact mode reached \(found)/\(numClusters) voices at threshold \(th)")
+                }
+                return out
+            }
+            AppLog.info("diar", "exact mode: found \(found)/\(numClusters) voices at threshold \(th) — retrying finer")
         }
+        AppLog.warn("diar", "exact mode could not distinguish \(numClusters) voices — keeping the honest result")
+        return out
     }
 
     /// Run directly on a file (FluidAudio's memory-mapped streaming path).

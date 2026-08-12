@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import AVFoundation
 
 /// Mirror of `data/RecordingRepository.kt`.
 /// Speaker-name persistence across re-transcription is preserved via an in-DB
@@ -40,6 +41,82 @@ final class RecordingRepository: @unchecked Sendable {
     }
 
     // MARK: - Writes
+
+    /// Merge two recordings into a NEW one: audio concatenated (a then b),
+    /// segments copied with b's timeline shifted by a's audio length and b's
+    /// speaker keys remapped past a's so different people never collide
+    /// ("SPEAKER_00" in each file is usually two different humans). "ME" is
+    /// exempt — it is the same user in both recordings by definition.
+    /// Originals are left untouched.
+    func merge(_ a: Recording, _ b: Recording) async throws -> Recording {
+        let decoder = AudioDecoder()
+        let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: a.audioPath))
+        let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: b.audioPath))
+        let offsetSeconds = Double(sa.count) / AudioDecoder.sampleRate
+
+        guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                      sampleRate: AudioDecoder.sampleRate,
+                                      channels: 1, interleaved: false) else {
+            throw NSError(domain: "Merge", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Audio format setup failed."])
+        }
+        let dir = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Transcriberr/Recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(
+            "merged_\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString.prefix(8)).wav")
+        let file = try AVAudioFile(forWriting: url, settings: fmt.settings,
+                                   commonFormat: .pcmFormatFloat32, interleaved: false)
+        for part in [sa, sb] {
+            guard let buf = AVAudioPCMBuffer(pcmFormat: fmt,
+                                             frameCapacity: AVAudioFrameCount(part.count)) else { continue }
+            buf.frameLength = AVAudioFrameCount(part.count)
+            part.withUnsafeBufferPointer { src in
+                buf.floatChannelData![0].update(from: src.baseAddress!, count: part.count)
+            }
+            try file.write(from: buf)
+        }
+
+        let merged = Recording(
+            title: "\(a.title) + \(b.title)",
+            audioPath: url.path,
+            durationSeconds: Double(sa.count + sb.count) / AudioDecoder.sampleRate
+        )
+        try save(merged)
+
+        // Remap b's SPEAKER_NN keys past a's highest index.
+        var maxIdx = -1
+        for seg in a.segments {
+            if let key = seg.speaker, key.hasPrefix("SPEAKER_"),
+               let n = Int(key.dropFirst("SPEAKER_".count)) {
+                maxIdx = max(maxIdx, n)
+            }
+        }
+        func remap(_ key: String?) -> String? {
+            guard let key else { return nil }
+            guard key != "ME", key.hasPrefix("SPEAKER_"),
+                  let n = Int(key.dropFirst("SPEAKER_".count)) else { return key }
+            return String(format: "SPEAKER_%02d", n + maxIdx + 1)
+        }
+
+        var copies: [Segment] = []
+        for seg in a.segments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
+            copies.append(Segment(startSeconds: seg.startSeconds, endSeconds: seg.endSeconds,
+                                  text: seg.text, speaker: seg.speaker, speakerName: seg.speakerName))
+        }
+        for seg in b.segments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
+            copies.append(Segment(startSeconds: seg.startSeconds + offsetSeconds,
+                                  endSeconds: seg.endSeconds + offsetSeconds,
+                                  text: seg.text, speaker: remap(seg.speaker),
+                                  speakerName: seg.speakerName))
+        }
+        if !copies.isEmpty {
+            try appendSegments(copies, to: merged)
+        }
+        AppLog.info("repo", "merged '\(a.title)' + '\(b.title)' → \(url.lastPathComponent) (\(copies.count) segments)")
+        return merged
+    }
 
     func save(_ recording: Recording) throws {
         context.insert(recording)

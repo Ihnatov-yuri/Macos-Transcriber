@@ -35,10 +35,12 @@ final class DiarizationRunner: @unchecked Sendable {
         if manager == nil || configuredClusters != numClusters {
             var cfg = OfflineDiarizerConfig()
             if numClusters > 0 {
-                // Exact speaker count from the user's SPEAKERS stepper —
-                // the clusterer must produce exactly this many voices
-                // instead of choosing its own via the distance threshold.
-                cfg.clustering.numSpeakers = numClusters
+                // UPPER BOUND, deliberately not an exact quota. Forcing an
+                // exact count manufactures speakers: a forced 5-way split of
+                // a 2-voice meeting invents three phantoms by splitting real
+                // voices. "5 speakers" means "at most 5" — the clusterer may
+                // still find fewer.
+                cfg.clustering.maxSpeakers = numClusters
             }
             let m = OfflineDiarizerManager(config: cfg)
             try await m.prepareModels()

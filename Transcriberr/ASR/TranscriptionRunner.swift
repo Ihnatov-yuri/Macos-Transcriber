@@ -396,6 +396,33 @@ final class TranscriptionRunner: @unchecked Sendable {
                     return s
                 }
             }
+
+            // Split-track: a sys-track cluster that ended up carrying MY
+            // name is me again — platform echo/loopback of the user's own
+            // voice. Fold it into ME so the user isn't counted twice.
+            if splitTracks {
+                let myName = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
+                    .trimmingCharacters(in: .whitespaces)
+                if !myName.isEmpty {
+                    let doubles = Set(allSegments.compactMap { seg -> String? in
+                        guard let k = seg.speakerKey, k != "ME",
+                              seg.speakerName?.lowercased() == myName.lowercased() else { return nil }
+                        return k
+                    })
+                    if !doubles.isEmpty {
+                        AppLog.info("runner", "folding echo clusters \(doubles.sorted()) into ME")
+                        allSegments = allSegments.map { seg in
+                            var s = seg
+                            if let k = s.speakerKey, doubles.contains(k) {
+                                s.speakerKey = "ME"
+                                s.speakerName = myName
+                            }
+                            return s
+                        }
+                        allSegments = Self.coalesceBySpeaker(allSegments)
+                    }
+                }
+            }
         }
         continuation.yield(.stage(text: "Done.", fraction: 1.0))
         continuation.yield(.done(segments: allSegments))

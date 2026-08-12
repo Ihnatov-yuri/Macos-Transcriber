@@ -149,6 +149,10 @@ final class DiarizationRunner: @unchecked Sendable {
             try? NSRegularExpression(
                 pattern: #"\b(?i:I'?m|I am|My name is|This is)\s+([A-Z][a-zA-Z]{1,30})\b"#
             ),
+            // Ukrainian / Russian self-introductions.
+            try? NSRegularExpression(
+                pattern: #"(?i:мене звати|мене звуть|меня зовут)\s+([А-ЯІЇЄҐ][а-яіїєґё'’]{1,30})"#
+            ),
         ].compactMap { $0 }
 
         // Words that follow "I'm …" without being names. Case-insensitive
@@ -175,6 +179,32 @@ final class DiarizationRunner: @unchecked Sendable {
                     if !stoplist.contains(candidate) {
                         names[key] = candidate
                         break
+                    }
+                }
+            }
+        }
+
+        // Addressee rule: in a TWO-person conversation, greeting someone by
+        // name ("Привіт, Лана" / "Hi, Lana") names the OTHER speaker — the
+        // one obvious inference self-introductions can't make.
+        let keys = Array(Set(segments.compactMap(\.speakerKey)))
+        if keys.count == 2,
+           let greetRx = try? NSRegularExpression(
+               pattern: #"(?i:привіт|вітаю|добрий день|здравствуй|привет|hi|hello|hey)[,!]?\s+([A-ZА-ЯІЇЄҐ][a-zа-яіїєґё'’]{1,30})"#
+           ) {
+            for seg in segments {
+                guard let key = seg.speakerKey else { continue }
+                let other = keys[0] == key ? keys[1] : keys[0]
+                guard names[other] == nil else { continue }
+                let range = NSRange(seg.text.startIndex..., in: seg.text)
+                if let match = greetRx.firstMatch(in: seg.text, range: range),
+                   match.numberOfRanges >= 2,
+                   let nameRange = Range(match.range(at: 1), in: seg.text)
+                {
+                    let candidate = String(seg.text[nameRange])
+                    if !stoplist.contains(candidate), candidate != names[key] {
+                        names[other] = candidate
+                        AppLog.info("diar", "addressee rule: \(other) → \(candidate)")
                     }
                 }
             }

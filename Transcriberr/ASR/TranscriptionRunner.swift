@@ -350,17 +350,31 @@ final class TranscriptionRunner: @unchecked Sendable {
         // already transcribed cleanly. Drop ME segments that time-overlap a
         // sys segment with near-identical text — the digital copy wins.
         if splitTracks {
+            // Sentence-level scrub: without headphones the mic hears the
+            // speakers, so a ME segment is often a MIX of the user's own
+            // words and an echoed copy of someone else's — whole-segment
+            // comparison can't catch that. Compare sentence by sentence
+            // against nearby sys text and strip only the echoed sentences.
             let sysSegs = allSegments.filter { $0.speakerKey != "ME" }
-            allSegments = allSegments.filter { seg in
-                guard seg.speakerKey == "ME" else { return true }
-                let isEcho = sysSegs.contains { o in
-                    o.endSeconds > seg.startSeconds && o.startSeconds < seg.endSeconds
-                        && Self.nearDuplicate(o.text, seg.text)
+            allSegments = allSegments.compactMap { seg in
+                guard seg.speakerKey == "ME" else { return seg }
+                let nearby = sysSegs.filter {
+                    $0.endSeconds > seg.startSeconds - 20 && $0.startSeconds < seg.endSeconds + 20
                 }
-                if isEcho {
-                    AppLog.info("runner", "dropping mic-echo segment @\(Int(seg.startSeconds))s")
+                guard !nearby.isEmpty else { return seg }
+                let scrubbed = Self.scrubEchoSentences(
+                    from: seg.text,
+                    against: nearby.map(\.text).joined(separator: " ")
+                )
+                if scrubbed == seg.text { return seg }
+                if scrubbed.isEmpty {
+                    AppLog.info("runner", "dropping fully-echoed ME segment @\(Int(seg.startSeconds))s")
+                    return nil
                 }
-                return !isEcho
+                AppLog.info("runner", "scrubbed echoed sentences from ME segment @\(Int(seg.startSeconds))s")
+                var s = seg
+                s.text = scrubbed
+                return s
             }
         }
 
@@ -689,6 +703,43 @@ final class TranscriptionRunner: @unchecked Sendable {
 
     /// Token-level Dice ≥ 0.85 on normalized words — flags echoed/looped
     /// lines that differ by a word or two.
+    /// Remove sentences from `text` that fuzzily appear in `reference`
+    /// (echo of the other side, transcribed twice from two tracks). The
+    /// echoed copy is acoustically degraded, so the match is lenient.
+    static func scrubEchoSentences(from text: String, against reference: String) -> String {
+        func sentences(_ t: String) -> [String] {
+            var out: [String] = []
+            var cur = ""
+            for ch in t {
+                cur.append(ch)
+                if ".!?…".contains(ch) {
+                    let s = cur.trimmingCharacters(in: .whitespaces)
+                    if !s.isEmpty { out.append(s) }
+                    cur = ""
+                }
+            }
+            let tail = cur.trimmingCharacters(in: .whitespaces)
+            if !tail.isEmpty { out.append(tail) }
+            return out
+        }
+        func toks(_ t: String) -> Set<String> {
+            Set(t.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+        }
+        let refSentences = sentences(reference).map { ($0, toks($0)) }
+        let kept = sentences(text).filter { sent in
+            let st = toks(sent)
+            guard st.count >= 4 else { return true }   // short bits stay — too ambiguous
+            let echoed = refSentences.contains { _, rt in
+                guard !rt.isEmpty else { return false }
+                let inter = Double(st.intersection(rt).count)
+                let dice = 2 * inter / Double(st.count + rt.count)
+                return dice >= 0.55
+            }
+            return !echoed
+        }
+        return kept.joined(separator: " ")
+    }
+
     static func nearDuplicate(_ a: String, _ b: String) -> Bool {
         func toks(_ s: String) -> [String] {
             s.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }

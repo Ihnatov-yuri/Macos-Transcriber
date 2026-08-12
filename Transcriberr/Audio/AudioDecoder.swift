@@ -63,6 +63,7 @@ struct AudioDecoder: Sendable {
             while reader.status == .reading, let sample = output.copyNextSampleBuffer() {
                 guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
                 let length = CMBlockBufferGetDataLength(block)
+                guard length > 0 else { continue }
                 var data = Data(count: length)
                 data.withUnsafeMutableBytes { ptr in
                     _ = CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: ptr.baseAddress!)
@@ -104,7 +105,8 @@ struct AudioDecoder: Sendable {
         var out: [Float] = []
         out.reserveCapacity(Int(Double(f.length) * Self.sampleRate / f.processingFormat.sampleRate) + 1024)
         var reachedEOF = false
-        while !reachedEOF {
+        var draining = true
+        while draining {
             let outCap = AVAudioFrameCount(Double(inCap) * Self.sampleRate / f.processingFormat.sampleRate) + 512
             guard let outBuf = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: outCap) else { break }
             var convErr: NSError?
@@ -120,7 +122,11 @@ struct AudioDecoder: Sendable {
             if let p = outBuf.floatChannelData?[0], outBuf.frameLength > 0 {
                 out.append(contentsOf: UnsafeBufferPointer(start: p, count: Int(outBuf.frameLength)))
             }
-            if status == .endOfStream { break }
+            // Keep draining until the converter itself says end-of-stream —
+            // breaking on our EOF flag dropped its buffered filter tail.
+            if status == .endOfStream || (reachedEOF && outBuf.frameLength == 0) {
+                draining = false
+            }
         }
         AppLog.info("decoder", "AVAudioFile fallback decoded \(out.count) samples from \(file.lastPathComponent)")
         return out

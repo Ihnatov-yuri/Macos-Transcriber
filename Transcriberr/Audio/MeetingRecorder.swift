@@ -318,9 +318,7 @@ final class MeetingRecorder: @unchecked Sendable {
         // syllable is clipped; close gently so it never pumps.
         // Open on relative dominance OR clear absolute speech energy — a
         // loud far side must not be able to gate out the user's interjection.
-        let micActive = micRMS > 0.02 || (micRMS > 0.004 && micRMS > tapRMS * 1.5)
-        let target: Float = (micActive || tapRMS < 0.004) ? 1.0 : 0.0
-        micGain += (target - micGain) * (target > micGain ? 0.6 : 0.15)
+        micGain = Self.gateStep(micRMS: micRMS, tapRMS: tapRMS, currentGain: micGain)
         // The RAW mic goes to the .mic.wav track — the offline echo
         // canceller needs unmodified ground truth (it subtracts the echo
         // mathematically). The gate shapes only the playback mix.
@@ -482,6 +480,15 @@ final class MeetingRecorder: @unchecked Sendable {
         if status != .error, outBuf.frameLength > 0 {
             try? audioFile.write(from: outBuf)
         }
+    }
+
+    /// Pure gate math, extracted for unit tests: full-open on user speech
+    /// (relative dominance OR clear absolute energy), full-close while only
+    /// the far side plays, asymmetric smoothing (fast open, gentle close).
+    static func gateStep(micRMS: Float, tapRMS: Float, currentGain: Float) -> Float {
+        let micActive = micRMS > 0.02 || (micRMS > 0.004 && micRMS > tapRMS * 1.5)
+        let target: Float = (micActive || tapRMS < 0.004) ? 1.0 : 0.0
+        return currentGain + (target - currentGain) * (target > currentGain ? 0.6 : 0.15)
     }
 
     // MARK: - CoreAudio helpers

@@ -450,6 +450,34 @@ final class TranscriptionRunner: @unchecked Sendable {
             )
         }
 
+        let myNameSetting = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        allSegments = finalizeSegments(
+            allSegments,
+            diarize: params.diarize,
+            splitTracks: splitTracks,
+            expectedSpeakers: params.expectedSpeakers,
+            diarSegments: diarSegments,
+            myName: myNameSetting.isEmpty ? nil : myNameSetting
+        )
+        continuation.yield(.stage(text: "Done.", fraction: 1.0))
+        continuation.yield(.done(segments: allSegments))
+    }
+
+    /// The ENTIRE quality sequence between raw per-chunk segments and the
+    /// final transcript, extracted as a pure(ish) function so its ordering —
+    /// echo scrub → boundary trim → diar fill → identity → cap-fold →
+    /// renumber → filler removal → coalesce → names → self-fold — is
+    /// unit-testable with crafted inputs. No audio, no async, no database.
+    func finalizeSegments(
+        _ input: [RawSegment],
+        diarize: Bool,
+        splitTracks: Bool,
+        expectedSpeakers: Int,
+        diarSegments: [DiarizationRunner.SpeakerSegment],
+        myName: String?
+    ) -> [RawSegment] {
+        var segments = input
         // ---------- split-track echo guard ----------
         // Without headphones the mic also hears the speakers, so the mic
         // track can contain a degraded acoustic copy of what the sys track
@@ -461,8 +489,8 @@ final class TranscriptionRunner: @unchecked Sendable {
             // words and an echoed copy of someone else's — whole-segment
             // comparison can't catch that. Compare sentence by sentence
             // against nearby sys text and strip only the echoed sentences.
-            let sysSegs = allSegments.filter { $0.speakerKey != "ME" }
-            allSegments = allSegments.compactMap { seg in
+            let sysSegs = segments.filter { $0.speakerKey != "ME" }
+            segments = segments.compactMap { seg in
                 guard seg.speakerKey == "ME" else { return seg }
                 let nearby = sysSegs.filter {
                     $0.endSeconds > seg.startSeconds - 20 && $0.startSeconds < seg.endSeconds + 20
@@ -490,7 +518,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             // the tail of the immediately preceding non-ME segment.
             var lastOther: RawSegment? = nil
             var trimmed: [RawSegment] = []
-            for seg in allSegments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
+            for seg in segments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
                 guard seg.speakerKey == "ME" else {
                     lastOther = seg
                     trimmed.append(seg)
@@ -505,21 +533,35 @@ final class TranscriptionRunner: @unchecked Sendable {
                     trimmed.append(seg)
                 }
             }
-            allSegments = trimmed
+            // Second direction: ME tails against the NEXT sys segment's head.
+            var withTails: [RawSegment] = []
+            for (i, seg) in trimmed.enumerated() {
+                guard seg.speakerKey == "ME" else { withTails.append(seg); continue }
+                if let next = trimmed[(i + 1)...].first(where: { $0.speakerKey != "ME" }),
+                   next.startSeconds - seg.endSeconds < 8 {
+                    var s = seg
+                    s.text = Self.trimBoundaryEchoTail(from: seg.text, beforeHeadOf: next.text)
+                    if !s.text.isEmpty { withTails.append(s) }
+                    else { AppLog.info("runner", "ME segment @\(Int(seg.startSeconds))s was pure tail echo — dropped") }
+                } else {
+                    withTails.append(seg)
+                }
+            }
+            segments = withTails
         }
 
         // ---------- finalize ----------
         // Split-track meetings finalize even with diarization OFF: the system
         // track IS "everyone else", so its segments must carry an identity —
         // otherwise they render chip-less and can't be renamed.
-        if params.diarize || splitTracks {
+        if diarize || splitTracks {
             if !diarSegments.isEmpty {
                 // Fill speakers only where the backend didn't already label
                 // them (Parakeet's word-level labels are more precise than
                 // chunk-overlap assignment — don't overwrite those).
-                let unlabeled = allSegments.contains { $0.speakerKey == nil }
+                let unlabeled = segments.contains { $0.speakerKey == nil }
                 if unlabeled {
-                    allSegments = allSegments.map { seg in
+                    segments = segments.map { seg in
                         guard seg.speakerKey == nil else { return seg }
                         var s = seg
                         s.speakerKey = diarization.assignSpeakers(segments: [seg], diarization: diarSegments).first?.speakerKey
@@ -534,9 +576,9 @@ final class TranscriptionRunner: @unchecked Sendable {
             // renameable GUEST identity — the self-intro and addressee name
             // rules then apply to it like to any speaker.
             if splitTracks {
-                let sysKeys = Set(allSegments.compactMap(\.speakerKey)).subtracting(["ME"])
+                let sysKeys = Set(segments.compactMap(\.speakerKey)).subtracting(["ME"])
                 let fallbackKey = sysKeys.count == 1 ? sysKeys.first! : "GUEST"
-                allSegments = allSegments.map { seg in
+                segments = segments.map { seg in
                     guard seg.speakerKey == nil else { return seg }
                     var s = seg
                     s.speakerKey = fallbackKey
@@ -550,10 +592,10 @@ final class TranscriptionRunner: @unchecked Sendable {
             // In split-track the user is ME by construction, so at most
             // (expectedSpeakers − 1) system voices may exist — fold the
             // smallest excess clusters into the largest by speaking time.
-            if splitTracks, params.expectedSpeakers > 1 {
-                let allowed = params.expectedSpeakers - 1
+            if splitTracks, expectedSpeakers > 1 {
+                let allowed = expectedSpeakers - 1
                 var dur: [String: Double] = [:]
-                for seg in allSegments {
+                for seg in segments {
                     if let k = seg.speakerKey, k != "ME" {
                         dur[k, default: 0] += max(0, seg.endSeconds - seg.startSeconds)
                     }
@@ -564,7 +606,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                     let target = ranked[0]
                     let fold = Set(dur.keys).subtracting(keep)
                     AppLog.info("runner", "speaker cap: folding \(fold.sorted()) into \(target) (\(allowed) non-ME allowed)")
-                    allSegments = allSegments.map { seg in
+                    segments = segments.map { seg in
                         guard let k = seg.speakerKey, fold.contains(k) else { return seg }
                         var s = seg
                         s.speakerKey = target
@@ -580,7 +622,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             // the same audio, so stored names stay attached across re-runs.
             var renumber: [String: String] = [:]
             var nextSpeaker = 1
-            allSegments = allSegments.map { seg in
+            segments = segments.map { seg in
                 guard let k = seg.speakerKey, k != "ME", k != "GUEST" else { return seg }
                 if renumber[k] == nil {
                     renumber[k] = String(format: "SPEAKER_%02d", nextSpeaker)
@@ -596,7 +638,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             // Drop them before turns coalesce; real short replies ("Okay.",
             // "Yes.") contain a non-filler word and survive.
             let fillerWords: Set<String> = ["uh", "um", "mm", "mmm", "mhm", "mmhmm", "hmm", "erm", "hm"]
-            allSegments.removeAll { seg in
+            segments.removeAll { seg in
                 let toks = seg.text.lowercased()
                     .split(whereSeparator: { !$0.isLetter })
                     .map(String.init)
@@ -608,14 +650,14 @@ final class TranscriptionRunner: @unchecked Sendable {
             // De-chunk: the 30 s chunk windows are an implementation detail —
             // the transcript should read as SPEAKER TURNS. Merge adjacent
             // same-speaker segments into one continuous segment each.
-            allSegments = Self.coalesceBySpeaker(allSegments)
+            segments = Self.coalesceBySpeaker(segments)
 
             // Names from self-introductions ("Hi, I'm Ahmed") → propagate to
             // every segment of that speaker.
-            let names = diarization.inferSpeakerNames(allSegments)
+            let names = diarization.inferSpeakerNames(segments)
             if !names.isEmpty {
                 AppLog.info("runner", "inferred speaker names: \(names)")
-                allSegments = allSegments.map { seg in
+                segments = segments.map { seg in
                     var s = seg
                     if let key = s.speakerKey, let name = names[key], s.speakerName == nil {
                         s.speakerName = name
@@ -628,17 +670,16 @@ final class TranscriptionRunner: @unchecked Sendable {
             // name is me again — platform echo/loopback of the user's own
             // voice. Fold it into ME so the user isn't counted twice.
             if splitTracks {
-                let myName = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
-                    .trimmingCharacters(in: .whitespaces)
+                let myName = myName ?? ""
                 if !myName.isEmpty {
-                    let doubles = Set(allSegments.compactMap { seg -> String? in
+                    let doubles = Set(segments.compactMap { seg -> String? in
                         guard let k = seg.speakerKey, k != "ME",
                               seg.speakerName?.lowercased() == myName.lowercased() else { return nil }
                         return k
                     })
                     if !doubles.isEmpty {
                         AppLog.info("runner", "folding echo clusters \(doubles.sorted()) into ME")
-                        allSegments = allSegments.map { seg in
+                        segments = segments.map { seg in
                             var s = seg
                             if let k = s.speakerKey, doubles.contains(k) {
                                 s.speakerKey = "ME"
@@ -646,13 +687,12 @@ final class TranscriptionRunner: @unchecked Sendable {
                             }
                             return s
                         }
-                        allSegments = Self.coalesceBySpeaker(allSegments)
+                        segments = Self.coalesceBySpeaker(segments)
                     }
                 }
             }
         }
-        continuation.yield(.stage(text: "Done.", fraction: 1.0))
-        continuation.yield(.done(segments: allSegments))
+        return segments
     }
 
     /// Merge adjacent segments spoken by the same speaker into a single
@@ -970,6 +1010,57 @@ final class TranscriptionRunner: @unchecked Sendable {
         return kept.joined(separator: " ")
     }
 
+    /// Tolerant token match: echo is transcribed from degraded audio, so
+    /// "schedule" often comes back "scheduled" — exact equality missed it.
+    static func fuzzyTokenEqual(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        let maxDist = a.count >= 8 ? 2 : (a.count >= 5 ? 1 : 0)
+        guard maxDist > 0, abs(a.count - b.count) <= maxDist else { return a == b }
+        // Levenshtein with early exit
+        var prev = Array(0...b.count)
+        for (i, ca) in a.enumerated() {
+            var cur = [i + 1]
+            var rowMin = i + 1
+            for (j, cb) in b.enumerated() {
+                let cost = ca == cb ? 0 : 1
+                let v = min(prev[j] + cost, prev[j + 1] + 1, cur[j] + 1)
+                cur.append(v)
+                rowMin = min(rowMin, v)
+            }
+            if rowMin > maxDist { return false }
+            prev = cur
+        }
+        return prev[b.count] <= maxDist
+    }
+
+    /// Trim trailing tokens of `text` that duplicate the LEADING tokens of
+    /// the immediately following other-speaker segment — the gate's slow
+    /// close leaks the far side's FIRST word into the user's segment tail
+    /// ("…Complex API troubleshooting." / "Troubleshooting. And…").
+    static func trimBoundaryEchoTail(from text: String, beforeHeadOf reference: String) -> String {
+        func norm(_ s: some StringProtocol) -> String {
+            s.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        let refHead = reference.split(separator: " ").prefix(4).map(norm)
+        var words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard !refHead.isEmpty, words.count > 1 else { return text }
+        var trim = 0
+        for k in stride(from: min(3, words.count - 1, refHead.count), through: 1, by: -1) {
+            let tail = words.suffix(k).map(norm)
+            let head = Array(refHead.prefix(k))
+            let match = zip(tail, head).allSatisfy { fuzzyTokenEqual($0, $1) && !$0.isEmpty }
+            if match {
+                if k >= 2 || (tail.first?.count ?? 0) >= 5 { trim = k }
+                break
+            }
+        }
+        guard trim > 0 else { return text }
+        words.removeLast(trim)
+        var result = words.joined(separator: " ")
+        while let c = result.last, " ,;:".contains(c) { result.removeLast() }
+        return result
+    }
+
     /// Trim leading tokens of `text` that duplicate the trailing tokens of
     /// `reference` — the neighbor's last word(s) crawling across the segment
     /// boundary via echo. Single-token trims require a substantial word so a
@@ -984,7 +1075,9 @@ final class TranscriptionRunner: @unchecked Sendable {
         var trim = 0
         for k in stride(from: min(3, words.count - 1, refTail.count), through: 1, by: -1) {
             let lead = words.prefix(k).map(norm)
-            if lead == Array(refTail.suffix(k)), !lead.contains(where: \.isEmpty) {
+            let tail = Array(refTail.suffix(k))
+            let match = zip(lead, tail).allSatisfy { fuzzyTokenEqual($0, $1) && !$0.isEmpty }
+            if match {
                 if k >= 2 || (lead.first?.count ?? 0) >= 5 { trim = k }
                 break
             }

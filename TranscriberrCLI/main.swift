@@ -347,6 +347,40 @@ func cmdLitert(path: String) async -> Int32 {
     }
 }
 
+/// Full transcription pipeline, headless — same code path as the app's
+/// RUN button, for validating changes on real recordings without a deploy.
+@MainActor
+func cmdRun(path: String, speakers: Int) async -> Int32 {
+    let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+    let prompts = PromptStore()
+    let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
+    let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())
+    let params = TranscriptionRunner.Params(
+        file: url, backend: .parakeet, modelDirectory: nil,
+        languages: ["English"], translateTo: nil,
+        diarize: true, hybridDiarize: false, expectedSpeakers: speakers)
+    let t0 = Date()
+    do {
+        for try await ev in runner.run(params) {
+            switch ev {
+            case .stage(let text, let f):
+                FileHandle.standardError.write("[\(Int(f * 100))%] \(text)\n".data(using: .utf8)!)
+            case .done(let segs):
+                print("### DONE \(String(format: "%.0f", Date().timeIntervalSince(t0)))s \(segs.count) segments")
+                for s in segs {
+                    let k = s.speakerName ?? s.speakerKey ?? "?"
+                    print("\(String(format: "%.1f", s.startSeconds))\t\(k)\t\(s.text)")
+                }
+            default: break
+            }
+        }
+        return 0
+    } catch {
+        print("### FAILED \(error)")
+        return 1
+    }
+}
+
 /// Offline echo-cancellation check over a meeting's track pair.
 @MainActor
 func cmdAEC(base: String) async -> Int32 {
@@ -431,6 +465,9 @@ func main() async -> Int32 {
     case "whisper":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
+    case "run":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdRun(path: args[2], speakers: args.count > 3 ? Int(args[3]) ?? 0 : 0)
     case "aec":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdAEC(base: args[2])

@@ -363,9 +363,18 @@ final class RecordingRepository: @unchecked Sendable {
         // same-second duplicate versions in production logs) — query the
         // store directly instead of trusting the relationship.
         context.processPendingChanges()
+        // BOTH views, because each can lag independently: the relationship
+        // array (misses just-inserted rows) and the store fetch (whose rows'
+        // inverse back-pointer can hydrate as nil for a moment). Either one
+        // seeing the duplicate is enough.
         let recID = recording.persistentModelID
-        let existing = (try? context.fetch(FetchDescriptor<TranscriptVersion>())) ?? []
-        if existing.contains(where: { $0.recording?.persistentModelID == recID && $0.segmentsJSON == json }) {
+        let fetched = (try? context.fetch(FetchDescriptor<TranscriptVersion>())) ?? []
+        let dup = recording.versions.contains { $0.segmentsJSON == json }
+            || fetched.contains {
+                $0.segmentsJSON == json &&
+                ($0.recording == nil || $0.recording?.persistentModelID == recID)
+            }
+        if dup {
             AppLog.info("repo", "version snapshot skipped — identical version exists")
             return
         }

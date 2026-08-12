@@ -81,6 +81,16 @@ struct RawSegment: Sendable {
     }
 }
 
+extension ASRBackend {
+    /// Called by the chunk watchdog after a wedge. Default keeps the old
+    /// full release+reload; engines with internal exclusive state override
+    /// to heal surgically (without disturbing concurrent users).
+    func recoverWedge(modelPath: URL?) async throws {
+        await release()
+        try await load(modelPath: modelPath)
+    }
+}
+
 enum ASREvent: Sendable {
     case stage(text: String, fraction: Double)
     case partialText(String)

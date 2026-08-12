@@ -867,18 +867,29 @@ final class TranscriptionRunner: @unchecked Sendable {
                 )
             }
         } catch ASRError.chunkTimeout {
-            continuation.yield(.stage(text: "Chunk wedged — reloading model…", fraction: -1))
-            await backend.release()
-            try await backend.load(modelPath: params.modelDirectory)
-            return try await withChunkTimeout(seconds: timeout) {
-                try await backend.transcribeChunk(
-                    samples: samples,
-                    languages: params.languages,
-                    translateTo: params.translateTo,
-                    diarize: params.diarize,
-                    previousContext: previousContext,
-                    speakerHints: speakerHints
-                )
+            // Surgical: rebuild only the wedged engine. A full ensemble
+            // release()+load() here yanked engines from under the OTHER
+            // in-flight pipeline chunks — the watchdog killed healthy work.
+            continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
+            try await backend.recoverWedge(modelPath: params.modelDirectory)
+            do {
+                return try await withChunkTimeout(seconds: timeout) {
+                    try await backend.transcribeChunk(
+                        samples: samples,
+                        languages: params.languages,
+                        translateTo: params.translateTo,
+                        diarize: params.diarize,
+                        previousContext: previousContext,
+                        speakerHints: speakerHints
+                    )
+                }
+            } catch ASRError.chunkTimeout {
+                // Twice-wedged chunk: this audio reliably hangs the engine.
+                // One lost chunk must not kill a 30-chunk run — skip it,
+                // recover the engine for the chunks behind it, move on.
+                AppLog.error("runner", "chunk wedged twice — skipping it, recovering engine for the rest")
+                try? await backend.recoverWedge(modelPath: params.modelDirectory)
+                return ""
             }
         }
     }

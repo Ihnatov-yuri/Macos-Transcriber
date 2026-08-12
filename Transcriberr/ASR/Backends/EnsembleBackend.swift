@@ -86,6 +86,15 @@ actor EnsembleBackend: ASRBackend {
         isReady = true
     }
 
+    /// A wedged chunk means (in practice) the LiteRT sub-engine hung —
+    /// recover the sub-engines individually instead of releasing the whole
+    /// ensemble under concurrently running chunks.
+    func recoverWedge(modelPath: URL?) async throws {
+        if let g = engineA as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil) }
+        if let g = engineB as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil) }
+        if let g = arbiter as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil) }
+    }
+
     func release() async {
         engineA = nil
         engineB = nil

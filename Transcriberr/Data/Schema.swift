@@ -25,6 +25,7 @@ final class Recording {
     var runDiarize: Bool?
     var runHybridDiarize: Bool?
     var runExpectedSpeakers: Int?
+    var runSpeakersExact: Bool?
     /// User-entered speaker names (speakerKey → name), persisted so re-runs
     /// and version restores re-apply them automatically.
     var speakerNamesJSON: String?

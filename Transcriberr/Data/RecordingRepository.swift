@@ -401,6 +401,27 @@ final class RecordingRepository: @unchecked Sendable {
         for (k, v) in storedSpeakerNames(recording) where names[k] == nil { names[k] = v }
     }
 
+    /// Fold one diarized speaker into another: every segment relabeled, the
+    /// target's display name applied, the stored name map cleaned up. The
+    /// two-click cure for the clusterer's last stubborn split.
+    func mergeSpeakers(_ from: String, into target: String, in recording: Recording) throws {
+        guard from != target else { return }
+        let targetName = storedSpeakerNames(recording)[target]
+            ?? recording.segments.first(where: { $0.speaker == target && $0.speakerName?.isEmpty == false })?.speakerName
+        for seg in recording.segments where seg.speaker == from {
+            seg.speaker = target
+            seg.speakerName = targetName
+        }
+        var map = storedSpeakerNames(recording)
+        map.removeValue(forKey: from)
+        if let targetName { map[target] = targetName }
+        if let data = try? JSONEncoder().encode(map) {
+            recording.speakerNamesJSON = String(decoding: data, as: UTF8.self)
+        }
+        try context.save()
+        AppLog.info("repo", "merged speaker \(from) → \(target) in '\(recording.title)'")
+    }
+
     func setSpeakerName(_ name: String?, for speakerKey: String, in recording: Recording) throws {
         var map = storedSpeakerNames(recording)
         map[speakerKey] = name

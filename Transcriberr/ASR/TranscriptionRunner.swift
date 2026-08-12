@@ -455,6 +455,30 @@ final class TranscriptionRunner: @unchecked Sendable {
                 s.text = scrubbed
                 return s
             }
+
+            // Boundary crawl: the other side's LAST word bleeding into the
+            // START of the user's reply ("…prefer to schedule?" → "schedule.
+            // No, that's okay"). The sentence scrub ignores fragments under
+            // 4 tokens by design, so trim leading ME tokens that replicate
+            // the tail of the immediately preceding non-ME segment.
+            var lastOther: RawSegment? = nil
+            var trimmed: [RawSegment] = []
+            for seg in allSegments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
+                guard seg.speakerKey == "ME" else {
+                    lastOther = seg
+                    trimmed.append(seg)
+                    continue
+                }
+                if let prev = lastOther, seg.startSeconds - prev.endSeconds < 8 {
+                    var s = seg
+                    s.text = Self.trimBoundaryEcho(from: seg.text, afterTailOf: prev.text)
+                    if !s.text.isEmpty { trimmed.append(s) }
+                    else { AppLog.info("runner", "ME segment @\(Int(seg.startSeconds))s was pure boundary echo — dropped") }
+                } else {
+                    trimmed.append(seg)
+                }
+            }
+            allSegments = trimmed
         }
 
         // ---------- finalize ----------
@@ -817,6 +841,32 @@ final class TranscriptionRunner: @unchecked Sendable {
             return !echoed
         }
         return kept.joined(separator: " ")
+    }
+
+    /// Trim leading tokens of `text` that duplicate the trailing tokens of
+    /// `reference` — the neighbor's last word(s) crawling across the segment
+    /// boundary via echo. Single-token trims require a substantial word so a
+    /// genuine short reply ("Yes." after "Yes?") is never eaten.
+    static func trimBoundaryEcho(from text: String, afterTailOf reference: String) -> String {
+        func norm(_ s: some StringProtocol) -> String {
+            s.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        let refTail = reference.split(separator: " ").suffix(4).map(norm)
+        var words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard !refTail.isEmpty, words.count > 1 else { return text }
+        var trim = 0
+        for k in stride(from: min(3, words.count - 1, refTail.count), through: 1, by: -1) {
+            let lead = words.prefix(k).map(norm)
+            if lead == Array(refTail.suffix(k)), !lead.contains(where: \.isEmpty) {
+                if k >= 2 || (lead.first?.count ?? 0) >= 5 { trim = k }
+                break
+            }
+        }
+        guard trim > 0 else { return text }
+        words.removeFirst(trim)
+        var result = words.joined(separator: " ")
+        while let c = result.first, " .,;:!?".contains(c) { result.removeFirst() }
+        return result
     }
 
     static func nearDuplicate(_ a: String, _ b: String) -> Bool {

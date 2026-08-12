@@ -16,7 +16,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: "1.8"
+    MARKETING_VERSION: "1.8.1"
 
 # Gemma4Swift transitively brings mlx-swift, mlx-swift-lm, swift-transformers.
 # Sherpa-onnx for diarization (pending diarization-research recommendation).

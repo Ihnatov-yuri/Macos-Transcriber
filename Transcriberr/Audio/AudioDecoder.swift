@@ -48,35 +48,82 @@ struct AudioDecoder: Sendable {
             AVLinearPCMIsNonInterleaved: false,
             AVLinearPCMIsBigEndianKey: false,
         ]
-        let reader = try AVAssetReader(asset: asset)
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: outSettings)
-        output.alwaysCopiesSampleData = false
-        reader.add(output)
-        guard reader.startReading() else {
-            throw DecoderError.readerStartFailed(reader.error?.localizedDescription ?? "unknown")
-        }
-
-        var floats: [Float] = []
-        floats.reserveCapacity(Int(Self.sampleRate * 60))
-
-        while reader.status == .reading, let sample = output.copyNextSampleBuffer() {
-            guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
-            let length = CMBlockBufferGetDataLength(block)
-            var data = Data(count: length)
-            data.withUnsafeMutableBytes { ptr in
-                _ = CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: ptr.baseAddress!)
+        do {
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: outSettings)
+            output.alwaysCopiesSampleData = false
+            reader.add(output)
+            guard reader.startReading() else {
+                throw DecoderError.readerStartFailed(reader.error?.localizedDescription ?? "unknown")
             }
-            data.withUnsafeBytes { raw in
-                let buf = raw.bindMemory(to: Float.self)
-                floats.append(contentsOf: buf)
-            }
-            CMSampleBufferInvalidate(sample)
-        }
 
-        if reader.status == .failed {
-            throw DecoderError.readerFailed(reader.error?.localizedDescription ?? "unknown")
+            var floats: [Float] = []
+            floats.reserveCapacity(Int(Self.sampleRate * 60))
+
+            while reader.status == .reading, let sample = output.copyNextSampleBuffer() {
+                guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
+                let length = CMBlockBufferGetDataLength(block)
+                var data = Data(count: length)
+                data.withUnsafeMutableBytes { ptr in
+                    _ = CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: ptr.baseAddress!)
+                }
+                data.withUnsafeBytes { raw in
+                    let buf = raw.bindMemory(to: Float.self)
+                    floats.append(contentsOf: buf)
+                }
+                CMSampleBufferInvalidate(sample)
+            }
+
+            if reader.status == .failed {
+                throw DecoderError.readerFailed(reader.error?.localizedDescription ?? "unknown")
+            }
+            return floats
+        } catch {
+            // AVAssetReader refuses some containers/codecs (notably Opus from
+            // Teams/Discord, and our own freshly-written WAVs). AVAudioFile +
+            // AVAudioConverter reads the format-registry set instead — a much
+            // wider net — and resamples to 16 kHz mono itself.
+            AppLog.warn("decoder", "AVAssetReader failed (\(error.localizedDescription)) — AVAudioFile fallback")
+            return try Self.decodeViaAudioFile(file)
         }
-        return floats
+    }
+
+    /// Format-registry decode path: opens with AVAudioFile (handles Opus, m4a,
+    /// caf, aiff, our WAVs…) and converts to 16 kHz mono Float32.
+    static func decodeViaAudioFile(_ file: URL) throws -> [Float] {
+        let f = try AVAudioFile(forReading: file)
+        guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                         sampleRate: Self.sampleRate, channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: f.processingFormat, to: target) else {
+            throw DecoderError.readerFailed("AVAudioConverter setup failed")
+        }
+        let inCap: AVAudioFrameCount = 1 << 16
+        guard let inBuf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: inCap) else {
+            throw DecoderError.readerFailed("input buffer alloc failed")
+        }
+        var out: [Float] = []
+        out.reserveCapacity(Int(Double(f.length) * Self.sampleRate / f.processingFormat.sampleRate) + 1024)
+        var reachedEOF = false
+        while !reachedEOF {
+            let outCap = AVAudioFrameCount(Double(inCap) * Self.sampleRate / f.processingFormat.sampleRate) + 512
+            guard let outBuf = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: outCap) else { break }
+            var convErr: NSError?
+            let status = converter.convert(to: outBuf, error: &convErr) { _, inStatus in
+                do {
+                    try f.read(into: inBuf)
+                    if inBuf.frameLength == 0 { reachedEOF = true; inStatus.pointee = .endOfStream; return nil }
+                    inStatus.pointee = .haveData
+                    return inBuf
+                } catch { reachedEOF = true; inStatus.pointee = .endOfStream; return nil }
+            }
+            if status == .error { throw DecoderError.readerFailed(convErr?.localizedDescription ?? "convert failed") }
+            if let p = outBuf.floatChannelData?[0], outBuf.frameLength > 0 {
+                out.append(contentsOf: UnsafeBufferPointer(start: p, count: Int(outBuf.frameLength)))
+            }
+            if status == .endOfStream { break }
+        }
+        AppLog.info("decoder", "AVAudioFile fallback decoded \(out.count) samples from \(file.lastPathComponent)")
+        return out
     }
 
     // MARK: - Silence scan + chunking

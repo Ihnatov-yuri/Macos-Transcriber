@@ -33,7 +33,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
     }
 
     private func shouldAutoTitle(_ title: String) -> Bool {
+        // Default titles: "Recording <date>" and "Meeting <date>". The
+        // meeting form failed BOTH old checks — wrong prefix, and its
+        // "09:19" timestamp tripped the no-colon rule of the generic clause.
         title.hasPrefix("Recording ") || title.hasPrefix("Recording_") ||
+        title.hasPrefix("Meeting ") ||
         title.range(of: #"^[A-Za-z0-9 _\-\.]+$"#, options: .regularExpression) != nil
             && !title.contains(" with ") && !title.contains(":") && title.count < 80
     }

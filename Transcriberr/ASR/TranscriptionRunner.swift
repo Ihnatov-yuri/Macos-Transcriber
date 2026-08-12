@@ -30,6 +30,8 @@ private final class FirstWinsClaim: @unchecked Sendable {
 
 final class TranscriptionRunner: @unchecked Sendable {
     static let chunkTimeoutSeconds: TimeInterval = 120
+    /// Wedge recoveries observed in the current run (drives Gemma probation).
+    private var runWedgeCount = 0
     static let chunkTailChars = 250
 
     private let factory: BackendFactory
@@ -233,6 +235,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         let ensembleTwoPass = params.backend == .ensemble
             && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
         let richBox = RichBox()
+        runWedgeCount = 0
         var perChunkParsed: [Int: [RawSegment]] = [:]
 
         var pipelineResults: [Int: String] = [:]
@@ -244,10 +247,9 @@ final class TranscriptionRunner: @unchecked Sendable {
                     let hints = hintsFor(chunk)
                     if ensembleTwoPass, let ens = backend as? EnsembleBackend {
                         group.addTask { [self] in
-                            let rich = try await withChunkTimeout(seconds: 300) {
-                                try await ens.transcribeChunkRich(
-                                    samples: chunk.samples, languages: params.languages)
-                            }
+                            let rich = try await richChunkWithRetry(
+                                ens: ens, samples: chunk.samples,
+                                params: params, continuation: continuation)
                             richBox.set(idx, (rich.agreement, rich.textA, rich.textB))
                             return (idx, rich.text)
                         }
@@ -390,7 +392,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         // the expensive judgment too, because it's only spent where engines
         // actually fight — and the arbiter sees text BEFORE AND AFTER the
         // disputed chunk plus the user's vocabulary.
-        if ensembleTwoPass, let ens = backend as? EnsembleBackend {
+        if ensembleTwoPass, let ens = backend as? EnsembleBackend, await !ens.isGemmaBenched {
             let rich = richBox.all()
             // Worst disagreements first, bounded: cross-family engine pairs
             // (Whisper+Gemma on Ukrainian) can dispute 70% of chunks — 22
@@ -876,8 +878,10 @@ final class TranscriptionRunner: @unchecked Sendable {
         continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
     ) async throws -> String {
         // The ensemble runs two engines + a Gemma merge per chunk — give it
-        // more headroom than a single engine before declaring a wedge.
-        let timeout: TimeInterval = params.backend == .ensemble ? 300 : Self.chunkTimeoutSeconds
+        // more headroom than a single engine before declaring a wedge. A
+        // healthy ensemble chunk finishes in well under a minute even with
+        // lock queueing; 300 s just meant five minutes of frozen UI.
+        let timeout: TimeInterval = params.backend == .ensemble ? 120 : Self.chunkTimeoutSeconds
         do {
             return try await withChunkTimeout(seconds: timeout) {
                 try await backend.transcribeChunk(
@@ -894,6 +898,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             // release()+load() here yanked engines from under the OTHER
             // in-flight pipeline chunks — the watchdog killed healthy work.
             continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
+            await noteWedge(backend: backend, continuation: continuation)
             try await backend.recoverWedge(modelPath: params.modelDirectory)
             do {
                 return try await withChunkTimeout(seconds: timeout) {
@@ -911,8 +916,62 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // One lost chunk must not kill a 30-chunk run — skip it,
                 // recover the engine for the chunks behind it, move on.
                 AppLog.error("runner", "chunk wedged twice — skipping it, recovering engine for the rest")
+                await noteWedge(backend: backend, continuation: continuation)
                 try? await backend.recoverWedge(modelPath: params.modelDirectory)
                 return ""
+            }
+        }
+    }
+
+    /// Wedge bookkeeping for one run. Audio that hangs LiteRT hangs it
+    /// DETERMINISTICALLY (log-proven: the same meeting wedged on the same
+    /// chunk three runs in a row) — after the second wedge, bench Gemma for
+    /// the rest of the run instead of paying a recovery stall per chunk.
+    @MainActor
+    private func noteWedge(backend: ASRBackend, continuation: AsyncThrowingStream<ASREvent, Error>.Continuation) async {
+        runWedgeCount += 1
+        guard runWedgeCount >= 2, let ens = backend as? EnsembleBackend,
+              await !ens.isGemmaBenched else { return }
+        await ens.benchGemma()
+        continuation.yield(.stage(
+            text: "Gemma keeps wedging — finishing this run single-engine",
+            fraction: -1))
+    }
+
+    /// Max-quality first pass with the same recover-retry-degrade ladder as
+    /// runChunkWithRetry. This path previously had a bare 300 s timeout and
+    /// NO recovery: one wedged LiteRT call tore down the whole task group —
+    /// every "error 3" (chunkTimeout) run death traced back to it.
+    @MainActor
+    private func richChunkWithRetry(
+        ens: EnsembleBackend,
+        samples: [Float],
+        params: Params,
+        continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
+    ) async throws -> EnsembleBackend.RichChunk {
+        let timeout: TimeInterval = 120
+        do {
+            return try await withChunkTimeout(seconds: timeout) {
+                try await ens.transcribeChunkRich(
+                    samples: samples, languages: params.languages)
+            }
+        } catch ASRError.chunkTimeout {
+            continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
+            await noteWedge(backend: ens, continuation: continuation)
+            try? await ens.recoverWedge(modelPath: nil)
+            do {
+                return try await withChunkTimeout(seconds: timeout) {
+                    try await ens.transcribeChunkRich(
+                        samples: samples, languages: params.languages)
+                }
+            } catch ASRError.chunkTimeout {
+                AppLog.error("runner", "rich chunk wedged twice — degrading to single engine")
+                await noteWedge(backend: ens, continuation: continuation)
+                try? await ens.recoverWedge(modelPath: nil)
+                return (try? await withChunkTimeout(seconds: timeout) {
+                    try await ens.transcribeChunkSolo(
+                        samples: samples, languages: params.languages)
+                }) ?? EnsembleBackend.RichChunk(text: "", agreement: 1, textA: "", textB: "")
             }
         }
     }

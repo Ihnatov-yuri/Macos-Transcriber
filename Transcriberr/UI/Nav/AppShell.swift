@@ -80,7 +80,7 @@ struct AppShell: View {
 
             HairlineSoft()
             HStack {
-                Text("V0·1 / MACOS").monoLabel(9, color: AppColor.inkMuted)
+                Text(Bundle.versionBadge).monoLabel(9, color: AppColor.inkMuted)
                 Spacer()
             }
             .padding(.horizontal, AppMetric.l)
@@ -110,5 +110,15 @@ struct AppShell: View {
             .contentShape(Rectangle())
         }
 
+    }
+}
+
+
+extension Bundle {
+    /// "V1·5·1 / MACOS" — always the real bundle version, so the sidebar
+    /// badge can never lie about which build is running.
+    static var versionBadge: String {
+        let v = main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        return "V\(v.replacingOccurrences(of: ".", with: "·")) / MACOS"
     }
 }

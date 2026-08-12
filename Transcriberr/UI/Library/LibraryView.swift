@@ -73,7 +73,7 @@ struct LibraryView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         BrandStrip {
-                            Text("V0·1 / MACOS").monoLabel(9, color: AppColor.inkMuted)
+                            Text(Bundle.versionBadge).monoLabel(9, color: AppColor.inkMuted)
                         }
                         .padding(.horizontal, AppMetric.sheetPadding)
                         .padding(.top, AppMetric.sheetVerticalPadding)

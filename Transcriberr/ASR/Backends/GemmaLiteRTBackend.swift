@@ -119,6 +119,11 @@ actor GemmaLiteRTBackend: ASRBackend {
         let wavURL = try Self.writeTempWav16(samples: trimmed, sampleRate: 16_000)
         defer { try? FileManager.default.removeItem(at: wavURL) }
 
+        // Same exclusivity as generateText — ASR and text generations share
+        // one engine and must never interleave conversations on it.
+        await acquireEngine()
+        defer { releaseEngine() }
+
         let sampler = try SamplerConfig(topK: 1, topP: 0.95, temperature: 0.1)
         let conversation = try await engine.createConversation(with: ConversationConfig(
             systemMessage: Message(Self.systemInstruction(diarize: diarize)),
@@ -147,6 +152,27 @@ actor GemmaLiteRTBackend: ASRBackend {
 
     // MARK: - Text generation
 
+    // MARK: - Engine lock (non-reentrant)
+    //
+    // This actor's methods suspend at `await`, and Swift actors are
+    // REENTRANT at suspension points — so an ensemble arbitration and a
+    // preset generation could interleave two conversations on the single
+    // LiteRT engine, starving one into an empty response. Log-proven: every
+    // 0-char generation coincided with a concurrent gemma merge. One
+    // generation at a time, strict FIFO.
+    private var engineBusy = false
+    private var engineWaiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquireEngine() async {
+        if !engineBusy { engineBusy = true; return }
+        await withCheckedContinuation { engineWaiters.append($0) }
+    }
+
+    private func releaseEngine() {
+        if engineWaiters.isEmpty { engineBusy = false }
+        else { engineWaiters.removeFirst().resume() }
+    }
+
     func generateText(
         systemInstruction: String,
         userMessage: String,
@@ -155,13 +181,26 @@ actor GemmaLiteRTBackend: ASRBackend {
         guard isReady, let engine else {
             throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
         }
-        let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)
-        let conversation = try await engine.createConversation(with: ConversationConfig(
-            systemMessage: Message(systemInstruction),
-            samplerConfig: sampler
-        ))
-        let response = try await conversation.sendMessage(Message(userMessage))
-        return response.toString.trimmingCharacters(in: .whitespacesAndNewlines)
+        await acquireEngine()
+        defer { releaseEngine() }
+        func attempt() async throws -> String {
+            let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)
+            let conversation = try await engine.createConversation(with: ConversationConfig(
+                systemMessage: Message(systemInstruction),
+                samplerConfig: sampler
+            ))
+            let response = try await conversation.sendMessage(Message(userMessage))
+            return response.toString.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var out = try await attempt()
+        if out.isEmpty {
+            // Defense in depth: a fresh conversation on a now-exclusive
+            // engine — if the first attempt was poisoned by earlier state,
+            // this one isn't.
+            AppLog.warn("litert", "empty generation — retrying once on exclusive engine")
+            out = try await attempt()
+        }
+        return out
     }
 
     // MARK: - Prompts (ported from Gemma4Backend.kt)

@@ -386,14 +386,25 @@ func cmdGenTest() async -> Int32 {
 /// Full transcription pipeline, headless — same code path as the app's
 /// RUN button, for validating changes on real recordings without a deploy.
 @MainActor
-func cmdRun(path: String, speakers: Int) async -> Int32 {
+func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
+            engineA: String? = nil, engineB: String? = nil,
+            language: String = "English") async -> Int32 {
     let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+    guard let kind = BackendFactory.Kind(rawValue: backend) else {
+        print("unknown backend '\(backend)' — one of \(BackendFactory.Kind.allCases.map(\.rawValue))")
+        return 64
+    }
+    if kind == .ensemble {
+        UserDefaults.standard.set(engineA ?? "whisper-large-v3", forKey: "ensemble.engineA")
+        UserDefaults.standard.set(engineB ?? "gemma4-litert", forKey: "ensemble.engineB")
+        UserDefaults.standard.set(true, forKey: "ui.superMaxQuality")
+    }
     let prompts = PromptStore()
     let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
     let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())
     let params = TranscriptionRunner.Params(
-        file: url, backend: .parakeet, modelDirectory: nil,
-        languages: ["English"], translateTo: nil,
+        file: url, backend: kind, modelDirectory: nil,
+        languages: [language], translateTo: nil,
         diarize: true, hybridDiarize: false, expectedSpeakers: speakers)
     let t0 = Date()
     do {
@@ -505,7 +516,13 @@ func main() async -> Int32 {
         return await cmdGenTest()
     case "run":
         guard args.count > 2 else { usage(); return 64 }
-        return await cmdRun(path: args[2], speakers: args.count > 3 ? Int(args[3]) ?? 0 : 0)
+        return await cmdRun(
+            path: args[2],
+            speakers: args.count > 3 ? Int(args[3]) ?? 0 : 0,
+            backend: args.count > 4 ? args[4] : "parakeet-v3",
+            engineA: args.count > 5 ? args[5] : nil,
+            engineB: args.count > 6 ? args[6] : nil,
+            language: args.count > 7 ? args[7] : "English")
     case "aec":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdAEC(base: args[2])

@@ -25,6 +25,9 @@ actor EnsembleBackend: ASRBackend {
     private var engineA: ASRBackend?
     private var engineB: ASRBackend?
     private var arbiter: ASRBackend?     // Gemma 4, text mode
+    /// Set when Gemma wedged repeatedly this run — the remaining chunks run
+    /// single-engine so the run finishes instead of stalling per chunk.
+    private var gemmaBenched = false
 
     init(factory: BackendFactory) {
         self.factory = factory
@@ -83,6 +86,7 @@ actor EnsembleBackend: ASRBackend {
         if arbiter == nil {
             AppLog.warn("ensemble", "Gemma arbiter unavailable — merge falls back to engine A output")
         }
+        gemmaBenched = false
         isReady = true
     }
 
@@ -93,6 +97,20 @@ actor EnsembleBackend: ASRBackend {
         if let g = engineA as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil) }
         if let g = engineB as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil) }
         if let g = arbiter as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil) }
+    }
+
+    /// The non-Gemma sub-engine (falls back to A when neither is Gemma).
+    private var soloEngine: ASRBackend? { kindA == .gemmaLiteRT ? engineB : engineA }
+    private var gemmaIsSubEngine: Bool { kindA == .gemmaLiteRT || kindB == .gemmaLiteRT }
+
+    var isGemmaBenched: Bool { gemmaBenched }
+
+    /// Called by the runner after repeated wedge recoveries: audio that
+    /// reliably hangs LiteRT will keep hanging it, so stop feeding it.
+    func benchGemma() {
+        guard !gemmaBenched, gemmaIsSubEngine else { return }
+        gemmaBenched = true
+        AppLog.warn("ensemble", "Gemma benched after repeated wedges — rest of run is \(kindA == .gemmaLiteRT ? kindB.rawValue : kindA.rawValue) only")
     }
 
     func release() async {
@@ -114,6 +132,11 @@ actor EnsembleBackend: ASRBackend {
     ) async throws -> String {
         guard isReady, let engineA, let engineB else {
             throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
+        }
+        if gemmaBenched, let solo = soloEngine {
+            return try await solo.transcribeChunk(
+                samples: samples, languages: languages, translateTo: nil,
+                diarize: false, previousContext: previousContext, speakerHints: [])
         }
 
         // FAST PATH — both sub-engines expose word confidences (Parakeet,
@@ -175,6 +198,9 @@ actor EnsembleBackend: ASRBackend {
         guard isReady, let engineA, let engineB else {
             throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
         }
+        if gemmaBenched {
+            return try await transcribeChunkSolo(samples: samples, languages: languages)
+        }
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
             async let taskA = pa.transcribeDetailed(samples: samples, languages: languages)
             async let taskB = pb.transcribeDetailed(samples: samples, languages: languages)
@@ -205,6 +231,27 @@ actor EnsembleBackend: ASRBackend {
         if textA.isEmpty { return RichChunk(text: textB, agreement: 1, textA: textA, textB: textB) }
         if textB.isEmpty { return RichChunk(text: textA, agreement: 1, textA: textA, textB: textB) }
         return RichChunk(text: textA, agreement: Self.tokenSimilarity(textA, textB), textA: textA, textB: textB)
+    }
+
+    /// Single-engine escape hatch: a chunk whose audio wedges LiteRT twice
+    /// still gets transcribed by the healthy engine instead of being lost.
+    func transcribeChunkSolo(
+        samples: [Float],
+        languages: Set<String>
+    ) async throws -> RichChunk {
+        guard isReady, let solo = soloEngine else {
+            throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
+        }
+        let text: String
+        if let d = solo as? DetailedTranscribing {
+            text = try await d.transcribeDetailed(samples: samples, languages: languages).text
+        } else {
+            text = try await solo.transcribeChunk(
+                samples: samples, languages: languages, translateTo: nil,
+                diarize: false, previousContext: nil, speakerHints: [])
+        }
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return RichChunk(text: t, agreement: 1, textA: t, textB: "")
     }
 
     /// Second pass of max-quality Super: Gemma rules on a disputed chunk with

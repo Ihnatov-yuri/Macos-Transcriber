@@ -69,6 +69,17 @@ actor GemmaLiteRTBackend: ASRBackend {
         throw ASRError.modelLoadFailed(reason: "LiteRT engine init failed — \(failures.joined(separator: "; "))")
     }
 
+    /// Surgical wedge recovery: rebuild ONLY this engine and evict the
+    /// zombie lock holder — without a full release() that would yank state
+    /// from under concurrent pipeline chunks.
+    func recoverWedge(modelPath: URL?) async throws {
+        AppLog.warn("litert", "wedge recovery: rebuilding engine in place")
+        engine = nil
+        isReady = false
+        resetEngineLock()
+        try await load(modelPath: modelPath)
+    }
+
     func release() async {
         engine = nil
         isReady = false

@@ -78,6 +78,56 @@ final class RecordingRepository: @unchecked Sendable {
             try file.write(from: buf)
         }
 
+        // Carry the meeting machinery. If BOTH sources have split tracks,
+        // the merged recording is itself a full meeting: concatenate the
+        // mic and sys tracks (padded/truncated to each half's mix length so
+        // the shared timeline stays sample-exact) — a re-run then keeps ME
+        // ground truth AND lets global diarization unify a colleague who
+        // appears in both halves into one speaker.
+        func sidecarURL(_ path: String, _ ext: String) -> URL {
+            URL(fileURLWithPath: path).deletingPathExtension().appendingPathExtension(ext)
+        }
+        func aligned(_ samples: [Float], to count: Int) -> [Float] {
+            if samples.count == count { return samples }
+            if samples.count > count { return Array(samples.prefix(count)) }
+            return samples + [Float](repeating: 0, count: count - samples.count)
+        }
+        func writeWav(_ parts: [[Float]], to target: URL) throws {
+            let f = try AVAudioFile(forWriting: target, settings: fmt.settings,
+                                    commonFormat: .pcmFormatFloat32, interleaved: false)
+            for part in parts where !part.isEmpty {
+                guard let buf = AVAudioPCMBuffer(pcmFormat: fmt,
+                                                 frameCapacity: AVAudioFrameCount(part.count)) else { continue }
+                buf.frameLength = AVAudioFrameCount(part.count)
+                part.withUnsafeBufferPointer { src in
+                    buf.floatChannelData![0].update(from: src.baseAddress!, count: part.count)
+                }
+                try f.write(from: buf)
+            }
+        }
+        let fm = FileManager.default
+        for ext in ["mic.wav", "sys.wav"] {
+            let ua = sidecarURL(a.audioPath, ext)
+            let ub = sidecarURL(b.audioPath, ext)
+            guard fm.fileExists(atPath: ua.path), fm.fileExists(atPath: ub.path) else { continue }
+            let ta = aligned(try await decoder.decodeAll(file: ua), to: sa.count)
+            let tb = aligned(try await decoder.decodeAll(file: ub), to: sb.count)
+            try writeWav([ta, tb], to: url.deletingPathExtension().appendingPathExtension(ext))
+        }
+        // Me-timeline: union of whatever sides have one, b's shifted.
+        var meAll: [[Double]] = []
+        if let d = try? Data(contentsOf: sidecarURL(a.audioPath, "me.json")),
+           let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
+            meAll += iv.filter { $0.count == 2 }
+        }
+        if let d = try? Data(contentsOf: sidecarURL(b.audioPath, "me.json")),
+           let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
+            meAll += iv.filter { $0.count == 2 }.map { [$0[0] + offsetSeconds, $0[1] + offsetSeconds] }
+        }
+        if !meAll.isEmpty, let data = try? JSONEncoder().encode(meAll) {
+            try? data.write(to: url.deletingPathExtension().appendingPathExtension("me.json"))
+        }
+
         let merged = Recording(
             title: "\(a.title) + \(b.title)",
             audioPath: url.path,
@@ -110,6 +160,15 @@ final class RecordingRepository: @unchecked Sendable {
                                   endSeconds: seg.endSeconds + offsetSeconds,
                                   text: seg.text, speaker: remap(seg.speaker),
                                   speakerName: seg.speakerName))
+        }
+        // Persist the name map (remapped keys) so names survive re-runs of
+        // the merged recording the same way they do on originals.
+        var nameMap: [String: String] = [:]
+        for seg in copies {
+            if let k = seg.speaker, let n = seg.speakerName, nameMap[k] == nil { nameMap[k] = n }
+        }
+        if !nameMap.isEmpty, let data = try? JSONEncoder().encode(nameMap) {
+            merged.speakerNamesJSON = String(decoding: data, as: UTF8.self)
         }
         if !copies.isEmpty {
             try appendSegments(copies, to: merged)

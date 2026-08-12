@@ -233,6 +233,14 @@ struct AudioDecoder: Sendable {
 
     // MARK: - Convenience
 
+    /// Chunk pre-decoded samples (used by the split-track path after AEC).
+    func chunk(samples: [Float]) -> (chunks: [Chunk], duration: Double) {
+        let duration = Double(samples.count) / Self.sampleRate
+        let silences = scanSilences(samples: samples)
+        let cuts = computeCutPoints(silences: silences, durationSeconds: duration)
+        return (slice(samples: samples, cuts: cuts), duration)
+    }
+
     func decodeAndChunk(file: URL) async throws -> (samples: [Float], chunks: [Chunk], duration: Double) {
         var pcm = try await decodeAll(file: file)
         // Optional Apple-DSP noise suppression for imported files.

@@ -119,8 +119,15 @@ final class TranscriptionRunner: @unchecked Sendable {
         var micChunkIndices: Set<Int> = []
         do {
             if splitTracks {
-                let (_, micChunks, micDur) = try await decoder.decodeAndChunk(file: micURL)
-                let (sysSamples, sysChunks, sysDur) = try await decoder.decodeAndChunk(file: sysURL)
+                var micSamples = try await decoder.decodeAll(file: micURL)
+                let sysSamples = try await decoder.decodeAll(file: sysURL)
+                // Offline AEC: subtract the far side's echo from the mic
+                // using the sys track as reference — the echo never reaches
+                // an engine, and the user's speech survives crosstalk.
+                continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
+                micSamples = EchoCanceller.cancel(mic: micSamples, ref: sysSamples)
+                let (micChunks, micDur) = decoder.chunk(samples: micSamples)
+                let (sysChunks, sysDur) = decoder.chunk(samples: sysSamples)
                 let tagged = (micChunks.map { ($0, true) } + sysChunks.map { ($0, false) })
                     .sorted { $0.0.startSeconds < $1.0.startSeconds }
                 chunks = tagged.map(\.0)

@@ -16,12 +16,13 @@ struct DetailView: View {
     @State private var renamingSpeaker: String?
 
     enum Tab: String, CaseIterable, Identifiable {
-        case transcript, summary, clean, translate, context, versions
+        case transcript, summary, minutes, clean, translate, context, versions
         var id: String { rawValue }
         var label: String {
             switch self {
             case .transcript: return "TRANSCRIPT"
             case .summary:    return "SUMMARY"
+            case .minutes:    return "MINUTES"
             case .clean:      return "CLEAN"
             case .translate:  return "TRANSLATE"
             case .context:    return "CONTEXT-REWRITE"
@@ -32,6 +33,7 @@ struct DetailView: View {
             switch self {
             case .transcript, .versions: return ""
             case .summary:    return "summary"
+            case .minutes:    return "minutes"
             case .clean:      return "clean"
             case .translate:  return "translate_polish"
             case .context:    return "context_rewrite"
@@ -718,7 +720,7 @@ struct DetailView: View {
                     Self.speakerPalette[(order.firstIndex(of: key) ?? 0) % Self.speakerPalette.count]
                 }
             )
-        case .summary, .clean, .translate, .context:
+        case .summary, .minutes, .clean, .translate, .context:
             OutputPane(model: model, presetId: tab.presetId)
         case .versions:
             VersionsPane(model: model)

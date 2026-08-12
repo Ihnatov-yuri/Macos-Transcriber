@@ -33,8 +33,8 @@ final class PresetStore: @unchecked Sendable {
         // One-time template upgrade: the v1 built-in prompts were one-liners
         // and produced weak/truncated output. Swap the four built-ins for the
         // current templates once, preserving any user-added presets.
-        if !defaults.bool(forKey: "presets.upgraded.v3") {
-            defaults.set(true, forKey: "presets.upgraded.v3")
+        if !defaults.bool(forKey: "presets.upgraded.v4") {
+            defaults.set(true, forKey: "presets.upgraded.v4")
             let builtinIds = Set(Builtin.all.map(\.id))
             let userAdded = presets.filter { !builtinIds.contains($0.id) }
             presets = Builtin.all + userAdded
@@ -147,6 +147,32 @@ final class PresetStore: @unchecked Sendable {
             {transcript_with_speakers}
             """
         )
-        static let all = [summary, contextRewrite, clean, translatePolish]
+        static let minutes = PostProcessingPreset(
+            id: "minutes",
+            name: "Minutes",
+            outputTitle: "Minutes",
+            systemTemplate: """
+            You are an expert minute-taker for meetings. Faithful to the \
+            transcript: never invent decisions, owners, dates, or numbers. \
+            Write in the transcript's own language. Speaker labels identify \
+            who said what — use them for attribution.
+            """,
+            userTemplate: """
+            Write meeting minutes from the transcript below, in Markdown, \
+            omitting any section that would be empty:
+
+            **TL;DR** — 2–3 sentences: what the meeting was about and the outcome.
+            **Decisions** — one bullet per decision, with who made or confirmed it.
+            **Action items by owner** — a subsection per person who owns tasks; \
+            bullet each task (→ deadline if said). Include tasks assigned TO \
+            them by others.
+            **Risks / blockers** — anything flagged as a problem.
+            **Open questions** — unresolved threads and who should answer them.
+
+            TRANSCRIPT:
+            {transcript_with_speakers}
+            """
+        )
+        static let all = [summary, minutes, contextRewrite, clean, translatePolish]
     }
 }

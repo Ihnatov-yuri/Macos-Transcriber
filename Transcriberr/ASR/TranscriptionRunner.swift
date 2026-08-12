@@ -377,12 +377,6 @@ final class TranscriptionRunner: @unchecked Sendable {
                 let rms = (energy / Float(max(1, chunk.samples.count))).squareRoot()
                 if rms < 0.004 && parsedJoined.count < 30 {
                     AppLog.info("runner", "chunk \(idx + 1) low confidence but near-silent (rms \(String(format: "%.4f", rms))) — skipping refinement")
-                } else if splitTracks {
-                    // Refinement pre-dates split-track: its re-parse loses the
-                    // ME label and its time-range splice deletes the OTHER
-                    // track's overlapping segments. Disputes/scrubs cover
-                    // split runs; skip until refinement is track-aware.
-                    AppLog.info("runner", "chunk \(idx + 1) low confidence — refinement skipped on split-track run")
                 } else {
                     AppLog.warn("runner", "chunk \(idx + 1) low confidence (score=\(String(format: "%.2f", confidence.score))) — \(confidence.reasons.joined(separator: ", "))")
                     lowConfidenceChunks.append((idx, chunk, parsedJoined))
@@ -450,6 +444,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                 allSegments: allSegments,
                 params: params,
                 backend: backend,
+                splitTracks: splitTracks,
+                micChunkIndices: micChunkIndices,
                 continuation: continuation
             )
         }
@@ -578,6 +574,23 @@ final class TranscriptionRunner: @unchecked Sendable {
                 }
             }
 
+            // Stable, human numbering: the clusterer's internal ids leak
+            // through as SPEAKER_85 etc. and change every run. Renumber to
+            // SPEAKER_01… in order of first appearance — deterministic for
+            // the same audio, so stored names stay attached across re-runs.
+            var renumber: [String: String] = [:]
+            var nextSpeaker = 1
+            allSegments = allSegments.map { seg in
+                guard let k = seg.speakerKey, k != "ME", k != "GUEST" else { return seg }
+                if renumber[k] == nil {
+                    renumber[k] = String(format: "SPEAKER_%02d", nextSpeaker)
+                    nextSpeaker += 1
+                }
+                var s = seg
+                s.speakerKey = renumber[k]
+                return s
+            }
+
             // Pure-filler segments (".", "uh", "mm-hmm" and nothing else)
             // carry no content — they exist because a breath tripped VAD.
             // Drop them before turns coalesce; real short replies ("Okay.",
@@ -677,6 +690,8 @@ final class TranscriptionRunner: @unchecked Sendable {
         allSegments incoming: [RawSegment],
         params: Params,
         backend: ASRBackend,
+        splitTracks: Bool = false,
+        micChunkIndices: Set<Int> = [],
         continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
     ) async throws -> [RawSegment] {
         var allSegments = incoming
@@ -717,12 +732,24 @@ final class TranscriptionRunner: @unchecked Sendable {
                 rawText: entry.parsedText,
                 audioDurationSeconds: entry.chunk.endSeconds - entry.chunk.startSeconds
             )
-            let parsed = parseSegments(
+            var parsed = parseSegments(
                 rawText: raw,
                 chunkStart: entry.chunk.startSeconds,
                 chunkEnd: entry.chunk.endSeconds,
                 diarize: params.diarize
             )
+            // Track-aware: a refined mic chunk is still the user.
+            let isMicChunk = splitTracks && micChunkIndices.contains(entry.idx)
+            if isMicChunk {
+                let myName = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
+                    .trimmingCharacters(in: .whitespaces)
+                parsed = parsed.map { seg in
+                    var s = seg
+                    s.speakerKey = "ME"
+                    s.speakerName = myName.isEmpty ? "Me" : myName
+                    return s
+                }
+            }
             let retryJoined = parsed.map(\.text).joined(separator: " ")
             let retryConf = ChunkConfidence.assess(
                 rawText: retryJoined,
@@ -737,8 +764,14 @@ final class TranscriptionRunner: @unchecked Sendable {
             // Splice replacement into allSegments + tell JobManager to do the
             // same in SwiftData.
             allSegments.removeAll { seg in
-                seg.startSeconds >= entry.chunk.startSeconds &&
-                seg.endSeconds <= entry.chunk.endSeconds
+                guard seg.startSeconds >= entry.chunk.startSeconds,
+                      seg.endSeconds <= entry.chunk.endSeconds else { return false }
+                // Same-track only: mic and sys chunks share one timeline —
+                // splicing by time alone deleted the OTHER track's segments.
+                if splitTracks {
+                    return isMicChunk ? seg.speakerKey == "ME" : seg.speakerKey != "ME"
+                }
+                return true
             }
             allSegments.append(contentsOf: parsed)
             allSegments.sort { $0.startSeconds < $1.startSeconds }

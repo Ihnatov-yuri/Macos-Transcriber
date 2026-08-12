@@ -311,9 +311,14 @@ final class MeetingRecorder: @unchecked Sendable {
         // Duck the mic while the far side is talking and the mic is just
         // hearing the speakers. Fully open when the user speaks or the far
         // side is quiet; ~40 ms smoothing (0.25/cycle at ~10 ms callbacks).
+        // FULL gate, not a soft duck: the far side's voice already arrives
+        // pristine from the system tap — any mic contribution while only
+        // they speak is pure room echo (the audible 12% floor of v1.7).
+        // Asymmetric ramps: open near-instantly when the user speaks so no
+        // syllable is clipped; close gently so it never pumps.
         let micActive = micRMS > 0.004 && micRMS > tapRMS * 1.5
-        let target: Float = (micActive || tapRMS < 0.004) ? 1.0 : 0.12
-        micGain += (target - micGain) * 0.25
+        let target: Float = (micActive || tapRMS < 0.004) ? 1.0 : 0.0
+        micGain += (target - micGain) * (target > micGain ? 0.6 : 0.15)
         if micGain < 0.999 {
             for f in 0..<frames { micMono[f] *= micGain }
         }

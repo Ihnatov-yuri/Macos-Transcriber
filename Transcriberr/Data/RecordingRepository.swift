@@ -353,16 +353,27 @@ final class RecordingRepository: @unchecked Sendable {
                            speaker: $0.speaker, speakerName: $0.speakerName)
         }
         let data = try JSONEncoder().encode(payload)
-        if let newest = recording.versions.max(by: { $0.createdAtMillis < $1.createdAtMillis }),
-           newest.segmentsJSON == String(decoding: data, as: UTF8.self) {
-            AppLog.info("repo", "version snapshot skipped — identical to newest version")
+        let json = String(decoding: data, as: UTF8.self)
+        // Dedup against ALL versions, not just the newest: rapid
+        // back-to-back snapshots (rescue + done within the same second —
+        // seen in production logs) could race the relationship's freshness
+        // and save duplicates. Flush pending changes before reading.
+        // The versions relationship array is intermittently stale right
+        // after an insert (observed as a 1-in-3 flake under test load and as
+        // same-second duplicate versions in production logs) — query the
+        // store directly instead of trusting the relationship.
+        context.processPendingChanges()
+        let recID = recording.persistentModelID
+        let existing = (try? context.fetch(FetchDescriptor<TranscriptVersion>())) ?? []
+        if existing.contains(where: { $0.recording?.persistentModelID == recID && $0.segmentsJSON == json }) {
+            AppLog.info("repo", "version snapshot skipped — identical version exists")
             return
         }
         let version = TranscriptVersion(
             engineId: engineId,
             engineLabel: engineLabel,
             segmentCount: payload.count,
-            segmentsJSON: String(decoding: data, as: UTF8.self)
+            segmentsJSON: json
         )
         version.recording = recording
         context.insert(version)

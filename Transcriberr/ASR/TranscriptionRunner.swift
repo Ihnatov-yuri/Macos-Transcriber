@@ -323,8 +323,16 @@ final class TranscriptionRunner: @unchecked Sendable {
             // Exact-match trimming can't see those — fuzzy-match against the
             // last kept segment and drop repeats.
             var deduped: [RawSegment] = []
+            // Split-track: dedup only within the SAME track. Comparing across
+            // interleaved mic/sys segments could drop the CLEAN copy of a
+            // sentence because its echo was adjacent — the echo scrub owns
+            // cross-track duplicates, with the right copy chosen.
+            let sameTrackLast = splitTracks
+                ? allSegments.last(where: { micChunkIndices.contains(idx)
+                    ? $0.speakerKey == "ME" : $0.speakerKey != "ME" })
+                : allSegments.last
             for seg in parsed {
-                let prev = deduped.last ?? allSegments.last
+                let prev = deduped.last ?? sameTrackLast
                 if let prev, Self.nearDuplicate(prev.text, seg.text) {
                     AppLog.warn("runner", "dropping near-duplicate segment @\(String(format: "%.0f", seg.startSeconds))s: \(String(seg.text.prefix(60)))")
                     continue
@@ -354,8 +362,18 @@ final class TranscriptionRunner: @unchecked Sendable {
                 audioDurationSeconds: chunk.endSeconds - chunk.startSeconds
             )
             if confidence.isLow {
-                AppLog.warn("runner", "chunk \(idx + 1) low confidence (score=\(String(format: "%.2f", confidence.score))) — \(confidence.reasons.joined(separator: ", "))")
-                lowConfidenceChunks.append((idx, chunk, parsedJoined))
+                // Don't burn a refinement re-run on silence: a backchannel
+                // chunk ("uh" + room tone) is low-confidence by nature and a
+                // second pass can't improve it.
+                var energy: Float = 0
+                for v in chunk.samples { energy += v * v }
+                let rms = (energy / Float(max(1, chunk.samples.count))).squareRoot()
+                if rms < 0.004 && parsedJoined.count < 30 {
+                    AppLog.info("runner", "chunk \(idx + 1) low confidence but near-silent (rms \(String(format: "%.4f", rms))) — skipping refinement")
+                } else {
+                    AppLog.warn("runner", "chunk \(idx + 1) low confidence (score=\(String(format: "%.2f", confidence.score))) — \(confidence.reasons.joined(separator: ", "))")
+                    lowConfidenceChunks.append((idx, chunk, parsedJoined))
+                }
             }
         }
         AppLog.info("runner", "first pass done — \(allSegments.count) segments, \(lowConfidenceChunks.count) low-confidence chunks")
@@ -482,7 +500,10 @@ final class TranscriptionRunner: @unchecked Sendable {
         }
 
         // ---------- finalize ----------
-        if params.diarize {
+        // Split-track meetings finalize even with diarization OFF: the system
+        // track IS "everyone else", so its segments must carry an identity —
+        // otherwise they render chip-less and can't be renamed.
+        if params.diarize || splitTracks {
             if !diarSegments.isEmpty {
                 // Fill speakers only where the backend didn't already label
                 // them (Parakeet's word-level labels are more precise than
@@ -496,6 +517,64 @@ final class TranscriptionRunner: @unchecked Sendable {
                         return s
                     }
                 }
+            }
+
+            // Split-track: any segment STILL unlabeled is from the system
+            // track (mic segments were labeled ME at parse). Give it the
+            // single diarized sys cluster if there is exactly one, else a
+            // renameable GUEST identity — the self-intro and addressee name
+            // rules then apply to it like to any speaker.
+            if splitTracks {
+                let sysKeys = Set(allSegments.compactMap(\.speakerKey)).subtracting(["ME"])
+                let fallbackKey = sysKeys.count == 1 ? sysKeys.first! : "GUEST"
+                allSegments = allSegments.map { seg in
+                    guard seg.speakerKey == nil else { return seg }
+                    var s = seg
+                    s.speakerKey = fallbackKey
+                    return s
+                }
+            }
+
+            // Honor the speaker cap structurally. The clusterer sometimes
+            // splits one voice in two anyway (observed: a 2-person call with
+            // "UP TO 2" produced MATTHEW + SPEAKER_16, both the recruiter).
+            // In split-track the user is ME by construction, so at most
+            // (expectedSpeakers − 1) system voices may exist — fold the
+            // smallest excess clusters into the largest by speaking time.
+            if splitTracks, params.expectedSpeakers > 1 {
+                let allowed = params.expectedSpeakers - 1
+                var dur: [String: Double] = [:]
+                for seg in allSegments {
+                    if let k = seg.speakerKey, k != "ME" {
+                        dur[k, default: 0] += max(0, seg.endSeconds - seg.startSeconds)
+                    }
+                }
+                if dur.count > allowed {
+                    let ranked = dur.sorted { $0.value > $1.value }.map(\.key)
+                    let keep = Set(ranked.prefix(allowed))
+                    let target = ranked[0]
+                    let fold = Set(dur.keys).subtracting(keep)
+                    AppLog.info("runner", "speaker cap: folding \(fold.sorted()) into \(target) (\(allowed) non-ME allowed)")
+                    allSegments = allSegments.map { seg in
+                        guard let k = seg.speakerKey, fold.contains(k) else { return seg }
+                        var s = seg
+                        s.speakerKey = target
+                        s.speakerName = nil
+                        return s
+                    }
+                }
+            }
+
+            // Pure-filler segments (".", "uh", "mm-hmm" and nothing else)
+            // carry no content — they exist because a breath tripped VAD.
+            // Drop them before turns coalesce; real short replies ("Okay.",
+            // "Yes.") contain a non-filler word and survive.
+            let fillerWords: Set<String> = ["uh", "um", "mm", "mmm", "mhm", "mmhmm", "hmm", "erm", "hm"]
+            allSegments.removeAll { seg in
+                let toks = seg.text.lowercased()
+                    .split(whereSeparator: { !$0.isLetter })
+                    .map(String.init)
+                return toks.isEmpty || toks.allSatisfy { fillerWords.contains($0) }
             }
 
             // De-chunk: the 30 s chunk windows are an implementation detail —

@@ -198,10 +198,16 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
                     // Capped below typical per-word confidences so an engine
                     // with REAL word-level scores (Whisper) can win specific
                     // rare terms without steamrolling the whole chunk.
-                    confidence: min(result.confidence, 0.88)
+                    // Chunk-level confidence as-is: Parakeet calibrates it,
+                    // and the old 0.88 cap systematically handicapped
+                    // Parakeet in every ROVER vote against Whisper's
+                    // calibrated word probabilities.
+                    confidence: result.confidence
                 )
             }
-            AppLog.warn("parakeet", "token timings lacked word markers — using \(fallback.count) text-derived words")
+            if let sample = result.tokenTimings?.prefix(5).map(\.token) {
+                AppLog.warn("parakeet", "token timings lacked word markers — text-derived words at chunk confidence \(String(format: "%.2f", result.confidence)); raw tokens: \(sample)")
+            }
             return DetailedTranscription(text: result.text, words: fallback)
         }
         return DetailedTranscription(text: result.text, words: words)
@@ -212,7 +218,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     static func scoredWords(from timings: [TokenTiming]) -> [ScoredWord] {
         var out: [ScoredWord] = []
         for t in timings {
-            let isWordStart = t.token.hasPrefix("▁")
+            let isWordStart = t.token.hasPrefix("▁") || t.token.hasPrefix(" ")
             let piece = t.token.replacingOccurrences(of: "▁", with: "")
             guard !piece.isEmpty else { continue }
             if isWordStart || out.isEmpty {

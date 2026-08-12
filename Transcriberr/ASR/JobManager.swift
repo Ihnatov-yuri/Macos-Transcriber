@@ -200,6 +200,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // live-appended rows with it whenever it differs.
                     let differs = finalRaws.count != allSegments.count
                         || finalRaws.contains { $0.speakerKey != nil || $0.speakerName != nil }
+                        || zip(finalRaws, allSegments).contains { $0.text != $1.text }
                     if !finalRaws.isEmpty && differs {
                         let segs = finalRaws.map { raw in
                             Segment(

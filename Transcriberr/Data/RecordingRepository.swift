@@ -48,10 +48,28 @@ final class RecordingRepository: @unchecked Sendable {
     /// ("SPEAKER_00" in each file is usually two different humans). "ME" is
     /// exempt — it is the same user in both recordings by definition.
     /// Originals are left untouched.
+    /// AVAssetReader (decodeAll's engine) fails on freshly-written WAVs —
+    /// read our own 16 kHz mono files directly when it does.
+    private func readSamplesTolerant(_ url: URL, decoder: AudioDecoder) async throws -> [Float] {
+        do { return try await decoder.decodeAll(file: url) }
+        catch {
+            let f = try AVAudioFile(forReading: url)
+            guard f.processingFormat.sampleRate == AudioDecoder.sampleRate,
+                  f.processingFormat.channelCount == 1,
+                  let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat,
+                                             frameCapacity: AVAudioFrameCount(clamping: f.length))
+            else { throw error }
+            try f.read(into: buf)
+            guard let p = buf.floatChannelData?[0] else { throw error }
+            AppLog.info("repo", "decodeAll failed for \(url.lastPathComponent) — direct AVAudioFile read succeeded")
+            return Array(UnsafeBufferPointer(start: p, count: Int(buf.frameLength)))
+        }
+    }
+
     func merge(_ a: Recording, _ b: Recording) async throws -> Recording {
         let decoder = AudioDecoder()
-        let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: a.audioPath))
-        let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: b.audioPath))
+        let sa = try await readSamplesTolerant(URL(fileURLWithPath: a.audioPath), decoder: decoder)
+        let sb = try await readSamplesTolerant(URL(fileURLWithPath: b.audioPath), decoder: decoder)
         let offsetSeconds = Double(sa.count) / AudioDecoder.sampleRate
 
         guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
@@ -110,9 +128,17 @@ final class RecordingRepository: @unchecked Sendable {
             let ua = sidecarURL(a.audioPath, ext)
             let ub = sidecarURL(b.audioPath, ext)
             guard fm.fileExists(atPath: ua.path), fm.fileExists(atPath: ub.path) else { continue }
-            let ta = aligned(try await decoder.decodeAll(file: ua), to: sa.count)
-            let tb = aligned(try await decoder.decodeAll(file: ub), to: sb.count)
-            try writeWav([ta, tb], to: url.deletingPathExtension().appendingPathExtension(ext))
+            do {
+                let ta = aligned(try await readSamplesTolerant(ua, decoder: decoder), to: sa.count)
+                let tb = aligned(try await readSamplesTolerant(ub, decoder: decoder), to: sb.count)
+                try writeWav([ta, tb], to: url.deletingPathExtension().appendingPathExtension(ext))
+            } catch {
+                // A bad sidecar must not fail the whole merge — the mix is
+                // the recording; tracks are an optimization.
+                AppLog.warn("repo", "skipping \(ext) tracks in merge: \(error.localizedDescription)")
+                try? FileManager.default.removeItem(
+                    at: url.deletingPathExtension().appendingPathExtension(ext))
+            }
         }
         // Me-timeline: union of whatever sides have one, b's shifted.
         var meAll: [[Double]] = []

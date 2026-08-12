@@ -32,6 +32,16 @@ packages:
     from: 0.12.0
 
 targets:
+  TranscriberrTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: TranscriberrTests
+    dependencies:
+      - target: Transcriberr
+    settings:
+      TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Transcriberr.app/Contents/MacOS/Transcriberr"
+      BUNDLE_LOADER: "$(TEST_HOST)"
   Transcriberr:
     type: application
     platform: macOS

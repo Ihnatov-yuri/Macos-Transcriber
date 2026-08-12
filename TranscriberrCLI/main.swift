@@ -347,6 +347,42 @@ func cmdLitert(path: String) async -> Int32 {
     }
 }
 
+/// Reproduction test for the v2.2.1 engine-exclusivity fix: fire three
+/// concurrent generations at the LiteRT engine — pre-fix, interleaved
+/// conversations starved one into an empty response.
+@MainActor
+func cmdGenTest() async -> Int32 {
+    let prompts = PromptStore()
+    let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
+    let backend = factory.backend(for: .gemmaLiteRT)
+    do {
+        print("[gentest] loading Gemma…")
+        try await backend.load(modelPath: nil)
+        let t0 = Date()
+        async let a = backend.generateText(
+            systemInstruction: "You answer in exactly one word.",
+            userMessage: "Name any color.", maxTokens: 8)
+        async let b = backend.generateText(
+            systemInstruction: "You answer in exactly one word.",
+            userMessage: "Name any animal.", maxTokens: 8)
+        async let c = backend.generateText(
+            systemInstruction: "You answer in exactly one word.",
+            userMessage: "Name any city.", maxTokens: 8)
+        let (ra, rb, rc) = try await (a, b, c)
+        let dt = Date().timeIntervalSince(t0)
+        print("[gentest] concurrent results in \(String(format: "%.1f", dt))s:")
+        print("  A: \(ra.prefix(40))  (\(ra.count) chars)")
+        print("  B: \(rb.prefix(40))  (\(rb.count) chars)")
+        print("  C: \(rc.prefix(40))  (\(rc.count) chars)")
+        let empties = [ra, rb, rc].filter(\.isEmpty).count
+        print(empties == 0 ? "[gentest] ✓ PASS — no starved generations" : "[gentest] ❌ FAIL — \(empties) empty")
+        return empties == 0 ? 0 : 1
+    } catch {
+        print("[gentest] ❌ \(error)")
+        return 1
+    }
+}
+
 /// Full transcription pipeline, headless — same code path as the app's
 /// RUN button, for validating changes on real recordings without a deploy.
 @MainActor
@@ -465,6 +501,8 @@ func main() async -> Int32 {
     case "whisper":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
+    case "gentest":
+        return await cmdGenTest()
     case "run":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdRun(path: args[2], speakers: args.count > 3 ? Int(args[3]) ?? 0 : 0)

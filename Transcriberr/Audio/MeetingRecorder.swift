@@ -55,6 +55,11 @@ final class MeetingRecorder: @unchecked Sendable {
     nonisolated(unsafe) private var meIntervals: [[Double]] = []
     nonisolated(unsafe) private var meOpenAt: Double? = nil
 
+    /// Echo duck: while the system tap is loud and the mic is NOT dominant,
+    /// the mic is mostly hearing the speakers — its contribution to the mix
+    /// (and the mic track) is attenuated. Smoothed so it never pumps.
+    nonisolated(unsafe) private var micGain: Float = 1
+
     init() {
         var continuation: AsyncStream<WavRecorder.Chunk>.Continuation!
         self.chunks = AsyncStream<WavRecorder.Chunk> { continuation = $0 }
@@ -228,6 +233,7 @@ final class MeetingRecorder: @unchecked Sendable {
             self.chunkTotal16k = 0
             self.meIntervals.removeAll(keepingCapacity: true)
             self.meOpenAt = nil
+            self.micGain = 1
         }
         fileURL = url
         elapsedMs = 0
@@ -290,17 +296,30 @@ final class MeetingRecorder: @unchecked Sendable {
                 if bi == 0 { micMono[f] += m } else { sysMono[f] += m }
             }
         }
-        var mono = [Float](repeating: 0, count: frames)
         var micSq: Float = 0
         var sysSq: Float = 0
         for f in 0..<frames {
-            mono[f] = micMono[f] + sysMono[f]
             micSq += micMono[f] * micMono[f]
             sysSq += sysMono[f] * sysMono[f]
         }
-        updateMeTimeline(micRMS: (micSq / Float(frames)).squareRoot(),
-                         tapRMS: (sysSq / Float(frames)).squareRoot(),
+        let micRMS = (micSq / Float(frames)).squareRoot()
+        let tapRMS = (sysSq / Float(frames)).squareRoot()
+        // Me-timeline sees RAW energies — the duck must not blind it.
+        updateMeTimeline(micRMS: micRMS, tapRMS: tapRMS,
                          t: Double(framesSeen) / nativeRate)
+
+        // Duck the mic while the far side is talking and the mic is just
+        // hearing the speakers. Fully open when the user speaks or the far
+        // side is quiet; ~40 ms smoothing (0.25/cycle at ~10 ms callbacks).
+        let micActive = micRMS > 0.004 && micRMS > tapRMS * 1.5
+        let target: Float = (micActive || tapRMS < 0.004) ? 1.0 : 0.12
+        micGain += (target - micGain) * 0.25
+        if micGain < 0.999 {
+            for f in 0..<frames { micMono[f] *= micGain }
+        }
+
+        var mono = [Float](repeating: 0, count: frames)
+        for f in 0..<frames { mono[f] = micMono[f] + sysMono[f] }
         writeTrack(micMono, converter: micConverter, file: micFile)
         writeTrack(sysMono, converter: sysConverter, file: sysFile)
 

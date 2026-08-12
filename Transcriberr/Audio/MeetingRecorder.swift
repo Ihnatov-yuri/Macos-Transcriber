@@ -321,13 +321,17 @@ final class MeetingRecorder: @unchecked Sendable {
         let micActive = micRMS > 0.02 || (micRMS > 0.004 && micRMS > tapRMS * 1.5)
         let target: Float = (micActive || tapRMS < 0.004) ? 1.0 : 0.0
         micGain += (target - micGain) * (target > micGain ? 0.6 : 0.15)
+        // The RAW mic goes to the .mic.wav track — the offline echo
+        // canceller needs unmodified ground truth (it subtracts the echo
+        // mathematically). The gate shapes only the playback mix.
+        let rawMic = micMono
         if micGain < 0.999 {
             for f in 0..<frames { micMono[f] *= micGain }
         }
 
         var mono = [Float](repeating: 0, count: frames)
         for f in 0..<frames { mono[f] = micMono[f] + sysMono[f] }
-        writeTrack(micMono, converter: micConverter, file: micFile)
+        writeTrack(rawMic, converter: micConverter, file: micFile)
         writeTrack(sysMono, converter: sysConverter, file: sysFile)
 
         var sumSq: Float = 0

@@ -347,6 +347,42 @@ func cmdLitert(path: String) async -> Int32 {
     }
 }
 
+/// Offline echo-cancellation check over a meeting's track pair.
+@MainActor
+func cmdAEC(base: String) async -> Int32 {
+    let baseURL = URL(fileURLWithPath: NSString(string: base).expandingTildeInPath)
+    let mic = baseURL.deletingPathExtension().appendingPathExtension("mic.wav")
+    let sys = baseURL.deletingPathExtension().appendingPathExtension("sys.wav")
+    let decoder = AudioDecoder()
+    do {
+        let m = try await decoder.decodeAll(file: mic)
+        let r = try await decoder.decodeAll(file: sys)
+        print("[aec] mic \(m.count) smp, sys \(r.count) smp — running NLMS…")
+        let t0 = Date()
+        let cleaned = EchoCanceller.cancel(mic: m, ref: r)
+        var ein = 0.0, eout = 0.0
+        for v in m { ein += Double(v * v) }
+        for v in cleaned { eout += Double(v * v) }
+        let erle = 10 * log10(ein / max(eout, 1e-12))
+        // write cleaned wav for offline analysis
+        if let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
+           let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(cleaned.count)) {
+            buf.frameLength = AVAudioFrameCount(cleaned.count)
+            cleaned.withUnsafeBufferPointer { src in buf.floatChannelData![0].update(from: src.baseAddress!, count: cleaned.count) }
+            let outURL = baseURL.deletingPathExtension().appendingPathExtension("aec.wav")
+            if let f = try? AVAudioFile(forWriting: outURL, settings: fmt.settings, commonFormat: .pcmFormatFloat32, interleaved: false) {
+                try? f.write(from: buf)
+                print("[aec] cleaned → \(outURL.lastPathComponent)")
+            }
+        }
+        print("[aec] ✓ \(String(format: "%.1f", Date().timeIntervalSince(t0)))s — mic energy reduced by \(String(format: "%.1f", erle)) dB (echo removed; user speech preserved)")
+        return 0
+    } catch {
+        print("[aec] ❌ \(error)")
+        return 1
+    }
+}
+
 /// Qwen3-ASR (2026, 52 languages incl. Ukrainian) via FluidAudio CoreML.
 @MainActor
 func cmdQwen(path: String, language: String?) async -> Int32 {
@@ -395,6 +431,9 @@ func main() async -> Int32 {
     case "whisper":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
+    case "aec":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdAEC(base: args[2])
     case "qwen":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdQwen(path: args[2], language: args.count > 3 ? args[3] : nil)

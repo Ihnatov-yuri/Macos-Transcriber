@@ -59,6 +59,7 @@ actor GemmaLiteRTBackend: ASRBackend {
                 try await e.initialize()
                 self.engine = e
                 self.isReady = true
+                await InferenceGate.shared.setLitertActive(true)
                 AppLog.info("litert", "engine ready on \(gpu ? "GPU" : "CPU")")
                 return
             } catch {
@@ -77,6 +78,9 @@ actor GemmaLiteRTBackend: ASRBackend {
         engine = nil
         isReady = false
         resetEngineLock()
+        // The wedged call also holds the cross-engine gate — evict it too,
+        // or Whisper/Parakeet stall behind a zombie forever.
+        await InferenceGate.shared.reset()
         try await load(modelPath: modelPath)
     }
 
@@ -86,6 +90,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         // A wedged native call may hold the engine lock forever — the whole
         // point of a rebuild is to move past it. Unblock the queue.
         resetEngineLock()
+        await InferenceGate.shared.setLitertActive(false)
     }
 
     /// Find the .litertlm bundle: explicit file → dir scan → default cache.
@@ -137,6 +142,10 @@ actor GemmaLiteRTBackend: ASRBackend {
         // one engine and must never interleave conversations on it.
         let lockGen = await acquireEngine()
         defer { releaseEngine(lockGen) }
+        // Cross-engine exclusivity: LiteRT's Metal path wedges when another
+        // engine infers concurrently in-process (see InferenceGate).
+        let gateStamp = await InferenceGate.shared.acquire()
+        defer { Task { await InferenceGate.shared.release(gateStamp) } }
 
         let sampler = try SamplerConfig(topK: 1, topP: 0.95, temperature: 0.1)
         let conversation = try await engine.createConversation(with: ConversationConfig(
@@ -217,6 +226,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         }
         let lockGen = await acquireEngine()
         defer { releaseEngine(lockGen) }
+        let gateStamp = await InferenceGate.shared.acquire()
+        defer { Task { await InferenceGate.shared.release(gateStamp) } }
         func attempt() async throws -> String {
             let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)
             let conversation = try await engine.createConversation(with: ConversationConfig(

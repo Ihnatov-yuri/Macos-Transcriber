@@ -117,6 +117,47 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertEqual(EnsembleBackend.roverMerge(a, b), "hello")
     }
 
+    func testRoverJoinTrimsLeadingSpaceSurfaces() {
+        // Parakeet surfaces used to carry the token's leading space,
+        // doubling every separator in the merged text.
+        let a = [ScoredWord(surface: " вони", norm: "вони", confidence: 0.9),
+                 ScoredWord(surface: " зробили", norm: "зробили", confidence: 0.9)]
+        let b = [ScoredWord(surface: "вони", norm: "вони", confidence: 0.5),
+                 ScoredWord(surface: "зробили", norm: "зробили", confidence: 0.5)]
+        XCTAssertEqual(EnsembleBackend.roverMerge(a, b), "вони зробили")
+    }
+
+    func testJoinSurfacesAttachesApostropheFragment() {
+        XCTAssertEqual(
+            EnsembleBackend.joinSurfaces(["Пам", "'ятаєш", "ми", "просили"]),
+            "Пам'ятаєш ми просили")
+    }
+
+    func testRoverLanguagePriorProtectsStrongEngine() {
+        // Whisper's correct Latin entity must survive Parakeet's
+        // higher-raw-confidence Cyrillic misreading when the language prior
+        // marks Parakeet weak (Ukrainian).
+        let whisper = [ScoredWord(surface: "по", norm: "по", confidence: 0.9),
+                       ScoredWord(surface: "NBE", norm: "nbe", confidence: 0.6)]
+        let parakeet = [ScoredWord(surface: "по", norm: "по", confidence: 0.9),
+                        ScoredWord(surface: "ДНБІ", norm: "днбі", confidence: 0.95)]
+        XCTAssertEqual(
+            EnsembleBackend.roverMerge(whisper, parakeet, priorA: 1, priorB: 0.5),
+            "по NBE")
+        // Without the prior the misreading wins — the regression this guards.
+        XCTAssertEqual(EnsembleBackend.roverMerge(whisper, parakeet), "по ДНБІ")
+    }
+
+    func testVotePriorMapsEnginesAndLanguages() {
+        XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeet, languages: ["Ukrainian"]), 0.5)
+        XCTAssertEqual(EnsembleBackend.votePrior(for: .whisper, languages: ["Ukrainian"]), 1)
+        XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeet, languages: ["English"]), 1)
+        XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeetV2, languages: ["Ukrainian"]), 0.5)
+        XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeetV2, languages: ["English"]), 1)
+        // Multi-language / auto runs carry no prior.
+        XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeet, languages: []), 1)
+    }
+
     // MARK: - PostProcessor windowing
 
     func testWindowsRespectMaxAndSplitOversized() {

@@ -74,6 +74,11 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         options.wordTimestamps = true          // per-word probabilities for the merge
         options.language = Self.languageCode(from: languages)
 
+        // While a LiteRT Gemma engine is live, heavy inference is serialized
+        // across engines — concurrent GPU work wedges LiteRT's native call
+        // (see InferenceGate). Pass-through when no Gemma is loaded.
+        let gateStamp = await InferenceGate.shared.acquire()
+        defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
         let text = results.map(\.text)
             .joined(separator: " ")
@@ -85,6 +90,20 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                 for w in segment.words ?? [] {
                     let surface = w.word.trimmingCharacters(in: .whitespaces)
                     guard !surface.isEmpty else { continue }
+                    // WhisperKit starts a new "word" at punctuation, so an
+                    // intra-word apostrophe (Ukrainian "Пам'ятаєш") arrives
+                    // as a separate fragment "'ятаєш". Re-attach it, or the
+                    // merge join renders "Пам 'ятаєш".
+                    if let first = surface.first, "'’ʼ‘".contains(first),
+                       surface.count > 1,
+                       let prevLast = words.last?.surface.last, prevLast.isLetter {
+                        let i = words.count - 1
+                        words[i].surface += surface
+                        words[i].norm = words[i].surface.lowercased()
+                            .filter { $0.isLetter || $0.isNumber }
+                        words[i].confidence = min(words[i].confidence, w.probability)
+                        continue
+                    }
                     words.append(ScoredWord(
                         surface: surface,
                         norm: surface.lowercased().filter { $0.isLetter || $0.isNumber },
@@ -128,7 +147,6 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         case "italian":   return "it"
         case "portuguese": return "pt"
         case "polish":    return "pl"
-        case "russian":   return "ru"
         case "korean":    return "ko"
         case "japanese":  return "ja"
         case "chinese":   return "zh"

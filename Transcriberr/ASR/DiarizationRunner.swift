@@ -149,9 +149,9 @@ final class DiarizationRunner: @unchecked Sendable {
             try? NSRegularExpression(
                 pattern: #"\b(?i:I'?m|I am|My name is|This is)\s+([A-Z][a-zA-Z]{1,30})\b"#
             ),
-            // Ukrainian / Russian self-introductions.
+            // Ukrainian self-introductions.
             try? NSRegularExpression(
-                pattern: #"(?i:мене звати|мене звуть|меня зовут)\s+([А-ЯІЇЄҐ][а-яіїєґё'’]{1,30})"#
+                pattern: #"(?i:мене звати|мене звуть)\s+([А-ЯІЇЄҐ][а-яіїєґ'’]{1,30})"#
             ),
         ].compactMap { $0 }
 

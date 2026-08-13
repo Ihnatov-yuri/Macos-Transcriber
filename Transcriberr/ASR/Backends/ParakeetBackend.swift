@@ -83,6 +83,10 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         // LLM backends — Parakeet transcribes verbatim (translation happens
         // in post-processing via Gemma).
         var state = try TdtDecoderState()
+        // Serialized against a live LiteRT engine (see InferenceGate);
+        // pass-through otherwise.
+        let gateStamp = await InferenceGate.shared.acquire()
+        defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let result = try await manager.transcribe(
             samples,
             decoderState: &state,
@@ -175,6 +179,10 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         }
         guard samples.count >= 8_000 else { return DetailedTranscription(text: "", words: []) }
         var state = try TdtDecoderState()
+        // Serialized against a live LiteRT engine (see InferenceGate);
+        // pass-through otherwise.
+        let gateStamp = await InferenceGate.shared.acquire()
+        defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let result = try await manager.transcribe(
             samples,
             decoderState: &state,
@@ -219,7 +227,12 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         var out: [ScoredWord] = []
         for t in timings {
             let isWordStart = t.token.hasPrefix("▁") || t.token.hasPrefix(" ")
-            let piece = t.token.replacingOccurrences(of: "▁", with: "")
+            // Strip the word-start marker in BOTH spellings: some decoder
+            // paths emit a literal leading space instead of "▁", and leaving
+            // it in the surface produced double spaces in the merged text.
+            let piece = t.token
+                .replacingOccurrences(of: "▁", with: "")
+                .trimmingCharacters(in: .whitespaces)
             guard !piece.isEmpty else { continue }
             if isWordStart || out.isEmpty {
                 out.append(ScoredWord(surface: piece, norm: "", confidence: t.confidence))
@@ -262,7 +275,6 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         case "italian":   return .italian
         case "portuguese": return .portuguese
         case "polish":    return .polish
-        case "russian":   return .russian
         default:          return nil
         }
     }

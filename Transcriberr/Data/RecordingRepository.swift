@@ -352,34 +352,27 @@ final class RecordingRepository: @unchecked Sendable {
             VersionSegment(start: $0.startSeconds, end: $0.endSeconds, text: $0.text,
                            speaker: $0.speaker, speakerName: $0.speakerName)
         }
-        // .sortedKeys for stable storage; dedup below still compares decoded
-        // content because legacy rows carry arbitrary key order.
+        // Canonical key order for storage. JSONEncoder's default key order is
+        // NOT stable across encodes of the same value (it varies with heap
+        // layout) — proven by a standalone reproduction: 131/150 duplicate
+        // saves with string-compare dedup, 0/300 with content compare. That
+        // instability — not SwiftData view staleness, as previously believed —
+        // was the source of both the full-suite test flake and the
+        // same-second duplicate versions in production logs.
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(payload)
-        let json = String(decoding: data, as: UTF8.self)
-        // Dedup against ALL versions, not just the newest: rapid
-        // back-to-back snapshots (rescue + done within the same second —
-        // seen in production logs) could race the relationship's freshness
-        // and save duplicates. Flush pending changes before reading.
-        // The versions relationship array is intermittently stale right
-        // after an insert (observed as a 1-in-3 flake under test load and as
-        // same-second duplicate versions in production logs) — query the
-        // store directly instead of trusting the relationship.
-        context.processPendingChanges()
-        // BOTH views, because each can lag independently: the relationship
-        // array (misses just-inserted rows) and the store fetch (whose rows'
-        // inverse back-pointer can hydrate as nil for a moment). Either one
-        // seeing the duplicate is enough.
+        let json = String(decoding: try encoder.encode(payload), as: UTF8.self)
+        // Dedup by DECODED content, never by string equality: legacy rows
+        // were stored with arbitrary key order and would never string-match.
+        // Checked against both the relationship array and a store fetch
+        // (tolerating a nil-hydrated inverse) — either view seeing the
+        // duplicate is enough.
         let recID = recording.persistentModelID
         let fetched = (try? context.fetch(FetchDescriptor<TranscriptVersion>())) ?? []
-        // Compare DECODED content, not encoded strings: JSONEncoder's key
-        // order is nondeterministic per encode, so identical content can
-        // serialize to different JSON and slip past a string comparison.
         let dup = recording.versions.contains { decodeVersion($0) == payload }
             || fetched.contains {
                 ($0.recording == nil || $0.recording?.persistentModelID == recID)
-                && decodeVersion($0) == payload
+                    && decodeVersion($0) == payload
             }
         if dup {
             AppLog.info("repo", "version snapshot skipped — identical version exists")

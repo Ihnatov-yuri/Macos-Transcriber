@@ -129,12 +129,24 @@ final class RecordModel {
 
             if autoTranscribe {
                 let modelDir: URL? = nil
+                // This is the QUICK PASS: the fast default engine so text
+                // appears right away — NOT the per-recording engine choice
+                // (a 65-min Super run auto-firing would be hostile). Record
+                // that choice on the recording so the session view's engine
+                // picker shows what actually ran instead of implying the
+                // user's preferred engine produced this transcript.
+                let quickBackend = container.uiPrefs.defaultBackend
+                recording.runBackend = quickBackend.rawValue
                 let params = TranscriptionRunner.Params(
                     file: url,
-                    backend: container.uiPrefs.defaultBackend,
+                    backend: quickBackend,
                     modelDirectory: modelDir,
                     languages: liveLanguages,
-                    translateTo: nil
+                    translateTo: nil,
+                    // Meetings without speakers are transcripts without the
+                    // half of the story — the quick pass diarizes too
+                    // (split-track already knows which side is the user).
+                    diarize: wasMeeting
                 )
                 container.jobManager.enqueue(recording, params: params)
             }

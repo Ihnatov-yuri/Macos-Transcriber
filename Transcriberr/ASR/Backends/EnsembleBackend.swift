@@ -147,7 +147,7 @@ actor EnsembleBackend: ASRBackend {
             async let taskA = pa.transcribeDetailed(samples: samples, languages: languages)
             async let taskB = pb.transcribeDetailed(samples: samples, languages: languages)
             if let a = try? await taskA, let b = try? await taskB {
-                return await mergeDetailed(a, b, context: previousContext)
+                return await mergeDetailed(a, b, context: previousContext, languages: languages)
             }
             // fall through to the generic text path on error
         }
@@ -171,10 +171,12 @@ actor EnsembleBackend: ASRBackend {
 
         let similarity = Self.tokenSimilarity(textA, textB)
         if similarity >= 0.85 {
-            AppLog.info("ensemble", String(format: "chunk agreement %.2f — skipping arbiter (A wins)", similarity))
-            return textA
+            let preferA = Self.votePrior(for: kindA, languages: languages)
+                >= Self.votePrior(for: kindB, languages: languages)
+            AppLog.info("ensemble", String(format: "chunk agreement %.2f — skipping arbiter (%@ wins)", similarity, preferA ? "A" : "B"))
+            return preferA ? textA : textB
         }
-        return await gemmaMerge(textA: textA, textB: textB, context: previousContext)
+        return await gemmaMerge(textA: textA, textB: textB, context: previousContext, languages: languages)
     }
 
     // MARK: - Word-level confidence merge (fast path)
@@ -207,13 +209,18 @@ actor EnsembleBackend: ASRBackend {
             if let a = try? await taskA, let b = try? await taskB {
                 if a.text.isEmpty { return RichChunk(text: b.text, agreement: 1, textA: a.text, textB: b.text) }
                 if b.text.isEmpty { return RichChunk(text: a.text, agreement: 1, textA: a.text, textB: b.text) }
+                let priorA = Self.votePrior(for: kindA, languages: languages)
+                let priorB = Self.votePrior(for: kindB, languages: languages)
+                let preferredText = priorA >= priorB ? a.text : b.text
                 let haveWords = !a.words.isEmpty && !b.words.isEmpty
                 let similarity = haveWords
                     ? Self.diceSimilarity(a.words.map(\.norm), b.words.map(\.norm))
                     : Self.tokenSimilarity(a.text, b.text)
-                let voted = haveWords ? Self.roverMerge(a.words, b.words) : a.text
+                let voted = haveWords
+                    ? Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB)
+                    : preferredText
                 return RichChunk(
-                    text: voted.isEmpty ? a.text : voted,
+                    text: voted.isEmpty ? preferredText : voted,
                     agreement: similarity,
                     textA: a.text, textB: b.text
                 )
@@ -230,7 +237,12 @@ actor EnsembleBackend: ASRBackend {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if textA.isEmpty { return RichChunk(text: textB, agreement: 1, textA: textA, textB: textB) }
         if textB.isEmpty { return RichChunk(text: textA, agreement: 1, textA: textA, textB: textB) }
-        return RichChunk(text: textA, agreement: Self.tokenSimilarity(textA, textB), textA: textA, textB: textB)
+        let preferA = Self.votePrior(for: kindA, languages: languages)
+            >= Self.votePrior(for: kindB, languages: languages)
+        return RichChunk(
+            text: preferA ? textA : textB,
+            agreement: Self.tokenSimilarity(textA, textB),
+            textA: textA, textB: textB)
     }
 
     /// Single-engine escape hatch: a chunk whose audio wedges LiteRT twice
@@ -268,10 +280,17 @@ actor EnsembleBackend: ASRBackend {
     private func mergeDetailed(
         _ a: DetailedTranscription,
         _ b: DetailedTranscription,
-        context: String? = nil
+        context: String? = nil,
+        languages: Set<String> = []
     ) async -> String {
         if a.text.isEmpty { return b.text }
         if b.text.isEmpty { return a.text }
+
+        let priorA = Self.votePrior(for: kindA, languages: languages)
+        let priorB = Self.votePrior(for: kindB, languages: languages)
+        // Where a whole-text winner is needed, take the stronger-language
+        // engine's text instead of blindly preferring A.
+        let preferredText = priorA >= priorB ? a.text : b.text
 
         // If either engine returned no scored words (some long-form paths
         // drop token timings), word-level similarity would read 0.00 and
@@ -283,8 +302,8 @@ actor EnsembleBackend: ASRBackend {
             : Self.tokenSimilarity(a.text, b.text)
         if !haveWords {
             AppLog.warn("ensemble", "scored words missing (A=\(a.words.count) B=\(b.words.count)) — text-level gate \(String(format: "%.2f", similarity))")
-            if similarity >= 0.85 { return a.text }
-            return await gemmaMerge(textA: a.text, textB: b.text, context: context)
+            if similarity >= 0.85 { return preferredText }
+            return await gemmaMerge(textA: a.text, textB: b.text, context: context, languages: languages)
         }
         if similarity < 0.5 {
             // Diagnostic for the systematic 0.00-agreement mystery: show what
@@ -292,8 +311,8 @@ actor EnsembleBackend: ASRBackend {
             AppLog.warn("ensemble", "low dice \(String(format: "%.2f", similarity)) — A[0..5]=\(a.words.prefix(5).map(\.norm)) B[0..5]=\(b.words.prefix(5).map(\.norm))")
         }
         if similarity >= 0.999 {
-            AppLog.info("ensemble", String(format: "agreement %.2f — engine A verbatim", similarity))
-            return a.text
+            AppLog.info("ensemble", String(format: "agreement %.2f — preferred engine verbatim", similarity))
+            return preferredText
         }
         // NOTE: no more ≥0.85 verbatim shortcut — a chunk that agrees on all
         // but one word ("OWASP 10" vs "overas 10") is precisely where the
@@ -302,24 +321,27 @@ actor EnsembleBackend: ASRBackend {
         // is the one case worth a slow LLM look — and it's rare.
         if similarity < 0.5, arbiter != nil {
             AppLog.info("ensemble", String(format: "agreement %.2f — hard conflict, Gemma arbitrates", similarity))
-            return await gemmaMerge(textA: a.text, textB: b.text, context: context)
+            return await gemmaMerge(textA: a.text, textB: b.text, context: context, languages: languages)
         }
-        let merged = Self.roverMerge(a.words, b.words)
+        let merged = Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB)
         AppLog.info("ensemble", String(format: "agreement %.2f — confidence-voted merge (%d/%d words → %d)", similarity, a.words.count, b.words.count, merged.split(separator: " ").count))
-        return merged.isEmpty ? a.text : merged
+        return merged.isEmpty ? preferredText : merged
     }
 
     /// ROVER-style two-system merge: align the word sequences (edit-distance
     /// DP over normalized words), then at each divergence keep the reading
-    /// with the higher recognizer confidence. Single-engine insertions
-    /// survive only above a confidence floor. Pure CPU, O(n·m) on ~100-word
-    /// chunks — effectively instant.
+    /// with the higher recognizer confidence, scaled by the per-language
+    /// engine prior. Single-engine insertions survive only above a raw
+    /// confidence floor (the prior governs divergent READINGS, not recall).
+    /// Pure CPU, O(n·m) on ~100-word chunks — effectively instant.
     static func roverMerge(
         _ a: [ScoredWord],
-        _ b: [ScoredWord]
+        _ b: [ScoredWord],
+        priorA: Float = 1,
+        priorB: Float = 1
     ) -> String {
         let n = a.count, m = b.count
-        guard n > 0, m > 0 else { return (n > 0 ? a : b).map(\.surface).joined(separator: " ") }
+        guard n > 0, m > 0 else { return joinSurfaces((n > 0 ? a : b).map(\.surface)) }
         var dp = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
         for i in 0...n { dp[i][0] = i }
         for j in 0...m { dp[0][j] = j }
@@ -336,8 +358,8 @@ actor EnsembleBackend: ASRBackend {
             if i > 0, j > 0,
                dp[i][j] == dp[i-1][j-1] + (a[i-1].norm == b[j-1].norm ? 0 : 1)
             {
-                // Match or substitution → higher-confidence surface wins.
-                reversed.append(a[i-1].confidence >= b[j-1].confidence
+                // Match or substitution → higher prior-weighted confidence wins.
+                reversed.append(a[i-1].confidence * priorA >= b[j-1].confidence * priorB
                                 ? a[i-1].surface : b[j-1].surface)
                 i -= 1; j -= 1
             } else if i > 0, dp[i][j] == dp[i-1][j] + 1 {
@@ -348,7 +370,46 @@ actor EnsembleBackend: ASRBackend {
                 j -= 1
             }
         }
-        return reversed.reversed().joined(separator: " ")
+        return joinSurfaces(reversed.reversed())
+    }
+
+    /// Join word surfaces defensively: trim stray engine whitespace (double
+    /// spaces in the merged text came from Parakeet surfaces with leading
+    /// spaces) and attach apostrophe-led fragments to the previous word
+    /// ("Пам" + "'ятаєш" → "Пам'ятаєш", not "Пам 'ятаєш").
+    static func joinSurfaces(_ surfaces: some Sequence<String>) -> String {
+        var out = ""
+        for raw in surfaces {
+            let w = raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            guard !w.isEmpty else { continue }
+            if out.isEmpty {
+                out = w
+            } else if let first = w.first, "'’ʼ‘".contains(first), w.count > 1,
+                      let last = out.last, last.isLetter {
+                out += w
+            } else {
+                out += " " + w
+            }
+        }
+        return out
+    }
+
+    /// Per-language trust multiplier for the ROVER vote. Parakeet reports
+    /// calibrated-high confidence even in languages it reads poorly, letting
+    /// it outvote Whisper's correct per-word readings (Ukrainian sweep:
+    /// Latin entity "NBE" lost to Cyrillic misreading "ДНБІ"). A 0.5 prior
+    /// means the weak-language engine only wins a divergent word when the
+    /// strong engine's own confidence is genuinely low.
+    static func votePrior(for kind: BackendFactory.Kind, languages: Set<String>) -> Float {
+        guard languages.count == 1, let lang = languages.first?.lowercased() else { return 1 }
+        switch kind {
+        case .parakeetV2 where lang != "english":   // English-specialist model
+            return 0.5
+        case .parakeet where lang == "ukrainian":   // documented weak spot vs Whisper
+            return 0.5
+        default:
+            return 1
+        }
     }
 
     // MARK: - Gemma arbitration (slow path)

@@ -362,8 +362,46 @@ struct DetailView: View {
 
             Spacer().frame(height: AppMetric.s)
             HairlineSoft()
+            Spacer().frame(height: AppMetric.s)
+
+            organizeRow()
+                .padding(.horizontal, AppMetric.sheetPadding)
+
+            Spacer().frame(height: AppMetric.s)
+            HairlineSoft()
             Spacer().frame(height: AppMetric.m)
         }
+    }
+
+    @ViewBuilder
+    private func organizeRow() -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: AppMetric.m) {
+            folderMenu()
+            TagEditorRow(recording: recording)
+        }
+    }
+
+    @ViewBuilder
+    private func folderMenu() -> some View {
+        let folders = (try? container.repository.folders()) ?? []
+        Menu {
+            ForEach(folders.filter { $0.id != recording.folder?.id }, id: \.id) { folder in
+                Button(folder.name) {
+                    try? container.repository.move(recording, to: folder)
+                }
+            }
+            if recording.folder != nil {
+                Divider()
+                Button("Remove from Folder") {
+                    try? container.repository.move(recording, to: nil)
+                }
+            }
+        } label: {
+            Text("FOLDER: \(recording.folder?.name.uppercased() ?? "—") ▾")
+                .monoLabel(9, color: recording.folder == nil ? AppColor.inkSoft : AppColor.accent)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     @ViewBuilder

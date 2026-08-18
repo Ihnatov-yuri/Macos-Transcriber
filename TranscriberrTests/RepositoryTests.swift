@@ -12,8 +12,7 @@ final class RepositoryTests: XCTestCase {
     var tempFiles: [URL] = []
 
     override func setUp() async throws {
-        let schema = Schema([Recording.self, Segment.self, OutputDoc.self,
-                             PendingTask.self, TranscriptVersion.self])
+        let schema = Schema(TranscriberrSchema.models)
         container = try ModelContainer(
             for: schema,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))

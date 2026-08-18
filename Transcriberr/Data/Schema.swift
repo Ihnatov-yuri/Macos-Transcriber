@@ -5,6 +5,20 @@ import SwiftData
 /// Field names and semantics are intentionally identical so the JSON / SRT
 /// sidecars (and their `speakerName` round-trip) stay compatible.
 
+/// Single source of truth for the model list — the app container, tests, and
+/// the read-only KB layer must all open the store with the same schema.
+enum TranscriberrSchema {
+    static let models: [any PersistentModel.Type] = [
+        Recording.self,
+        Segment.self,
+        OutputDoc.self,
+        TranscriptVersion.self,
+        PendingTask.self,
+        Folder.self,
+        Tag.self,
+    ]
+}
+
 @Model
 final class Recording {
     @Attribute(.unique) var id: UUID
@@ -38,6 +52,12 @@ final class Recording {
 
     @Relationship(deleteRule: .cascade, inverse: \TranscriptVersion.recording)
     var versions: [TranscriptVersion] = []
+
+    // Library organization. Inverses are declared on Folder/Tag, so both
+    // sides default to .nullify — deleting a Recording never touches shared
+    // Folders or Tags, and vice versa.
+    var folder: Folder?
+    var tags: [Tag] = []
 
     init(
         id: UUID = UUID(),
@@ -144,6 +164,55 @@ final class OutputDoc {
         self.presetId = presetId
         self.title = title
         self.markdown = markdown
+        self.createdAtMillis = createdAtMillis
+    }
+}
+
+/// Flat user-created folder; a recording lives in at most one.
+/// `name` uniqueness is enforced case-insensitively in the repository, NOT
+/// with `@Attribute(.unique)` — SwiftData unique constraints turn inserts
+/// into silent upserts.
+@Model
+final class Folder {
+    @Attribute(.unique) var id: UUID
+    var name: String
+    var sortOrder: Int
+    var createdAtMillis: Int64
+
+    @Relationship(deleteRule: .nullify, inverse: \Recording.folder)
+    var recordings: [Recording] = []
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        sortOrder: Int = 0,
+        createdAtMillis: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
+    ) {
+        self.id = id
+        self.name = name
+        self.sortOrder = sortOrder
+        self.createdAtMillis = createdAtMillis
+    }
+}
+
+/// Free-form tag; many-to-many with Recording. Same repository-enforced
+/// case-insensitive name uniqueness as Folder.
+@Model
+final class Tag {
+    @Attribute(.unique) var id: UUID
+    var name: String
+    var createdAtMillis: Int64
+
+    @Relationship(deleteRule: .nullify, inverse: \Recording.tags)
+    var recordings: [Recording] = []
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        createdAtMillis: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
+    ) {
+        self.id = id
+        self.name = name
         self.createdAtMillis = createdAtMillis
     }
 }

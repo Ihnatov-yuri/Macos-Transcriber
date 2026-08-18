@@ -43,13 +43,7 @@ final class AppContainer: @unchecked Sendable {
     private(set) var newRecordingRequested = 0
 
     init() {
-        let schema = Schema([
-            Recording.self,
-            Segment.self,
-            OutputDoc.self,
-            TranscriptVersion.self,
-            PendingTask.self,
-        ])
+        let schema = Schema(TranscriberrSchema.models)
         let config = ModelConfiguration("Transcriberr", schema: schema)
         let mc: ModelContainer
         do {

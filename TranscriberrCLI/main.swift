@@ -27,6 +27,8 @@ func usage() {
       transcriberrcli decode <file>        decode to 16k mono Float32 and chunk it
       transcriberrcli noisesup <file>      run the offline noise-suppression pass
       transcriberrcli transcribe <file>    Parakeet v3 ASR on any audio file (downloads models on first run)
+      transcriberrcli kb <subcommand>      query the knowledge base (read-only) — `kb help` for details
+      transcriberrcli mcp                  serve the knowledge base over MCP (stdio, for LLM clients)
       transcriberrcli help                 this message
 
     Each command exits 0 on success, non-zero on failure.
@@ -532,6 +534,10 @@ func main() async -> Int32 {
     case "litert":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdLitert(path: args[2])
+    case "kb":
+        return cmdKB(Array(args.dropFirst(2)))
+    case "mcp":
+        return runMCPServer()
     case "help", "-h", "--help":
         usage()
         return 0

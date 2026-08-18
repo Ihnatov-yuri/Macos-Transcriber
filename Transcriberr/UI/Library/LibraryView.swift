@@ -11,10 +11,14 @@ struct LibraryView: View {
     @Environment(\.modelContext) private var context
     @Environment(AppContainer.self) private var container
     @Query(sort: \Recording.createdAtMillis, order: .reverse) private var all: [Recording]
+    @Query(sort: \Folder.sortOrder) private var allFolders: [Folder]
+    @Query(sort: \Tag.name) private var allTags: [Tag]
 
     @State private var query: String = ""
     @State private var selection: Recording?
     @State private var importError: String?
+    @State private var selectedFolderID: UUID?
+    @State private var selectedTagID: UUID?
 
     private let listColumnWidth: CGFloat = 380
 
@@ -36,6 +40,12 @@ struct LibraryView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AppColor.paper)
+        }
+        .onChange(of: allFolders.map(\.id)) { _, ids in
+            if let sel = selectedFolderID, !ids.contains(sel) { selectedFolderID = nil }
+        }
+        .onChange(of: allTags.map(\.id)) { _, ids in
+            if let sel = selectedTagID, !ids.contains(sel) { selectedTagID = nil }
         }
         .alert("Import failed", isPresented: Binding(
             get: { importError != nil },
@@ -89,6 +99,16 @@ struct LibraryView: View {
                         metricStrip
                         Spacer().frame(height: AppMetric.l)
                         InkRule()
+                        Spacer().frame(height: AppMetric.s)
+
+                        FolderStrip(folders: allFolders, selectedFolderID: $selectedFolderID)
+                            .padding(.horizontal, AppMetric.sheetPadding)
+                        if !allTags.isEmpty {
+                            Spacer().frame(height: 6)
+                            TagFilterMenu(tags: allTags, selectedTagID: $selectedTagID)
+                                .padding(.horizontal, AppMetric.sheetPadding)
+                        }
+
                         Spacer().frame(height: AppMetric.sheetVerticalPadding)
 
                         EyebrowRow("RECORDINGS") {
@@ -190,6 +210,19 @@ struct LibraryView: View {
                         let url = URL(fileURLWithPath: rec.audioPath)
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
+                    Menu("Move to Folder…") {
+                        ForEach(allFolders.filter { $0.id != rec.folder?.id }, id: \.id) { folder in
+                            Button(folder.name) {
+                                try? container.repository.move(rec, to: folder)
+                            }
+                        }
+                        if rec.folder != nil {
+                            Divider()
+                            Button("Remove from Folder") {
+                                try? container.repository.move(rec, to: nil)
+                            }
+                        }
+                    }
                     if rows.count > 1 {
                         Menu("Merge with…") {
                             ForEach(rows.filter { $0.id != rec.id }, id: \.id) { other in
@@ -261,6 +294,12 @@ struct LibraryView: View {
                         Rectangle().fill(AppColor.accent).frame(width: 5, height: 5)
                         Text("TODAY").monoLabel(9, color: AppColor.accent)
                     }
+                    if let folder = rec.folder {
+                        Text("▸ \(folder.name.uppercased())").monoLabel(9, color: AppColor.inkSoft)
+                    }
+                    ForEach(rec.tags.sorted { $0.name < $1.name }, id: \.id) { tag in
+                        Text("#\(tag.name.uppercased())").monoLabel(9, color: AppColor.inkMuted)
+                    }
                     Spacer(minLength: 0)
                 }
             }
@@ -307,9 +346,18 @@ struct LibraryView: View {
     // MARK: - Data
 
     private var filtered: [Recording] {
+        // Folder → tag → search: search always operates within the active
+        // folder/tag scope.
+        var rows = all
+        if let folderID = selectedFolderID {
+            rows = rows.filter { $0.folder?.id == folderID }
+        }
+        if let tagID = selectedTagID {
+            rows = rows.filter { rec in rec.tags.contains { $0.id == tagID } }
+        }
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return all }
-        return all.filter { rec in
+        guard !q.isEmpty else { return rows }
+        return rows.filter { rec in
             rec.title.lowercased().contains(q)
             || rec.segments.contains { $0.text.lowercased().contains(q) }
         }

@@ -480,4 +480,120 @@ final class RecordingRepository: @unchecked Sendable {
         }
         try context.save()
     }
+
+    // MARK: - Folders
+
+    enum OrganizeError: LocalizedError {
+        case emptyName
+        case duplicateName(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .emptyName: return "Name cannot be empty."
+            case .duplicateName(let n): return "'\(n)' already exists."
+            }
+        }
+    }
+
+    func folders() throws -> [Folder] {
+        let descriptor = FetchDescriptor<Folder>(
+            sortBy: [.init(\.sortOrder), .init(\.name)]
+        )
+        return try context.fetch(descriptor)
+    }
+
+    @discardableResult
+    func createFolder(named name: String) throws -> Folder {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw OrganizeError.emptyName }
+        let existing = try folders()
+        if existing.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            throw OrganizeError.duplicateName(trimmed)
+        }
+        let folder = Folder(name: trimmed,
+                            sortOrder: (existing.map(\.sortOrder).max() ?? -1) + 1)
+        context.insert(folder)
+        try context.save()
+        return folder
+    }
+
+    func renameFolder(_ folder: Folder, to name: String) throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw OrganizeError.emptyName }
+        if try folders().contains(where: {
+            $0.id != folder.id && $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            throw OrganizeError.duplicateName(trimmed)
+        }
+        folder.name = trimmed
+        try context.save()
+    }
+
+    /// Recordings survive (nullify delete rule clears their `folder`).
+    func deleteFolder(_ folder: Folder) throws {
+        context.delete(folder)
+        try context.save()
+    }
+
+    /// nil = remove from its folder.
+    func move(_ recording: Recording, to folder: Folder?) throws {
+        recording.folder = folder
+        try context.save()
+    }
+
+    // MARK: - Tags
+
+    func tags() throws -> [Tag] {
+        let descriptor = FetchDescriptor<Tag>(sortBy: [.init(\.name)])
+        return try context.fetch(descriptor)
+    }
+
+    /// Find-or-create by trimmed, case-insensitive name; no-op if already applied.
+    @discardableResult
+    func addTag(named name: String, to recording: Recording) throws -> Tag {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw OrganizeError.emptyName }
+        let tag: Tag
+        if let existing = try tags().first(where: {
+            $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            tag = existing
+        } else {
+            tag = Tag(name: trimmed)
+            context.insert(tag)
+        }
+        if !recording.tags.contains(where: { $0.id == tag.id }) {
+            recording.tags.append(tag)
+        }
+        try context.save()
+        return tag
+    }
+
+    /// Removing the last usage deletes the orphaned Tag so the tag namespace
+    /// stays tidy.
+    func removeTag(_ tag: Tag, from recording: Recording) throws {
+        recording.tags.removeAll { $0.id == tag.id }
+        if tag.recordings.isEmpty {
+            context.delete(tag)
+        }
+        try context.save()
+    }
+
+    /// Diff-based bulk edit: applies exactly `names` (find-or-create each),
+    /// removing anything else and pruning orphans.
+    func setTags(_ names: [String], on recording: Recording) throws {
+        let wanted = names
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let current = recording.tags
+        let stale = current.filter { tag in
+            !wanted.contains { $0.caseInsensitiveCompare(tag.name) == .orderedSame }
+        }
+        for tag in stale {
+            try removeTag(tag, from: recording)
+        }
+        for name in wanted {
+            try addTag(named: name, to: recording)
+        }
+    }
 }

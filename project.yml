@@ -16,7 +16,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: "2.2.6"
+    MARKETING_VERSION: "2.3.0"
 
 # Gemma4Swift transitively brings mlx-swift, mlx-swift-lm, swift-transformers.
 # Sherpa-onnx for diarization (pending diarization-research recommendation).
@@ -116,6 +116,10 @@ targets:
         PRODUCT_NAME: transcriberrcli
         PRODUCT_BUNDLE_IDENTIFIER: nl.ihnatov.TranscriberrCLI
         SWIFT_STRICT_CONCURRENCY: minimal
+        # Find libCLiteRTLM_mac.dylib next to the binary (build products
+        # dir) or in an app bundle's Frameworks if the CLI ever ships
+        # inside Transcriberr.app — without DYLD_LIBRARY_PATH hacks.
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path @executable_path/../Frameworks $(inherited)"
         SWIFT_OBJC_BRIDGING_HEADER: Transcriberr/Transcriberr-Bridging-Header.h
         # Skip the playback / waveform extraction code paths that depend
         # on AVPlayer in the GUI target — easier than carving the audio

@@ -142,6 +142,10 @@ final class RecordingRepository: @unchecked Sendable {
             audioPath: url.path,
             durationSeconds: Double(sa.count + sb.count) / AudioDecoder.sampleRate
         )
+        // Stay where the sources live: merging inside a folder must not eject
+        // the result to the unfiled root (a is the recording the merge was
+        // initiated from, so its folder wins when the two disagree).
+        merged.folder = a.folder ?? b.folder
         try save(merged)
 
         // Remap b's SPEAKER_NN keys past a's highest index.

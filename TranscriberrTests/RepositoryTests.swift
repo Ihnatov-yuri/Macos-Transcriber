@@ -129,6 +129,25 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(b.segments.count, 2)
     }
 
+    func testMergeInheritsFolderFromSources() async throws {
+        let folder = try repo.createFolder(named: "Work")
+        let a = try makeRecording(title: "A", seconds: 1, segs: [(0, 1, "hi", nil, nil)])
+        let b = try makeRecording(title: "B", seconds: 1, segs: [(0, 1, "yo", nil, nil)])
+        try repo.move(a, to: folder)
+        try repo.move(b, to: folder)
+
+        let merged = try await repo.merge(a, b)
+        defer { tempFiles.append(URL(fileURLWithPath: merged.audioPath)) }
+        XCTAssertEqual(merged.folder?.id, folder.id,
+                       "merging two recordings in a folder must file the result there")
+
+        // a unfiled, b filed → b's folder wins as the only one present
+        let c = try makeRecording(title: "C", seconds: 1, segs: [(0, 1, "ok", nil, nil)])
+        let merged2 = try await repo.merge(c, b)
+        defer { tempFiles.append(URL(fileURLWithPath: merged2.audioPath)) }
+        XCTAssertEqual(merged2.folder?.id, folder.id)
+    }
+
     // MARK: - Delete safety
 
     func testClearSegmentsRemovesRows() throws {

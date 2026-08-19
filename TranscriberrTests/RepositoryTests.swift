@@ -129,6 +129,23 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(b.segments.count, 2)
     }
 
+    func testMergeOrdersByCreationTimeNotClickOrder() async throws {
+        let early = try makeRecording(title: "Early", seconds: 1, segs: [(0, 1, "first", nil, nil)])
+        let late = try makeRecording(title: "Late", seconds: 1, segs: [(0, 1, "second", nil, nil)])
+        early.createdAtMillis = 1_000
+        late.createdAtMillis = 2_000
+
+        // Merge initiated FROM the later recording — the earlier one must
+        // still open the merged timeline.
+        let merged = try await repo.merge(late, early)
+        defer { tempFiles.append(URL(fileURLWithPath: merged.audioPath)) }
+        XCTAssertEqual(merged.title, "Early + Late")
+        let sorted = merged.segments.sorted { $0.startSeconds < $1.startSeconds }
+        XCTAssertEqual(sorted.first?.text, "first")
+        XCTAssertEqual(sorted.last?.text, "second")
+        XCTAssertEqual(sorted.last!.startSeconds, 1, accuracy: 0.05)
+    }
+
     func testMergeInheritsFolderFromSources() async throws {
         let folder = try repo.createFolder(named: "Work")
         let a = try makeRecording(title: "A", seconds: 1, segs: [(0, 1, "hi", nil, nil)])

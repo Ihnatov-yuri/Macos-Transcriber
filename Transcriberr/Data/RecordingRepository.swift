@@ -50,6 +50,11 @@ final class RecordingRepository: @unchecked Sendable {
     /// Originals are left untouched.
     @MainActor
     func merge(_ a: Recording, _ b: Recording) async throws -> Recording {
+        // Chronological, not click order: the earlier-created recording is
+        // the first half of the merged timeline — merging 9:03 "with" 9:01
+        // must still play 9:01 first.
+        var a = a, b = b
+        if b.createdAtMillis < a.createdAtMillis { swap(&a, &b) }
         let decoder = AudioDecoder()
         let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: a.audioPath))
         let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: b.audioPath))

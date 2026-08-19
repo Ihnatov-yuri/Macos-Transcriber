@@ -393,13 +393,25 @@ struct LibraryView: View {
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Transcriberr/Recordings", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let dest = dir.appendingPathComponent(src.lastPathComponent)
+        // Never overwrite on name collision: WhatsApp exports (and re-imports
+        // of a same-named file) would silently replace an EARLIER recording's
+        // audio on disk, leaving two library rows playing the same file.
+        // Uniquify with " (n)" instead.
+        var dest = dir.appendingPathComponent(src.lastPathComponent)
+        if src.path != dest.path {
+            let base = src.deletingPathExtension().lastPathComponent
+            let ext = src.pathExtension
+            var n = 2
+            while FileManager.default.fileExists(atPath: dest.path) {
+                var name = "\(base) (\(n))"
+                if !ext.isEmpty { name += ".\(ext)" }
+                dest = dir.appendingPathComponent(name)
+                n += 1
+            }
+        }
 
         do {
             if src.path != dest.path {
-                if FileManager.default.fileExists(atPath: dest.path) {
-                    try FileManager.default.removeItem(at: dest)
-                }
                 try FileManager.default.copyItem(at: src, to: dest)
             }
             let duration = await readDuration(of: dest)
@@ -409,6 +421,11 @@ struct LibraryView: View {
                 audioPath: dest.path,
                 durationSeconds: duration
             )
+            // Importing while a folder is active files the recording there —
+            // otherwise it lands unfiled and is invisible in the current view.
+            if let folderID = selectedFolderID {
+                rec.folder = allFolders.first { $0.id == folderID }
+            }
             try container.repository.save(rec)
             selection = rec
         } catch {

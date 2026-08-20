@@ -111,16 +111,15 @@ final class TranscriptionRunner: @unchecked Sendable {
         // the system track. Crosstalk can't blur identities across files.
         continuation.yield(.stage(text: "Decoding audio…", fraction: 0.02))
         let decoder = AudioDecoder()
-        let micURL = params.file.deletingPathExtension().appendingPathExtension("mic.wav")
-        let sysURL = params.file.deletingPathExtension().appendingPathExtension("sys.wav")
-        let splitTracks = FileManager.default.fileExists(atPath: micURL.path)
-            && FileManager.default.fileExists(atPath: sysURL.path)
+        let micURL = AudioCompressor.sidecarURL(for: params.file, kind: "mic")
+        let sysURL = AudioCompressor.sidecarURL(for: params.file, kind: "sys")
+        let splitTracks = micURL != nil && sysURL != nil
         let samples: [Float]
         let chunks: [AudioDecoder.Chunk]
         let duration: Double
         var micChunkIndices: Set<Int> = []
         do {
-            if splitTracks {
+            if splitTracks, let micURL, let sysURL {
                 var micSamples = try await decoder.decodeAll(file: micURL)
                 let sysSamples = try await decoder.decodeAll(file: sysURL)
                 // Offline AEC: subtract the far side's echo from the mic

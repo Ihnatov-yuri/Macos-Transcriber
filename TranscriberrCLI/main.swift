@@ -438,8 +438,11 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
 @MainActor
 func cmdAEC(base: String) async -> Int32 {
     let baseURL = URL(fileURLWithPath: NSString(string: base).expandingTildeInPath)
-    let mic = baseURL.deletingPathExtension().appendingPathExtension("mic.wav")
-    let sys = baseURL.deletingPathExtension().appendingPathExtension("sys.wav")
+    guard let mic = AudioCompressor.sidecarURL(for: baseURL, kind: "mic"),
+          let sys = AudioCompressor.sidecarURL(for: baseURL, kind: "sys") else {
+        print("[aec] ❌ no mic/sys sidecar found next to \(baseURL.lastPathComponent) (checked .m4a and .wav)")
+        return 1
+    }
     let decoder = AudioDecoder()
     do {
         let m = try await decoder.decodeAll(file: mic)

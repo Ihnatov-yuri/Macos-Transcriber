@@ -212,6 +212,7 @@ final class RecordingRepository: @unchecked Sendable {
     func save(_ recording: Recording) throws {
         context.insert(recording)
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     func delete(_ recording: Recording) throws {
@@ -243,6 +244,15 @@ final class RecordingRepository: @unchecked Sendable {
             context.insert(seg)
             recording.segments.append(seg)
         }
+        // No BackupService call here: this runs on @MainActor once per
+        // transcription CHUNK (JobManager's stream loop) — a codebase this
+        // sensitive to main-thread SwiftData work (see the @MainActor
+        // comment on JobManager.runOne) shouldn't also pay a synchronous
+        // JSON-encode-and-atomic-write per chunk. context.save() above
+        // already gives the live DB the same crash durability every chunk;
+        // the file backup only needs to capture the FINISHED, authoritative
+        // transcript, which snapshotVersion's backupVersion call does at
+        // the end of every run.
         try context.save()
     }
 
@@ -293,6 +303,8 @@ final class RecordingRepository: @unchecked Sendable {
             context.insert(seg)
             recording.segments.append(seg)
         }
+        // No BackupService call here either — same per-chunk MainActor hot
+        // path as appendSegments (the refinement pass's second-pass swap).
         try context.save()
     }
 
@@ -326,6 +338,7 @@ final class RecordingRepository: @unchecked Sendable {
             recording.segments.append(seg)
         }
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     func replaceOutput(_ doc: OutputDoc, for recording: Recording) throws {
@@ -337,6 +350,7 @@ final class RecordingRepository: @unchecked Sendable {
         context.insert(doc)
         recording.outputs.append(doc)
         try context.save()
+        BackupService.backupOutput(doc, recordingId: recording.id)
     }
 
     // MARK: - Transcript versions
@@ -357,6 +371,14 @@ final class RecordingRepository: @unchecked Sendable {
     func snapshotVersion(of recording: Recording, engineId: String, engineLabel: String) throws {
         let sorted = recording.segments.sorted { $0.startSeconds < $1.startSeconds }
         guard !sorted.isEmpty else { return }
+        // A run calls this at most twice (rescue-snapshot the outgoing
+        // transcript, then snapshot the finished one) — unlike
+        // appendSegments/replaceSegmentsInRange, it's never a per-chunk hot
+        // path, so it's the right place to also refresh recording.json with
+        // the transcript's CURRENT state (title/folder/tags/segments),
+        // independent of whether this particular version turns out to be a
+        // dedup no-op below.
+        defer { BackupService.backupRecording(recording) }
         let payload = sorted.map {
             VersionSegment(start: $0.startSeconds, end: $0.endSeconds, text: $0.text,
                            speaker: $0.speaker, speakerName: $0.speakerName)
@@ -397,6 +419,9 @@ final class RecordingRepository: @unchecked Sendable {
         context.insert(version)
         recording.versions.append(version)
         try context.save()
+        BackupService.backupVersion(id: version.id, recordingId: recording.id, engineId: engineId,
+                                     engineLabel: engineLabel, createdAtMillis: version.createdAtMillis,
+                                     segments: payload)
         AppLog.info("repo", "version saved: \(engineId) · \(payload.count) segments")
     }
 
@@ -471,6 +496,7 @@ final class RecordingRepository: @unchecked Sendable {
             recording.speakerNamesJSON = String(decoding: data, as: UTF8.self)
         }
         try context.save()
+        BackupService.backupRecording(recording)
         AppLog.info("repo", "merged speaker \(from) → \(target) in '\(recording.title)'")
     }
 
@@ -488,6 +514,7 @@ final class RecordingRepository: @unchecked Sendable {
             seg.speakerName = name
         }
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     // MARK: - Folders
@@ -548,6 +575,7 @@ final class RecordingRepository: @unchecked Sendable {
     func move(_ recording: Recording, to folder: Folder?) throws {
         recording.folder = folder
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     // MARK: - Tags
@@ -575,6 +603,7 @@ final class RecordingRepository: @unchecked Sendable {
             recording.tags.append(tag)
         }
         try context.save()
+        BackupService.backupRecording(recording)
         return tag
     }
 
@@ -586,6 +615,7 @@ final class RecordingRepository: @unchecked Sendable {
             context.delete(tag)
         }
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     /// Diff-based bulk edit: applies exactly `names` (find-or-create each),

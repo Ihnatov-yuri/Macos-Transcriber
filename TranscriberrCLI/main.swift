@@ -37,6 +37,10 @@ func usage() {
                                             one-time migration: transcode existing WAV recordings
                                             (+ mic/sys sidecars) to AAC, verified before the WAV is
                                             deleted, updates each Recording's audioPath
+      transcriberrcli migrate-echo [--dry-run]
+                                            one-time backfill: rerun offline echo cancellation on
+                                            every meeting recording made before v2.5.2, replacing
+                                            the live-gated mix with a properly echo-cancelled one
       transcriberrcli help                 this message
 
     Each command exits 0 on success, non-zero on failure.
@@ -551,6 +555,8 @@ func main() async -> Int32 {
         return cmdRestoreBackups(dryRun: args.dropFirst(2).contains("--dry-run"))
     case "migrate-audio":
         return await cmdMigrateAudio(dryRun: args.dropFirst(2).contains("--dry-run"))
+    case "migrate-echo":
+        return await cmdMigrateEcho(dryRun: args.dropFirst(2).contains("--dry-run"))
     case "mcp":
         return runMCPServer()
     case "help", "-h", "--help":

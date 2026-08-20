@@ -144,6 +144,11 @@ final class TranscriptionRunner: @unchecked Sendable {
             throw error
         }
         AppLog.info("runner", "decoded \(samples.count) samples = \(Int(duration))s, \(chunks.count) chunks")
+        // Every source file has now been fully read into `samples`/`chunks` —
+        // nothing below touches disk again. Signal it so the caller can
+        // safely compress/rebuild the recording's audio files in the
+        // background without racing this run's (already-finished) reads.
+        continuation.yield(.sourceConsumed)
         continuation.yield(.stage(
             text: "Sliced \(chunks.count) chunks (\(Int(duration))s)",
             fraction: 0.06

@@ -7,9 +7,11 @@ import AVFoundation
 /// snapshot built before `replaceSegments(...)` and a JSON sidecar.
 final class RecordingRepository: @unchecked Sendable {
     private let context: ModelContext
+    private let postProcessTracker: AudioPostProcessTracker
 
-    init(context: ModelContext) {
+    init(context: ModelContext, postProcessTracker: AudioPostProcessTracker = AudioPostProcessTracker()) {
         self.context = context
+        self.postProcessTracker = postProcessTracker
     }
 
     // MARK: - Reads
@@ -55,6 +57,11 @@ final class RecordingRepository: @unchecked Sendable {
         // must still play 9:01 first.
         var a = a, b = b
         if b.createdAtMillis < a.createdAtMillis { swap(&a, &b) }
+        // A just-stopped recording is saved and mergeable before its
+        // background echo-cancel rebuild / AAC compression finishes — wait
+        // either source out so this doesn't read a file mid rebuild/delete.
+        await postProcessTracker.waitUntilIdle(a.id)
+        await postProcessTracker.waitUntilIdle(b.id)
         let decoder = AudioDecoder()
         let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: a.audioPath))
         let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: b.audioPath))
@@ -72,17 +79,16 @@ final class RecordingRepository: @unchecked Sendable {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(
             "merged_\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString.prefix(8)).wav")
-        let file = try AVAudioFile(forWriting: url, settings: fmt.settings,
-                                   commonFormat: .pcmFormatFloat32, interleaved: false)
-        for part in [sa, sb] {
-            guard let buf = AVAudioPCMBuffer(pcmFormat: fmt,
-                                             frameCapacity: AVAudioFrameCount(part.count)) else { continue }
-            buf.frameLength = AVAudioFrameCount(part.count)
-            part.withUnsafeBufferPointer { src in
-                buf.floatChannelData![0].update(from: src.baseAddress!, count: part.count)
-            }
-            try file.write(from: buf)
-        }
+        // Written via the writeWav(...) helper below (not inline) so the
+        // AVAudioFile writer is GUARANTEED closed — by definite function-
+        // return, not by hoping ARC releases a local at its last use —
+        // before anything downstream (AudioCompressor) tries to read the
+        // file back. AVAudioFile only finalizes a WAV's header (the
+        // data-chunk size) when the writer deallocates; reading it any
+        // earlier sees a truncated/zero-length file. Empirically
+        // reproduced: reading immediately after write(), with the writer
+        // still in scope, reports length 0 until the writer is released.
+        try writeWav([sa, sb], to: url)
 
         // Carry the meeting machinery. If BOTH sources have split tracks,
         // the merged recording is itself a full meeting: concatenate the
@@ -111,21 +117,22 @@ final class RecordingRepository: @unchecked Sendable {
                 try f.write(from: buf)
             }
         }
-        let fm = FileManager.default
-        for ext in ["mic.wav", "sys.wav"] {
-            let ua = sidecarURL(a.audioPath, ext)
-            let ub = sidecarURL(b.audioPath, ext)
-            guard fm.fileExists(atPath: ua.path), fm.fileExists(atPath: ub.path) else { continue }
+        for kind in ["mic", "sys"] {
+            // AudioCompressor may have already transcoded either source's
+            // sidecar to .m4a — check that before the pre-migration .wav.
+            guard let ua = AudioCompressor.sidecarURL(for: URL(fileURLWithPath: a.audioPath), kind: kind),
+                  let ub = AudioCompressor.sidecarURL(for: URL(fileURLWithPath: b.audioPath), kind: kind)
+            else { continue }
             do {
                 let ta = aligned(try await decoder.decodeAll(file: ua), to: sa.count)
                 let tb = aligned(try await decoder.decodeAll(file: ub), to: sb.count)
-                try writeWav([ta, tb], to: url.deletingPathExtension().appendingPathExtension(ext))
+                try writeWav([ta, tb], to: url.deletingPathExtension().appendingPathExtension("\(kind).wav"))
             } catch {
                 // A bad sidecar must not fail the whole merge — the mix is
                 // the recording; tracks are an optimization.
-                AppLog.warn("repo", "skipping \(ext) tracks in merge: \(error.localizedDescription)")
+                AppLog.warn("repo", "skipping \(kind) tracks in merge: \(error.localizedDescription)")
                 try? FileManager.default.removeItem(
-                    at: url.deletingPathExtension().appendingPathExtension(ext))
+                    at: url.deletingPathExtension().appendingPathExtension("\(kind).wav"))
             }
         }
         // Me-timeline: union of whatever sides have one, b's shifted.
@@ -142,6 +149,10 @@ final class RecordingRepository: @unchecked Sendable {
             try? data.write(to: url.deletingPathExtension().appendingPathExtension("me.json"))
         }
 
+        // Save with the WAV path FIRST — compressing before the row exists
+        // would widen the crash/quit window between "audio written to
+        // disk" and "the DB knows about it" from a few statements to a
+        // real, multi-second async transcode.
         let merged = Recording(
             title: "\(a.title) + \(b.title)",
             audioPath: url.path,
@@ -152,6 +163,13 @@ final class RecordingRepository: @unchecked Sendable {
         // initiated from, so its folder wins when the two disagree).
         merged.folder = a.folder ?? b.folder
         try save(merged)
+
+        // Reclaim disk space now that every WAV involved is fully written
+        // AND the recording is safely persisted.
+        let finalURL = await AudioCompressor.compressRecordingFiles(mainURL: url, includeSidecars: true)
+        if finalURL != url {
+            try? updateAudioPath(finalURL, for: merged)
+        }
 
         // Remap b's SPEAKER_NN keys past a's highest index.
         var maxIdx = -1
@@ -205,13 +223,26 @@ final class RecordingRepository: @unchecked Sendable {
         if !copies.isEmpty {
             try appendSegments(copies, to: merged)
         }
-        AppLog.info("repo", "merged '\(a.title)' + '\(b.title)' → \(url.lastPathComponent) (\(copies.count) segments)")
+        AppLog.info("repo", "merged '\(a.title)' + '\(b.title)' → \(finalURL.lastPathComponent) (\(copies.count) segments)")
         return merged
     }
 
     func save(_ recording: Recording) throws {
         context.insert(recording)
         try context.save()
+        BackupService.backupRecording(recording)
+    }
+
+    /// Repoints an already-saved recording at a post-write compression
+    /// result (WAV → AAC). Always called AFTER `save(_:)` for that
+    /// recording, never before — compressing before the row exists would
+    /// widen the crash window between "audio written to disk" and "the DB
+    /// knows about it" from a few synchronous statements to a real,
+    /// multi-second async transcode.
+    func updateAudioPath(_ url: URL, for recording: Recording) throws {
+        recording.audioPath = url.path
+        try context.save()
+        BackupService.backupRecording(recording)
     }
 
     func delete(_ recording: Recording) throws {
@@ -243,6 +274,15 @@ final class RecordingRepository: @unchecked Sendable {
             context.insert(seg)
             recording.segments.append(seg)
         }
+        // No BackupService call here: this runs on @MainActor once per
+        // transcription CHUNK (JobManager's stream loop) — a codebase this
+        // sensitive to main-thread SwiftData work (see the @MainActor
+        // comment on JobManager.runOne) shouldn't also pay a synchronous
+        // JSON-encode-and-atomic-write per chunk. context.save() above
+        // already gives the live DB the same crash durability every chunk;
+        // the file backup only needs to capture the FINISHED, authoritative
+        // transcript, which snapshotVersion's backupVersion call does at
+        // the end of every run.
         try context.save()
     }
 
@@ -293,6 +333,8 @@ final class RecordingRepository: @unchecked Sendable {
             context.insert(seg)
             recording.segments.append(seg)
         }
+        // No BackupService call here either — same per-chunk MainActor hot
+        // path as appendSegments (the refinement pass's second-pass swap).
         try context.save()
     }
 
@@ -326,6 +368,7 @@ final class RecordingRepository: @unchecked Sendable {
             recording.segments.append(seg)
         }
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     func replaceOutput(_ doc: OutputDoc, for recording: Recording) throws {
@@ -337,6 +380,7 @@ final class RecordingRepository: @unchecked Sendable {
         context.insert(doc)
         recording.outputs.append(doc)
         try context.save()
+        BackupService.backupOutput(doc, recordingId: recording.id)
     }
 
     // MARK: - Transcript versions
@@ -357,6 +401,14 @@ final class RecordingRepository: @unchecked Sendable {
     func snapshotVersion(of recording: Recording, engineId: String, engineLabel: String) throws {
         let sorted = recording.segments.sorted { $0.startSeconds < $1.startSeconds }
         guard !sorted.isEmpty else { return }
+        // A run calls this at most twice (rescue-snapshot the outgoing
+        // transcript, then snapshot the finished one) — unlike
+        // appendSegments/replaceSegmentsInRange, it's never a per-chunk hot
+        // path, so it's the right place to also refresh recording.json with
+        // the transcript's CURRENT state (title/folder/tags/segments),
+        // independent of whether this particular version turns out to be a
+        // dedup no-op below.
+        defer { BackupService.backupRecording(recording) }
         let payload = sorted.map {
             VersionSegment(start: $0.startSeconds, end: $0.endSeconds, text: $0.text,
                            speaker: $0.speaker, speakerName: $0.speakerName)
@@ -397,6 +449,9 @@ final class RecordingRepository: @unchecked Sendable {
         context.insert(version)
         recording.versions.append(version)
         try context.save()
+        BackupService.backupVersion(id: version.id, recordingId: recording.id, engineId: engineId,
+                                     engineLabel: engineLabel, createdAtMillis: version.createdAtMillis,
+                                     segments: payload)
         AppLog.info("repo", "version saved: \(engineId) · \(payload.count) segments")
     }
 
@@ -471,6 +526,7 @@ final class RecordingRepository: @unchecked Sendable {
             recording.speakerNamesJSON = String(decoding: data, as: UTF8.self)
         }
         try context.save()
+        BackupService.backupRecording(recording)
         AppLog.info("repo", "merged speaker \(from) → \(target) in '\(recording.title)'")
     }
 
@@ -488,6 +544,7 @@ final class RecordingRepository: @unchecked Sendable {
             seg.speakerName = name
         }
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     // MARK: - Folders
@@ -548,6 +605,7 @@ final class RecordingRepository: @unchecked Sendable {
     func move(_ recording: Recording, to folder: Folder?) throws {
         recording.folder = folder
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     // MARK: - Tags
@@ -575,6 +633,7 @@ final class RecordingRepository: @unchecked Sendable {
             recording.tags.append(tag)
         }
         try context.save()
+        BackupService.backupRecording(recording)
         return tag
     }
 
@@ -586,6 +645,7 @@ final class RecordingRepository: @unchecked Sendable {
             context.delete(tag)
         }
         try context.save()
+        BackupService.backupRecording(recording)
     }
 
     /// Diff-based bulk edit: applies exactly `names` (find-or-create each),

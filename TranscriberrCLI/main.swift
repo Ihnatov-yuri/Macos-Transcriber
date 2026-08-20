@@ -29,6 +29,14 @@ func usage() {
       transcriberrcli transcribe <file>    Parakeet v3 ASR on any audio file (downloads models on first run)
       transcriberrcli kb <subcommand>      query the knowledge base (read-only) — `kb help` for details
       transcriberrcli mcp                  serve the knowledge base over MCP (stdio, for LLM clients)
+      transcriberrcli restore-backups [--dry-run]
+                                            re-inject ~/Documents/Transcriberr Backups into the live
+                                            store — fills in anything missing after a crash/corrupt
+                                            store/accidental delete; never overwrites what's already there
+      transcriberrcli migrate-audio [--dry-run]
+                                            one-time migration: transcode existing WAV recordings
+                                            (+ mic/sys sidecars) to AAC, verified before the WAV is
+                                            deleted, updates each Recording's audioPath
       transcriberrcli help                 this message
 
     Each command exits 0 on success, non-zero on failure.
@@ -434,8 +442,11 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
 @MainActor
 func cmdAEC(base: String) async -> Int32 {
     let baseURL = URL(fileURLWithPath: NSString(string: base).expandingTildeInPath)
-    let mic = baseURL.deletingPathExtension().appendingPathExtension("mic.wav")
-    let sys = baseURL.deletingPathExtension().appendingPathExtension("sys.wav")
+    guard let mic = AudioCompressor.sidecarURL(for: baseURL, kind: "mic"),
+          let sys = AudioCompressor.sidecarURL(for: baseURL, kind: "sys") else {
+        print("[aec] ❌ no mic/sys sidecar found next to \(baseURL.lastPathComponent) (checked .m4a and .wav)")
+        return 1
+    }
     let decoder = AudioDecoder()
     do {
         let m = try await decoder.decodeAll(file: mic)
@@ -536,6 +547,10 @@ func main() async -> Int32 {
         return await cmdLitert(path: args[2])
     case "kb":
         return cmdKB(Array(args.dropFirst(2)))
+    case "restore-backups":
+        return cmdRestoreBackups(dryRun: args.dropFirst(2).contains("--dry-run"))
+    case "migrate-audio":
+        return await cmdMigrateAudio(dryRun: args.dropFirst(2).contains("--dry-run"))
     case "mcp":
         return runMCPServer()
     case "help", "-h", "--help":

@@ -123,14 +123,30 @@ final class RecordModel {
             let duration = Double(wasMeeting ? container.meetingRecorder.elapsedMs
                                              : container.recorder.elapsedMs) / 1000
             let title = "\(wasMeeting ? "Meeting" : "Recording") \(DateFormatter.short.string(from: Date()))"
+            // Save with the WAV path FIRST — compressing before the row
+            // exists would widen the crash/quit window between "audio
+            // written to disk" and "the DB knows about it" from a few
+            // synchronous statements to a real, multi-second async
+            // transcode. The recording is fully safe and visible before
+            // any compression happens at all.
             let recording = Recording(title: title, audioPath: url.path, durationSeconds: duration)
             try container.repository.save(recording)
             uiState = .finished(url)
 
+            // Reclaim disk space now that the WAV is fully written, closed,
+            // AND the recording is safely persisted. Runs before
+            // auto-transcribe is enqueued so the job is never handed a path
+            // whose file could be deleted out from under it mid-read.
+            let finalURL = await AudioCompressor.compressRecordingFiles(mainURL: url, includeSidecars: wasMeeting)
+            if finalURL != url {
+                try? container.repository.updateAudioPath(finalURL, for: recording)
+                uiState = .finished(finalURL)
+            }
+
             if autoTranscribe {
                 let modelDir: URL? = nil
                 let params = TranscriptionRunner.Params(
-                    file: url,
+                    file: finalURL,
                     backend: container.uiPrefs.defaultBackend,
                     modelDirectory: modelDir,
                     languages: liveLanguages,

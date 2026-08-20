@@ -199,7 +199,7 @@ final class RecordModel {
         let tracker = container.audioPostProcessTracker
         await tracker.markBusy(recording.id)
         let rebuiltURL = wasMeeting
-            ? await MeetingMixRebuilder.rebuildMix(mainURL: mainURL)
+            ? (await MeetingMixRebuilder.rebuildMix(mainURL: mainURL) ?? mainURL)
             : mainURL
         let finalURL = await AudioCompressor.compressRecordingFiles(mainURL: rebuiltURL, includeSidecars: wasMeeting)
         if finalURL != mainURL {

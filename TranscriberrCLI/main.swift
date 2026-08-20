@@ -33,6 +33,10 @@ func usage() {
                                             re-inject ~/Documents/Transcriberr Backups into the live
                                             store — fills in anything missing after a crash/corrupt
                                             store/accidental delete; never overwrites what's already there
+      transcriberrcli migrate-audio [--dry-run]
+                                            one-time migration: transcode existing WAV recordings
+                                            (+ mic/sys sidecars) to AAC, verified before the WAV is
+                                            deleted, updates each Recording's audioPath
       transcriberrcli help                 this message
 
     Each command exits 0 on success, non-zero on failure.
@@ -545,6 +549,8 @@ func main() async -> Int32 {
         return cmdKB(Array(args.dropFirst(2)))
     case "restore-backups":
         return cmdRestoreBackups(dryRun: args.dropFirst(2).contains("--dry-run"))
+    case "migrate-audio":
+        return await cmdMigrateAudio(dryRun: args.dropFirst(2).contains("--dry-run"))
     case "mcp":
         return runMCPServer()
     case "help", "-h", "--help":

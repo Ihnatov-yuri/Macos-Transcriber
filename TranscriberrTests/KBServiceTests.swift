@@ -9,8 +9,14 @@ import SwiftData
 final class KBServiceTests: XCTestCase {
     var storeURL: URL!
     var recID: UUID!
+    var backupRoot: URL!
 
     override func setUp() async throws {
+        // Redirect BackupService off the user's real backups folder — see
+        // RepositoryTests.setUp for why this is necessary.
+        backupRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("transcriberr-test-backups-\(UUID().uuidString.prefix(6))")
+        setenv("TRANSCRIBERR_BACKUP_ROOT", backupRoot.path, 1)
         storeURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("kbtest_\(UUID().uuidString.prefix(6)).store")
         let schema = Schema(TranscriberrSchema.models)
@@ -52,6 +58,8 @@ final class KBServiceTests: XCTestCase {
             try? FileManager.default.removeItem(
                 at: URL(fileURLWithPath: storeURL.path + suffix))
         }
+        unsetenv("TRANSCRIBERR_BACKUP_ROOT")
+        try? FileManager.default.removeItem(at: backupRoot)
     }
 
     private func openKB() throws -> KBService {

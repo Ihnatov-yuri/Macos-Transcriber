@@ -20,7 +20,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
 
     private let runner: TranscriptionRunner
     private let repository: RecordingRepository
-    private var queue: [(Recording, TranscriptionRunner.Params)] = []
+    private var queue: [(Recording, TranscriptionRunner.Params, (() -> Void)?)] = []
     private var currentJob: Task<Void, Never>?
 
     /// Optional auto-titler. We keep it as a weak indirection so AppContainer
@@ -87,15 +87,22 @@ final class TranscriptionJobManager: @unchecked Sendable {
         await autoTitler?(recording, segments, params)
     }
 
-    func enqueue(_ recording: Recording, params: TranscriptionRunner.Params) {
+    /// `onSourceConsumed` fires exactly once, as soon as the run has fully
+    /// decoded `params.file` (and any sidecars) into memory — the earliest
+    /// safe point for the caller to compress, rebuild, or delete those files
+    /// in the background without racing this job's reads. It also fires if
+    /// the job never gets that far (fails/cancels before decode, or is
+    /// dropped from the queue), so a waiter can never hang forever.
+    func enqueue(_ recording: Recording, params: TranscriptionRunner.Params, onSourceConsumed: (() -> Void)? = nil) {
         statuses[recording.id] = Status(
             id: recording.id, stage: "Queued…", fraction: 0, failed: false, failureReason: nil
         )
-        queue.append((recording, params))
+        queue.append((recording, params, onSourceConsumed))
         drain()
     }
 
     func cancel(_ recordingId: UUID) {
+        for entry in queue where entry.0.id == recordingId { entry.2?() }
         queue.removeAll { $0.0.id == recordingId }
         if statuses[recordingId]?.fraction ?? 0 > 0 {
             currentJob?.cancel()
@@ -105,13 +112,13 @@ final class TranscriptionJobManager: @unchecked Sendable {
 
     private func drain() {
         guard currentJob == nil, !queue.isEmpty else { return }
-        let (recording, params) = queue.removeFirst()
+        let (recording, params, onSourceConsumed) = queue.removeFirst()
         currentJob = Task { @MainActor [weak self] in
             defer {
                 self?.currentJob = nil
                 self?.drain()
             }
-            await self?.runOne(recording: recording, params: params)
+            await self?.runOne(recording: recording, params: params, onSourceConsumed: onSourceConsumed)
         }
     }
 
@@ -120,7 +127,19 @@ final class TranscriptionJobManager: @unchecked Sendable {
     // executor (nonisolated async) — concurrent main-context access crashed
     // SwiftData with dynamicCastFailure mid-run.
     @MainActor
-    private func runOne(recording: Recording, params: TranscriptionRunner.Params) async {
+    private func runOne(recording: Recording, params: TranscriptionRunner.Params, onSourceConsumed: (() -> Void)?) async {
+        // Guaranteed to fire exactly once no matter how the run ends —
+        // normal `.sourceConsumed` event, early throw before decode even
+        // starts, or cancellation — so a caller awaiting it (to know when a
+        // source file is safe to compress/delete) can never hang forever.
+        var consumedFired = false
+        func fireSourceConsumed() {
+            guard !consumedFired else { return }
+            consumedFired = true
+            onSourceConsumed?()
+        }
+        defer { fireSourceConsumed() }
+
         // Rescue snapshot: if the current transcript was never versioned
         // (e.g. produced by an older build), preserve it before wiping —
         // deduped inside snapshotVersion, so post-run snapshots don't double.
@@ -147,6 +166,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         failed: false,
                         failureReason: nil
                     )
+                case .sourceConsumed:
+                    fireSourceConsumed()
                 case .partialText:
                     continue
                 case .segments(_, let raws):

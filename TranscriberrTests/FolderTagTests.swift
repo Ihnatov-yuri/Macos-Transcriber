@@ -8,6 +8,7 @@ import SwiftData
 final class FolderTagTests: XCTestCase {
     var container: ModelContainer!
     var repo: RecordingRepository!
+    var backupRoot: URL!
 
     override func setUp() async throws {
         let schema = Schema(TranscriberrSchema.models)
@@ -15,6 +16,16 @@ final class FolderTagTests: XCTestCase {
             for: schema,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         repo = RecordingRepository(context: container.mainContext)
+        // Redirect BackupService off the user's real backups folder — see
+        // RepositoryTests.setUp for why this is necessary.
+        backupRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("transcriberr-test-backups-\(UUID().uuidString.prefix(6))")
+        setenv("TRANSCRIBERR_BACKUP_ROOT", backupRoot.path, 1)
+    }
+
+    override func tearDown() async throws {
+        unsetenv("TRANSCRIBERR_BACKUP_ROOT")
+        try? FileManager.default.removeItem(at: backupRoot)
     }
 
     private func makeRecording(_ title: String) throws -> Recording {

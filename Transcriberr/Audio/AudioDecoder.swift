@@ -61,6 +61,12 @@ struct AudioDecoder: Sendable {
             floats.reserveCapacity(Int(Self.sampleRate * 60))
 
             while reader.status == .reading, let sample = output.copyNextSampleBuffer() {
+                // Checked every sample buffer, not just once up front: a
+                // long recording's decode can take real wall-clock time, and
+                // a caller (e.g. a cancelled transcription job) relies on
+                // this to actually stop touching disk promptly rather than
+                // reading to completion after cancellation was requested.
+                try Task.checkCancellation()
                 guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
                 let length = CMBlockBufferGetDataLength(block)
                 guard length > 0 else { continue }
@@ -79,6 +85,11 @@ struct AudioDecoder: Sendable {
                 throw DecoderError.readerFailed(reader.error?.localizedDescription ?? "unknown")
             }
             return floats
+        } catch is CancellationError {
+            // Must propagate, not fall back — the AVAudioFile path below
+            // would just resume reading the same file from disk, defeating
+            // the whole point of cancelling.
+            throw CancellationError()
         } catch {
             // AVAssetReader refuses some containers/codecs (notably Opus from
             // Teams/Discord, and our own freshly-written WAVs). AVAudioFile +

@@ -123,25 +123,90 @@ final class RecordModel {
             let duration = Double(wasMeeting ? container.meetingRecorder.elapsedMs
                                              : container.recorder.elapsedMs) / 1000
             let title = "\(wasMeeting ? "Meeting" : "Recording") \(DateFormatter.short.string(from: Date()))"
+            // Save with the WAV path FIRST — compressing before the row
+            // exists would widen the crash/quit window between "audio
+            // written to disk" and "the DB knows about it" from a few
+            // synchronous statements to a real, multi-second async
+            // transcode. The recording is fully safe and visible before
+            // any compression happens at all.
             let recording = Recording(title: title, audioPath: url.path, durationSeconds: duration)
             try container.repository.save(recording)
             uiState = .finished(url)
 
+            // Echo-cancel rebuild + AAC compression run in the BACKGROUND,
+            // never awaited here — they used to block this function (and,
+            // when autoTranscribe was on, block transcription from even
+            // starting), so pressing Stop looked hung for however long that
+            // took. TranscriptionRunner decodes the whole file into memory
+            // up front regardless of format, so it doesn't need the
+            // compressed/rebuilt version — it can start on the raw WAV
+            // immediately. Post-processing only has to wait until that
+            // decode is done (signaled via onSourceConsumed), not until
+            // transcription finishes, so it never races the job's reads.
+            //
+            // The work itself is anchored to `container` (app-lifetime), NOT
+            // to `self` — RecordModel is view-scoped `@State` and would
+            // otherwise silently drop this work (never compressing/rebuilding,
+            // no error, nothing) the moment the user leaves the Record screen
+            // while it's still running. `self` is only used afterward, best-
+            // effort, to refresh the on-screen state if the view is still around.
+            let container = container
             if autoTranscribe {
-                let modelDir: URL? = nil
                 let params = TranscriptionRunner.Params(
                     file: url,
                     backend: container.uiPrefs.defaultBackend,
-                    modelDirectory: modelDir,
+                    modelDirectory: nil,
                     languages: liveLanguages,
                     translateTo: nil
                 )
-                container.jobManager.enqueue(recording, params: params)
+                let jobManager = container.jobManager
+                Task { @MainActor [weak self] in
+                    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                        jobManager.enqueue(recording, params: params) { cont.resume() }
+                    }
+                    let finalURL = await Self.finishPostProcessing(
+                        container: container, recording: recording, mainURL: url, wasMeeting: wasMeeting)
+                    if let self, finalURL != url, self.uiState == .finished(url) {
+                        self.uiState = .finished(finalURL)
+                    }
+                }
+            } else {
+                Task { @MainActor [weak self] in
+                    let finalURL = await Self.finishPostProcessing(
+                        container: container, recording: recording, mainURL: url, wasMeeting: wasMeeting)
+                    if let self, finalURL != url, self.uiState == .finished(url) {
+                        self.uiState = .finished(finalURL)
+                    }
+                }
             }
         } catch {
             lastError = error.localizedDescription
             uiState = .idle
         }
+    }
+
+    /// Rebuilds the meeting mix with offline echo cancellation (no-op for a
+    /// plain recording) and reclaims disk space via AAC compression, then
+    /// repoints the saved `Recording` at whatever file survived. Only ever
+    /// called after it's safe to mutate the recording's files — either
+    /// nothing is reading them (auto-transcribe off) or the transcription
+    /// job has finished decoding them (auto-transcribe on). Static, and
+    /// takes `container` explicitly, so it runs to completion independent of
+    /// whether the `RecordModel` that started it is still alive.
+    private static func finishPostProcessing(
+        container: AppContainer, recording: Recording, mainURL: URL, wasMeeting: Bool
+    ) async -> URL {
+        let tracker = container.audioPostProcessTracker
+        await tracker.markBusy(recording.id)
+        let rebuiltURL = wasMeeting
+            ? await MeetingMixRebuilder.rebuildMix(mainURL: mainURL)
+            : mainURL
+        let finalURL = await AudioCompressor.compressRecordingFiles(mainURL: rebuiltURL, includeSidecars: wasMeeting)
+        if finalURL != mainURL {
+            try? container.repository.updateAudioPath(finalURL, for: recording)
+        }
+        await tracker.markIdle(recording.id)
+        return finalURL
     }
 }
 

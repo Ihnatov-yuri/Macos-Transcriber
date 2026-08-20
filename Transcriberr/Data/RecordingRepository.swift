@@ -7,9 +7,11 @@ import AVFoundation
 /// snapshot built before `replaceSegments(...)` and a JSON sidecar.
 final class RecordingRepository: @unchecked Sendable {
     private let context: ModelContext
+    private let postProcessTracker: AudioPostProcessTracker
 
-    init(context: ModelContext) {
+    init(context: ModelContext, postProcessTracker: AudioPostProcessTracker = AudioPostProcessTracker()) {
         self.context = context
+        self.postProcessTracker = postProcessTracker
     }
 
     // MARK: - Reads
@@ -55,6 +57,11 @@ final class RecordingRepository: @unchecked Sendable {
         // must still play 9:01 first.
         var a = a, b = b
         if b.createdAtMillis < a.createdAtMillis { swap(&a, &b) }
+        // A just-stopped recording is saved and mergeable before its
+        // background echo-cancel rebuild / AAC compression finishes — wait
+        // either source out so this doesn't read a file mid rebuild/delete.
+        await postProcessTracker.waitUntilIdle(a.id)
+        await postProcessTracker.waitUntilIdle(b.id)
         let decoder = AudioDecoder()
         let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: a.audioPath))
         let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: b.audioPath))

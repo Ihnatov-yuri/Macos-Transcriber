@@ -17,6 +17,10 @@ final class AppContainer: @unchecked Sendable {
     // MARK: - Persistence
     let modelContainer: ModelContainer
     let repository: RecordingRepository
+    /// Shared with `RecordModel`'s background post-processing task so
+    /// `RecordingRepository.merge` can wait out an in-flight rebuild/compress
+    /// on either source recording instead of racing its file reads.
+    let audioPostProcessTracker = AudioPostProcessTracker()
 
     // MARK: - Stores (persistent preferences)
     let gemmaSettings: GemmaSettingsStore
@@ -58,7 +62,10 @@ final class AppContainer: @unchecked Sendable {
         // the repository mutating view-context objects from a parallel
         // context — a silent no-op in SwiftData. One shared context ends
         // that entire class.
-        repository = RecordingRepository(context: MainActor.assumeIsolated { mc.mainContext })
+        repository = RecordingRepository(
+            context: MainActor.assumeIsolated { mc.mainContext },
+            postProcessTracker: audioPostProcessTracker
+        )
 
         gemmaSettings = GemmaSettingsStore()
         promptStore   = PromptStore()

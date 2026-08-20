@@ -93,6 +93,10 @@ extension ASRBackend {
 
 enum ASREvent: Sendable {
     case stage(text: String, fraction: Double)
+    /// Emitted once decode finishes — every sample the run needs is now in
+    /// memory, so `params.file` (and any `.mic`/`.sys` sidecars) is safe for
+    /// the caller to compress, rebuild, or delete without racing this run.
+    case sourceConsumed
     case partialText(String)
     /// Emitted after each chunk finishes — caller should append these to the
     /// recording immediately so the user sees text appear live.

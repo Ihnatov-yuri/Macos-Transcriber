@@ -150,6 +150,15 @@ final class TranscriptionJobManager: @unchecked Sendable {
         }
         recording.transcribedWithBackend = params.backend.rawValue
         recording.translateToEnglish = (params.translateTo == "English")
+        // Lock the language actually used for THIS run onto the recording
+        // itself, rather than leaving Library/Detail to fall back to the
+        // global "last selected" picker — which may have since moved on to
+        // a different recording and would then show the wrong language for
+        // this one. Empty (auto) or multi-language hints leave sourceLanguage
+        // nil: there's no detected-language signal to report, and a set of
+        // hints isn't a single language, so neither is safe to claim as fact.
+        recording.runLanguages = params.languages.isEmpty ? nil : params.languages.sorted().joined(separator: ",")
+        recording.sourceLanguage = params.languages.count == 1 ? params.languages.first : nil
         AppLog.info("job", "starting recording=\(recording.id.uuidString) backend=\(params.backend.rawValue)")
 
         var wipedOldTranscript = false

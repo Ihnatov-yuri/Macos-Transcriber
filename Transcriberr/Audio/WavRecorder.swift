@@ -71,6 +71,16 @@ final class WavRecorder: @unchecked Sendable {
     private(set) var chunks: AsyncStream<Chunk>
 
     init() {
+        chunks = AsyncStream<Chunk> { _ in }
+        makeChunkStream()
+    }
+
+    /// `stop()` permanently finishes the chunk continuation (an `AsyncStream`
+    /// can't be un-finished), so every `start()` needs a fresh stream —
+    /// otherwise live transcription silently stops working from the second
+    /// recording of the app session onward (yields into a finished
+    /// continuation are just dropped, no error).
+    private func makeChunkStream() {
         var continuation: AsyncStream<Chunk>.Continuation!
         self.chunks = AsyncStream<Chunk> { continuation = $0 }
         self.chunkContinuation = continuation
@@ -123,6 +133,7 @@ final class WavRecorder: @unchecked Sendable {
         pauseBeganAt = nil
         level = 0
         peakHistory = Array(repeating: 0, count: 64)
+        makeChunkStream()
         ioQueue.sync {
             chunkBuffer.removeAll(keepingCapacity: true)
             pendingInputs.removeAll(keepingCapacity: true)

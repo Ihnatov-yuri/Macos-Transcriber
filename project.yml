@@ -23,13 +23,13 @@ settings:
 packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    from: 0.14.0
+    exactVersion: 0.14.6
   WhisperKit:
     url: https://github.com/argmaxinc/WhisperKit
     from: 0.9.0
   LiteRTLM:
     url: https://github.com/google-ai-edge/LiteRT-LM
-    from: 0.12.0
+    exactVersion: 0.15.0
 
 targets:
   TranscriberrTests:

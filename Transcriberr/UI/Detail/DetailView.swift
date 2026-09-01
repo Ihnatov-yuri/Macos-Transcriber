@@ -14,6 +14,7 @@ struct DetailView: View {
     @State private var runExpanded = false
     @State private var editingSegment: Segment?
     @State private var renamingSpeaker: String?
+    @State private var showingSplit = false
 
     enum Tab: String, CaseIterable, Identifiable {
         case transcript, summary, minutes, clean, translate, context, versions
@@ -90,6 +91,23 @@ struct DetailView: View {
                     recording: recording,
                     container: container
                 ) { renamingSpeaker = nil }
+            }
+        }
+        .sheet(isPresented: $showingSplit) {
+            SplitRecordingSheet(
+                recording: recording,
+                container: container,
+                // The player is a single shared instance whose currentTime
+                // isn't reset synchronously on load(url:) — if the user just
+                // switched recordings, it can still read a moment from the
+                // PREVIOUS one until the first time-observer tick lands.
+                // Falling back to 0 rather than trusting a value that might
+                // not even fit this recording's duration.
+                initialSeconds: container.audioPlayer.currentTime < recording.durationSeconds
+                    ? container.audioPlayer.currentTime : 0
+            ) { deletedOriginal in
+                showingSplit = false
+                if deletedOriginal { onClose() }
             }
         }
     }
@@ -308,6 +326,11 @@ struct DetailView: View {
                 Button("Re-export sidecars") {
                     try? TranscriptExporter.export(recording: recording)
                 }
+                Divider()
+                Button("Split recording…") {
+                    showingSplit = true
+                }
+                .disabled(model?.isRunning ?? false)
                 Divider()
                 Button("Rename recording…") {
                     renameRecordingPrompt()

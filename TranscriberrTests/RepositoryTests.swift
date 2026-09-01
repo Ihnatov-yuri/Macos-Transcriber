@@ -51,6 +51,24 @@ final class RepositoryTests: XCTestCase {
         return url
     }
 
+    /// Writes a `<base>.<suffix>` sidecar (e.g. "mic.wav", "sys.wav") next to
+    /// an already-created main audio file, so split()'s sidecar-cutting path
+    /// (otherwise unreachable — `AudioCompressor.sidecarURL` returns nil
+    /// without one) actually runs in a test.
+    private func makeSidecarWav(seconds: Double, suffix: String, of mainURL: URL) throws {
+        let url = mainURL.deletingPathExtension().appendingPathExtension(suffix)
+        let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                channels: 1, interleaved: false)!
+        let f = try AVAudioFile(forWriting: url, settings: fmt.settings,
+                                commonFormat: .pcmFormatFloat32, interleaved: false)
+        let frames = AVAudioFrameCount(seconds * 16_000)
+        let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames)!
+        buf.frameLength = frames
+        for i in 0..<Int(frames) { buf.floatChannelData![0][i] = sin(Float(i) * 0.07) * 0.1 }
+        try f.write(from: buf)
+        tempFiles.append(url)
+    }
+
     private func makeRecording(title: String, seconds: Double,
                                segs: [(Double, Double, String, String?, String?)]) throws -> Recording {
         let wav = try makeWav(seconds: seconds)
@@ -174,6 +192,184 @@ final class RepositoryTests: XCTestCase {
         let merged2 = try await repo.merge(c, b)
         defer { tempFiles.append(URL(fileURLWithPath: merged2.audioPath)) }
         XCTAssertEqual(merged2.folder?.id, folder.id)
+    }
+
+    // MARK: - Split recording (inverse of merge, "cut in two" action)
+
+    func testSplitProducesTwoRecordingsAtMidpoint() async throws {
+        let rec = try makeRecording(title: "Meeting", seconds: 4, segs: [
+            (0, 1, "a", "ME", "Yuri"),
+            (1, 2, "b", "SPEAKER_00", "Len"),
+            (2, 3, "c", "ME", "Yuri"),
+            (3, 4, "d", "SPEAKER_00", "Len"),
+        ])
+        let (first, second) = try await repo.split(rec, atSeconds: 2.0)
+        defer {
+            tempFiles.append(URL(fileURLWithPath: first.audioPath))
+            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+        }
+
+        XCTAssertEqual(first.title, "Meeting (1)")
+        XCTAssertEqual(second.title, "Meeting (2)")
+        XCTAssertEqual(first.durationSeconds, 2, accuracy: 0.05)
+        XCTAssertEqual(second.durationSeconds, 2, accuracy: 0.05)
+
+        XCTAssertEqual(first.segments.count, 2)
+        XCTAssertEqual(second.segments.count, 2)
+        let firstSorted = first.segments.sorted { $0.startSeconds < $1.startSeconds }
+        let secondSorted = second.segments.sorted { $0.startSeconds < $1.startSeconds }
+        XCTAssertEqual(firstSorted.map(\.text), ["a", "b"])
+        XCTAssertEqual(secondSorted.map(\.text), ["c", "d"])
+        // second's timeline is re-based to start at 0
+        XCTAssertEqual(secondSorted[0].startSeconds, 0, accuracy: 0.05)
+        XCTAssertEqual(secondSorted[1].startSeconds, 1, accuracy: 0.05)
+        // speaker keys carry over as-is — no remap needed, unlike merge
+        // (both halves share the same source timeline).
+        XCTAssertEqual(secondSorted[0].speaker, "ME")
+        XCTAssertEqual(secondSorted[0].speakerName, "Yuri")
+
+        // source is untouched
+        XCTAssertEqual(rec.segments.count, 4)
+
+        // "(2)" is not left to a coin-flip clock read: it deterministically
+        // sorts below "(1)" in the newest-first library list.
+        XCTAssertGreaterThan(first.createdAtMillis, second.createdAtMillis)
+    }
+
+    func testSplitPreservesSegmentLanguageAndRunSettings() async throws {
+        let rec = try makeRecording(title: "Meeting", seconds: 4, segs: [
+            (0, 2, "hallo", "ME", "Yuri"),
+            (2, 4, "hi", "SPEAKER_00", "Len"),
+        ])
+        // SwiftData relationship arrays aren't guaranteed to preserve
+        // insertion order — target by content, not .first/.last, or this
+        // flakes under a full-suite run interleaved with other tests.
+        rec.segments.first { $0.text == "hallo" }?.language = "nl"
+        rec.segments.first { $0.text == "hi" }?.language = "en"
+        rec.runBackend = "whisper"
+        rec.runLanguages = "nl,en"
+        rec.runDiarize = true
+        rec.runHybridDiarize = true
+        rec.runExpectedSpeakers = 4
+        rec.runSpeakersExact = true
+
+        let (first, second) = try await repo.split(rec, atSeconds: 2.0)
+        defer {
+            tempFiles.append(URL(fileURLWithPath: first.audioPath))
+            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+        }
+
+        XCTAssertEqual(first.segments.first?.language, "nl")
+        XCTAssertEqual(second.segments.first?.language, "en")
+
+        for half in [first, second] {
+            XCTAssertEqual(half.runBackend, "whisper")
+            XCTAssertEqual(half.runLanguages, "nl,en")
+            XCTAssertEqual(half.runDiarize, true)
+            XCTAssertEqual(half.runHybridDiarize, true)
+            XCTAssertEqual(half.runExpectedSpeakers, 4)
+            XCTAssertEqual(half.runSpeakersExact, true)
+        }
+    }
+
+    func testSplitCutsSidecarTracksAndMeTimeline() async throws {
+        let wav = try makeWav(seconds: 4)
+        try makeSidecarWav(seconds: 4, suffix: "mic.wav", of: wav)
+        try makeSidecarWav(seconds: 4, suffix: "sys.wav", of: wav)
+        let meURL = wav.deletingPathExtension().appendingPathExtension("me.json")
+        // [0,1] lands wholly before the cut; [1.5,2.5] straddles it;
+        // [3,4] lands wholly after.
+        let meIntervals: [[Double]] = [[0, 1], [1.5, 2.5], [3, 4]]
+        try JSONEncoder().encode(meIntervals).write(to: meURL)
+        tempFiles.append(meURL)
+
+        let rec = Recording(title: "Meeting", audioPath: wav.path, durationSeconds: 4)
+        try repo.save(rec)
+
+        let (first, second) = try await repo.split(rec, atSeconds: 2.0)
+        defer {
+            tempFiles.append(URL(fileURLWithPath: first.audioPath))
+            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+        }
+
+        for kind in AudioCompressor.sidecarKinds {
+            XCTAssertNotNil(AudioCompressor.sidecarURL(for: URL(fileURLWithPath: first.audioPath), kind: kind),
+                            "first half must keep its \(kind) track")
+            XCTAssertNotNil(AudioCompressor.sidecarURL(for: URL(fileURLWithPath: second.audioPath), kind: kind),
+                            "second half must keep its \(kind) track")
+        }
+
+        func readMeIntervals(of r: Recording) -> [[Double]] {
+            let url = URL(fileURLWithPath: r.audioPath).deletingPathExtension().appendingPathExtension("me.json")
+            guard let d = try? Data(contentsOf: url) else { return [] }
+            return (try? JSONDecoder().decode([[Double]].self, from: d)) ?? []
+        }
+        let firstMe = readMeIntervals(of: first).sorted { $0[0] < $1[0] }
+        let secondMe = readMeIntervals(of: second).sorted { $0[0] < $1[0] }
+
+        // [0,1] whole, plus the straddling interval clipped to [1.5,2].
+        XCTAssertEqual(firstMe.count, 2)
+        XCTAssertEqual(firstMe[0][0], 0, accuracy: 0.05)
+        XCTAssertEqual(firstMe[0][1], 1, accuracy: 0.05)
+        XCTAssertEqual(firstMe[1][0], 1.5, accuracy: 0.05)
+        XCTAssertEqual(firstMe[1][1], 2.0, accuracy: 0.05)
+
+        // the straddling interval's tail, clipped to [0,0.5], plus [3,4]
+        // shifted to [1,2].
+        XCTAssertEqual(secondMe.count, 2)
+        XCTAssertEqual(secondMe[0][0], 0, accuracy: 0.05)
+        XCTAssertEqual(secondMe[0][1], 0.5, accuracy: 0.05)
+        XCTAssertEqual(secondMe[1][0], 1.0, accuracy: 0.05)
+        XCTAssertEqual(secondMe[1][1], 2.0, accuracy: 0.05)
+    }
+
+    func testSplitAssignsStraddlingSegmentByMidpoint() async throws {
+        let rec = try makeRecording(title: "T", seconds: 4, segs: [
+            (0, 1.5, "before", nil, nil),
+            (1.5, 2.5, "straddle", nil, nil),
+            (2.5, 4, "after", nil, nil),
+        ])
+        let (first, second) = try await repo.split(rec, atSeconds: 2.0)
+        defer {
+            tempFiles.append(URL(fileURLWithPath: first.audioPath))
+            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+        }
+        // Text can't be sliced — the straddling segment's MIDPOINT (2.0)
+        // lands on the second half whole, clamped to start at 0.
+        XCTAssertEqual(first.segments.map(\.text), ["before"])
+        XCTAssertEqual(Set(second.segments.map(\.text)), ["straddle", "after"])
+        let straddle = try XCTUnwrap(second.segments.first { $0.text == "straddle" })
+        XCTAssertEqual(straddle.startSeconds, 0, accuracy: 0.05)
+        XCTAssertEqual(straddle.endSeconds, 0.5, accuracy: 0.05)
+    }
+
+    func testSplitRejectsPointNearEitherEdge() async throws {
+        let rec = try makeRecording(title: "Short", seconds: 1, segs: [(0, 1, "hi", nil, nil)])
+        do {
+            _ = try await repo.split(rec, atSeconds: 0.9)
+            XCTFail("a split point within 0.25s of either edge must be rejected")
+        } catch RecordingRepository.SplitError.pointOutsideRecording {
+            // expected — both halves must stay non-trivial
+        } catch {
+            XCTFail("expected SplitError.pointOutsideRecording, got \(error)")
+        }
+    }
+
+    func testSplitInheritsFolderAndTags() async throws {
+        let folder = try repo.createFolder(named: "Work")
+        let rec = try makeRecording(title: "T", seconds: 2, segs: [(0, 1, "a", nil, nil), (1, 2, "b", nil, nil)])
+        try repo.move(rec, to: folder)
+        try repo.addTag(named: "urgent", to: rec)
+
+        let (first, second) = try await repo.split(rec, atSeconds: 1.0)
+        defer {
+            tempFiles.append(URL(fileURLWithPath: first.audioPath))
+            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+        }
+        XCTAssertEqual(first.folder?.id, folder.id)
+        XCTAssertEqual(second.folder?.id, folder.id)
+        XCTAssertTrue(first.tags.contains { $0.name == "urgent" })
+        XCTAssertTrue(second.tags.contains { $0.name == "urgent" })
     }
 
     // MARK: - Backup shadow (file-based, independent of the SwiftData store)

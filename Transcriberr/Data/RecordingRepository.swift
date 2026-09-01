@@ -44,6 +44,46 @@ final class RecordingRepository: @unchecked Sendable {
 
     // MARK: - Writes
 
+    // MARK: Shared merge()/split() audio helpers
+
+    /// `<base>.<ext>` sibling of `path` — e.g. the `.mic.wav` or `.me.json`
+    /// sidecar path for a recording's main audio file.
+    private func sidecarPath(_ path: String, _ ext: String) -> URL {
+        URL(fileURLWithPath: path).deletingPathExtension().appendingPathExtension(ext)
+    }
+
+    /// Pad with silence or truncate `samples` to exactly `count` — sidecar
+    /// tracks are independently recorded streams and can drift a handful of
+    /// samples from the mix they're meant to align with.
+    private func aligned(_ samples: [Float], to count: Int) -> [Float] {
+        if samples.count == count { return samples }
+        if samples.count > count { return Array(samples.prefix(count)) }
+        return samples + [Float](repeating: 0, count: count - samples.count)
+    }
+
+    /// Concatenates `parts` (in order) into a fresh mono WAV at `target`.
+    /// The AVAudioFile writer is GUARANTEED closed — by definite function-
+    /// return, not by hoping ARC releases a local at its last use — before
+    /// anything downstream (AudioCompressor, a caller re-reading the file)
+    /// tries to read it back. AVAudioFile only finalizes a WAV's header (the
+    /// data-chunk size) when the writer deallocates; reading it any earlier
+    /// sees a truncated/zero-length file. Empirically reproduced: reading
+    /// immediately after write(), with the writer still in scope, reports
+    /// length 0 until the writer is released.
+    private func writeWav(_ parts: [ArraySlice<Float>], to target: URL, format fmt: AVAudioFormat) throws {
+        let f = try AVAudioFile(forWriting: target, settings: fmt.settings,
+                                commonFormat: .pcmFormatFloat32, interleaved: false)
+        for part in parts where !part.isEmpty {
+            guard let buf = AVAudioPCMBuffer(pcmFormat: fmt,
+                                             frameCapacity: AVAudioFrameCount(part.count)) else { continue }
+            buf.frameLength = AVAudioFrameCount(part.count)
+            part.withUnsafeBufferPointer { src in
+                buf.floatChannelData![0].update(from: src.baseAddress!, count: part.count)
+            }
+            try f.write(from: buf)
+        }
+    }
+
     /// Merge two recordings into a NEW one: audio concatenated (a then b),
     /// segments copied with b's timeline shifted by a's audio length and b's
     /// speaker keys remapped past a's so different people never collide
@@ -79,16 +119,7 @@ final class RecordingRepository: @unchecked Sendable {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(
             "merged_\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString.prefix(8)).wav")
-        // Written via the writeWav(...) helper below (not inline) so the
-        // AVAudioFile writer is GUARANTEED closed — by definite function-
-        // return, not by hoping ARC releases a local at its last use —
-        // before anything downstream (AudioCompressor) tries to read the
-        // file back. AVAudioFile only finalizes a WAV's header (the
-        // data-chunk size) when the writer deallocates; reading it any
-        // earlier sees a truncated/zero-length file. Empirically
-        // reproduced: reading immediately after write(), with the writer
-        // still in scope, reports length 0 until the writer is released.
-        try writeWav([sa, sb], to: url)
+        try writeWav([sa[...], sb[...]], to: url, format: fmt)
 
         // Carry the meeting machinery. If BOTH sources have split tracks,
         // the merged recording is itself a full meeting: concatenate the
@@ -96,28 +127,7 @@ final class RecordingRepository: @unchecked Sendable {
         // the shared timeline stays sample-exact) — a re-run then keeps ME
         // ground truth AND lets global diarization unify a colleague who
         // appears in both halves into one speaker.
-        func sidecarURL(_ path: String, _ ext: String) -> URL {
-            URL(fileURLWithPath: path).deletingPathExtension().appendingPathExtension(ext)
-        }
-        func aligned(_ samples: [Float], to count: Int) -> [Float] {
-            if samples.count == count { return samples }
-            if samples.count > count { return Array(samples.prefix(count)) }
-            return samples + [Float](repeating: 0, count: count - samples.count)
-        }
-        func writeWav(_ parts: [[Float]], to target: URL) throws {
-            let f = try AVAudioFile(forWriting: target, settings: fmt.settings,
-                                    commonFormat: .pcmFormatFloat32, interleaved: false)
-            for part in parts where !part.isEmpty {
-                guard let buf = AVAudioPCMBuffer(pcmFormat: fmt,
-                                                 frameCapacity: AVAudioFrameCount(part.count)) else { continue }
-                buf.frameLength = AVAudioFrameCount(part.count)
-                part.withUnsafeBufferPointer { src in
-                    buf.floatChannelData![0].update(from: src.baseAddress!, count: part.count)
-                }
-                try f.write(from: buf)
-            }
-        }
-        for kind in ["mic", "sys"] {
+        for kind in AudioCompressor.sidecarKinds {
             // AudioCompressor may have already transcoded either source's
             // sidecar to .m4a — check that before the pre-migration .wav.
             guard let ua = AudioCompressor.sidecarURL(for: URL(fileURLWithPath: a.audioPath), kind: kind),
@@ -126,7 +136,7 @@ final class RecordingRepository: @unchecked Sendable {
             do {
                 let ta = aligned(try await decoder.decodeAll(file: ua), to: sa.count)
                 let tb = aligned(try await decoder.decodeAll(file: ub), to: sb.count)
-                try writeWav([ta, tb], to: url.deletingPathExtension().appendingPathExtension("\(kind).wav"))
+                try writeWav([ta[...], tb[...]], to: url.deletingPathExtension().appendingPathExtension("\(kind).wav"), format: fmt)
             } catch {
                 // A bad sidecar must not fail the whole merge — the mix is
                 // the recording; tracks are an optimization.
@@ -137,16 +147,16 @@ final class RecordingRepository: @unchecked Sendable {
         }
         // Me-timeline: union of whatever sides have one, b's shifted.
         var meAll: [[Double]] = []
-        if let d = try? Data(contentsOf: sidecarURL(a.audioPath, "me.json")),
+        if let d = try? Data(contentsOf: sidecarPath(a.audioPath, "me.json")),
            let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
             meAll += iv.filter { $0.count == 2 }
         }
-        if let d = try? Data(contentsOf: sidecarURL(b.audioPath, "me.json")),
+        if let d = try? Data(contentsOf: sidecarPath(b.audioPath, "me.json")),
            let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
             meAll += iv.filter { $0.count == 2 }.map { [$0[0] + offsetSeconds, $0[1] + offsetSeconds] }
         }
         if !meAll.isEmpty, let data = try? JSONEncoder().encode(meAll) {
-            try? data.write(to: url.deletingPathExtension().appendingPathExtension("me.json"))
+            try? data.write(to: sidecarPath(url.path, "me.json"))
         }
 
         // Save with the WAV path FIRST — compressing before the row exists
@@ -225,6 +235,240 @@ final class RecordingRepository: @unchecked Sendable {
         }
         AppLog.info("repo", "merged '\(a.title)' + '\(b.title)' → \(finalURL.lastPathComponent) (\(copies.count) segments)")
         return merged
+    }
+
+    /// Split one recording into two NEW recordings at `atSeconds` (measured
+    /// from the start of the audio). The inverse of `merge()`, and the same
+    /// contract: the source recording is left completely untouched — callers
+    /// that want it gone (the normal "cut this in two" flow) call
+    /// `delete(_:)` themselves once the two halves look right.
+    enum SplitError: LocalizedError {
+        case pointOutsideRecording
+        var errorDescription: String? {
+            "Split point must be inside the recording, away from either end."
+        }
+    }
+
+    @MainActor
+    func split(_ recording: Recording, atSeconds: Double) async throws -> (first: Recording, second: Recording) {
+        // Same race merge() guards against: a just-stopped recording is
+        // saved and splittable before its background echo-cancel rebuild /
+        // AAC compression finishes.
+        await postProcessTracker.waitUntilIdle(recording.id)
+        // Snapshotted before the (multi-second) work below so a live
+        // transcription job racing this call — clearSegments/appendSegments
+        // on the SAME recording, from a Cancel that flipped the UI's
+        // "isRunning" gate off while the job itself kept streaming — gets
+        // caught instead of silently splitting a half-overwritten transcript.
+        let sourceSegmentCount = recording.segments.count
+        let decoder = AudioDecoder()
+        let samples = try await decoder.decodeAll(file: URL(fileURLWithPath: recording.audioPath))
+        let totalSeconds = Double(samples.count) / AudioDecoder.sampleRate
+        // Keep both halves non-trivial — also rules out a point outside the
+        // recording entirely.
+        let minHalfSeconds = 0.25
+        guard atSeconds >= minHalfSeconds, atSeconds <= totalSeconds - minHalfSeconds else {
+            throw SplitError.pointOutsideRecording
+        }
+        let cutSample = min(samples.count, Int(atSeconds * AudioDecoder.sampleRate))
+        let cutSeconds = Double(cutSample) / AudioDecoder.sampleRate
+
+        guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                      sampleRate: AudioDecoder.sampleRate,
+                                      channels: 1, interleaved: false) else {
+            throw NSError(domain: "Split", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Audio format setup failed."])
+        }
+        let dir = FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Transcriberr/Recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let stamp = Int(Date().timeIntervalSince1970 * 1000)
+        let urlA = dir.appendingPathComponent("split_\(stamp)_a_\(UUID().uuidString.prefix(8)).wav")
+        let urlB = dir.appendingPathComponent("split_\(stamp)_b_\(UUID().uuidString.prefix(8)).wav")
+        try writeWav([samples[..<cutSample]], to: urlA, format: fmt)
+        try writeWav([samples[cutSample...]], to: urlB, format: fmt)
+
+        // mic/sys sidecars and me.json, written BEFORE either Recording row
+        // exists — same reasoning as merge(): a DB row must never point at
+        // not-yet-finished on-disk state. The two sidecar kinds are fully
+        // independent files, so decode them concurrently (same shape as the
+        // AAC-compress step further down).
+        let sourceAudioPath = recording.audioPath
+        let sidecarSamples: [String: [Float]] = await withTaskGroup(of: (String, [Float]?).self) { group in
+            for kind in AudioCompressor.sidecarKinds {
+                group.addTask {
+                    guard let sidecar = AudioCompressor.sidecarURL(
+                        for: URL(fileURLWithPath: sourceAudioPath), kind: kind) else { return (kind, nil) }
+                    return (kind, try? await decoder.decodeAll(file: sidecar))
+                }
+            }
+            var out: [String: [Float]] = [:]
+            for await (kind, decoded) in group {
+                if let decoded { out[kind] = decoded }
+            }
+            return out
+        }
+        for kind in AudioCompressor.sidecarKinds {
+            guard let raw = sidecarSamples[kind] else { continue }
+            let full = aligned(raw, to: samples.count)
+            do {
+                try writeWav([full[..<cutSample]], to: urlA.deletingPathExtension().appendingPathExtension("\(kind).wav"), format: fmt)
+                try writeWav([full[cutSample...]], to: urlB.deletingPathExtension().appendingPathExtension("\(kind).wav"), format: fmt)
+            } catch {
+                // A bad sidecar must not fail the whole split — the mix is
+                // the recording; tracks are an optimization.
+                AppLog.warn("repo", "skipping \(kind) tracks in split: \(error.localizedDescription)")
+                try? FileManager.default.removeItem(at: urlA.deletingPathExtension().appendingPathExtension("\(kind).wav"))
+                try? FileManager.default.removeItem(at: urlB.deletingPathExtension().appendingPathExtension("\(kind).wav"))
+            }
+        }
+
+        // ME-timeline: partition at the cut, clipping any interval that
+        // straddles it. Unlike a transcript segment, this is acoustic data
+        // with no text to lose — an exact clip is lossless.
+        if let d = try? Data(contentsOf: sidecarPath(recording.audioPath, "me.json")),
+           let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
+            var meA: [[Double]] = []
+            var meB: [[Double]] = []
+            for pair in iv where pair.count == 2 {
+                let (s, e) = (pair[0], pair[1])
+                if e <= cutSeconds {
+                    meA.append([s, e])
+                } else if s >= cutSeconds {
+                    meB.append([s - cutSeconds, e - cutSeconds])
+                } else {
+                    meA.append([s, cutSeconds])
+                    meB.append([0, e - cutSeconds])
+                }
+            }
+            if !meA.isEmpty, let data = try? JSONEncoder().encode(meA) {
+                try? data.write(to: sidecarPath(urlA.path, "me.json"))
+            }
+            if !meB.isEmpty, let data = try? JSONEncoder().encode(meB) {
+                try? data.write(to: sidecarPath(urlB.path, "me.json"))
+            }
+        }
+
+        // Two independent recordings from here on — give "(2)" a later
+        // createdAtMillis than "(1)" so the library list (sorted newest
+        // first) shows them in their natural order, not clock-jitter order.
+        let stampNow = Int64(Date().timeIntervalSince1970 * 1000)
+        let first = Recording(
+            title: "\(recording.title) (1)", audioPath: urlA.path,
+            createdAtMillis: stampNow + 1, durationSeconds: cutSeconds,
+            sourceLanguage: recording.sourceLanguage,
+            transcribedWithBackend: recording.transcribedWithBackend,
+            transcribedWithModel: recording.transcribedWithModel,
+            translateToEnglish: recording.translateToEnglish)
+        let second = Recording(
+            title: "\(recording.title) (2)", audioPath: urlB.path,
+            createdAtMillis: stampNow, durationSeconds: totalSeconds - cutSeconds,
+            sourceLanguage: recording.sourceLanguage,
+            transcribedWithBackend: recording.transcribedWithBackend,
+            transcribedWithModel: recording.transcribedWithModel,
+            translateToEnglish: recording.translateToEnglish)
+        for half in [first, second] {
+            // Stay where the source lives, and keep its tags/run settings —
+            // both halves are still the same underlying material.
+            half.folder = recording.folder
+            half.tags = recording.tags
+            half.runBackend = recording.runBackend
+            half.runLanguages = recording.runLanguages
+            half.runDiarize = recording.runDiarize
+            half.runHybridDiarize = recording.runHybridDiarize
+            half.runExpectedSpeakers = recording.runExpectedSpeakers
+            half.runSpeakersExact = recording.runSpeakersExact
+        }
+
+        // Nothing past this point has any user-visible history yet — on any
+        // failure, discard both freshly-created recordings rather than
+        // strand them half-finished in the library.
+        await postProcessTracker.markBusy(first.id)
+        await postProcessTracker.markBusy(second.id)
+        do {
+            try save(first)
+            try save(second)
+
+            // Reclaim disk space now that every WAV involved is fully
+            // written AND both recordings are safely persisted. A failure
+            // here must never cost the recording — AudioCompressor already
+            // deleted the pre-compression WAV on success, so swallow (not
+            // propagate), same as merge().
+            async let ca = AudioCompressor.compressRecordingFiles(mainURL: urlA, includeSidecars: true)
+            async let cb = AudioCompressor.compressRecordingFiles(mainURL: urlB, includeSidecars: true)
+            let (finalA, finalB) = await (ca, cb)
+            if finalA != urlA { try? updateAudioPath(finalA, for: first) }
+            if finalB != urlB { try? updateAudioPath(finalB, for: second) }
+
+            guard recording.segments.count == sourceSegmentCount else {
+                throw NSError(domain: "Split", code: -2, userInfo: [
+                    NSLocalizedDescriptionKey: "The recording changed while splitting (a transcription may still be running) — try again."
+                ])
+            }
+            // Segments: whichever half contains an utterance's MIDPOINT gets
+            // it whole (text can't be sliced). No speaker remap needed,
+            // unlike merge — both halves share the source's own speaker keys.
+            var segsA: [Segment] = []
+            var segsB: [Segment] = []
+            for seg in recording.segments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
+                let mid = (seg.startSeconds + seg.endSeconds) / 2
+                if mid < cutSeconds {
+                    segsA.append(Segment(startSeconds: seg.startSeconds,
+                                         endSeconds: min(seg.endSeconds, cutSeconds),
+                                         text: seg.text, language: seg.language,
+                                         speaker: seg.speaker, speakerName: seg.speakerName))
+                } else {
+                    segsB.append(Segment(startSeconds: max(0, seg.startSeconds - cutSeconds),
+                                         endSeconds: max(0, seg.endSeconds - cutSeconds),
+                                         text: seg.text, language: seg.language,
+                                         speaker: seg.speaker, speakerName: seg.speakerName))
+                }
+            }
+            // Scoped to each half's OWN speakers, not the source's full map:
+            // a name only still applies if that speaker key means the same
+            // person, which a re-transcribed half — a DIFFERENT, truncated
+            // audio range whose diarization can assign keys differently —
+            // can no longer guarantee.
+            func nameMap(for segs: [Segment]) -> [String: String] {
+                var map: [String: String] = [:]
+                for seg in segs {
+                    if let k = seg.speaker, let n = seg.speakerName, map[k] == nil { map[k] = n }
+                }
+                return map
+            }
+            if let data = try? JSONEncoder().encode(nameMap(for: segsA)) {
+                first.speakerNamesJSON = String(decoding: data, as: UTF8.self)
+            }
+            if let data = try? JSONEncoder().encode(nameMap(for: segsB)) {
+                second.speakerNamesJSON = String(decoding: data, as: UTF8.self)
+            }
+            if !segsA.isEmpty { try appendSegments(segsA, to: first) }
+            if !segsB.isEmpty { try appendSegments(segsB, to: second) }
+            // appendSegments deliberately skips this (see its own doc
+            // comment) on the assumption a later transcription run's
+            // snapshotVersion will capture it — but these two recordings
+            // may never get one, especially once the source is deleted.
+            BackupService.backupRecording(first)
+            BackupService.backupRecording(second)
+
+            AppLog.info("repo", "split '\(recording.title)' at \(cutSeconds)s → "
+                + "\(first.title) (\(segsA.count) segs) + \(second.title) (\(segsB.count) segs)")
+        } catch {
+            await postProcessTracker.markIdle(first.id)
+            await postProcessTracker.markIdle(second.id)
+            try? delete(first)
+            try? delete(second)
+            for url in [urlA, urlB] {
+                for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
+                    try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension(ext))
+                }
+            }
+            throw error
+        }
+        await postProcessTracker.markIdle(first.id)
+        await postProcessTracker.markIdle(second.id)
+        return (first, second)
     }
 
     func save(_ recording: Recording) throws {

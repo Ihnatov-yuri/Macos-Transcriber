@@ -279,21 +279,30 @@ final class MeetingRecorder: @unchecked Sendable {
         guard frames > 0 else { return }
 
         // Downmix every source buffer (mic channels + tap channels) to mono.
-        // Buffer order follows the aggregate's composition: the mic subdevice
-        // first, the system tap after — measure their energy separately for
-        // the "me" timeline before the identities blur into the mix.
+        // The tap is a guaranteed stereo mixdown (built with
+        // `stereoGlobalTapButExcludeProcesses`), so when the two buffers'
+        // channel counts differ, whichever one has 2 channels is
+        // unambiguously the tap. Trust that over assuming the aggregate
+        // always orders sub-devices before taps: get the split backwards and
+        // the mic-only gate below mutes the far side — everyone else in the
+        // meeting — instead of the user, which is what silences the waveform
+        // (and the saved mix) whenever someone other than the user is
+        // talking. Position is still the fallback when channel counts can't
+        // disambiguate (e.g. a stereo mic, or more than 2 buffers).
         var micMono = [Float](repeating: 0, count: frames)
         var sysMono = [Float](repeating: 0, count: frames)
+        let tapByChannelCount = list.count == 2 && list[0].mNumberChannels != list[1].mNumberChannels
         for (bi, b) in list.enumerated() {
             guard let raw = b.mData else { continue }
             let ch = max(1, Int(b.mNumberChannels))
             let n = min(frames, Int(b.mDataByteSize) / (4 * ch))
             let p = raw.assumingMemoryBound(to: Float.self)
+            let isTap = tapByChannelCount ? (ch == 2) : (bi != 0)
             for f in 0..<n {
                 var s: Float = 0
                 for c in 0..<ch { s += p[f * ch + c] }
                 let m = s / Float(ch)
-                if bi == 0 { micMono[f] += m } else { sysMono[f] += m }
+                if isTap { sysMono[f] += m } else { micMono[f] += m }
             }
         }
         var micSq: Float = 0

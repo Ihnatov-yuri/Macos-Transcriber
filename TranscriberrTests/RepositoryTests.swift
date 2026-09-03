@@ -194,6 +194,21 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(merged2.folder?.id, folder.id)
     }
 
+    /// Every file a split half COULD have produced (main audio in either
+    /// possible extension, mic/sys sidecars, me.json), for teardown.
+    /// split() always writes to the real ~/Documents/Transcriberr/Recordings
+    /// directory (there's no sandboxed test path), so tracking only the
+    /// main audio file — as earlier split tests did — leaves the
+    /// sidecars/me.json behind as permanent orphans in the user's real
+    /// library folder. `tearDown`'s `try?` makes registering extensions
+    /// that don't end up existing harmless.
+    private func tempFilesForSplitHalf(_ recording: Recording) -> [URL] {
+        let main = URL(fileURLWithPath: recording.audioPath)
+        let base = main.deletingPathExtension()
+        return [main] + ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"]
+            .map { base.appendingPathExtension($0) }
+    }
+
     // MARK: - Split recording (inverse of merge, "cut in two" action)
 
     func testSplitProducesTwoRecordingsAtMidpoint() async throws {
@@ -205,8 +220,8 @@ final class RepositoryTests: XCTestCase {
         ])
         let (first, second) = try await repo.split(rec, atSeconds: 2.0)
         defer {
-            tempFiles.append(URL(fileURLWithPath: first.audioPath))
-            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+            tempFiles += tempFilesForSplitHalf(first)
+            tempFiles += tempFilesForSplitHalf(second)
         }
 
         XCTAssertEqual(first.title, "Meeting (1)")
@@ -255,8 +270,8 @@ final class RepositoryTests: XCTestCase {
 
         let (first, second) = try await repo.split(rec, atSeconds: 2.0)
         defer {
-            tempFiles.append(URL(fileURLWithPath: first.audioPath))
-            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+            tempFiles += tempFilesForSplitHalf(first)
+            tempFiles += tempFilesForSplitHalf(second)
         }
 
         XCTAssertEqual(first.segments.first?.language, "nl")
@@ -270,6 +285,47 @@ final class RepositoryTests: XCTestCase {
             XCTAssertEqual(half.runExpectedSpeakers, 4)
             XCTAssertEqual(half.runSpeakersExact, true)
         }
+    }
+
+    /// Splitting an ALREADY-compressed source (the normal case — every
+    /// finished recording gets AAC-compressed shortly after it's saved) is
+    /// the one that must avoid a second lossy re-encode; see
+    /// RecordingRepository.split()'s "Best-effort quality upgrade" comment.
+    /// This doesn't assert losslessness directly (proven separately against
+    /// a real recording — a decode+recompress pass measured ~6% RMS
+    /// distortion there, a bitstream trim measured 0%) — it confirms the
+    /// lossless-trim code path integrates correctly and doesn't break the
+    /// ordinary split contract when it's actually exercised.
+    func testSplitOnAlreadyCompressedSource() async throws {
+        let wav = try makeWav(seconds: 4)
+        let compressed = try await AudioCompressor.compressAndReplace(wav)
+        XCTAssertEqual(compressed.pathExtension, "m4a", "precondition: source must be compressed for this test to exercise the lossless-trim path")
+        tempFiles.append(compressed)
+
+        let rec = Recording(title: "Compressed", audioPath: compressed.path, durationSeconds: 4)
+        try repo.save(rec)
+        try repo.appendSegments([
+            Segment(startSeconds: 0, endSeconds: 2, text: "before", speaker: nil, speakerName: nil),
+            Segment(startSeconds: 2, endSeconds: 4, text: "after", speaker: nil, speakerName: nil),
+        ], to: rec)
+
+        let (first, second) = try await repo.split(rec, atSeconds: 2.0)
+        defer {
+            tempFiles += tempFilesForSplitHalf(first)
+            tempFiles += tempFilesForSplitHalf(second)
+        }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.audioPath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.audioPath))
+        XCTAssertEqual(first.durationSeconds, 2, accuracy: 0.1)
+        XCTAssertEqual(second.durationSeconds, 2, accuracy: 0.1)
+        XCTAssertEqual(first.segments.map(\.text), ["before"])
+        XCTAssertEqual(second.segments.map(\.text), ["after"])
+        // No stray scratch files left behind by the swap-in, in the actual
+        // directory split() writes to (not the source's temp directory).
+        let siblings = try FileManager.default.contentsOfDirectory(
+            atPath: URL(fileURLWithPath: first.audioPath).deletingLastPathComponent().path)
+        XCTAssertFalse(siblings.contains { $0.hasPrefix(".lossless-") })
     }
 
     func testSplitCutsSidecarTracksAndMeTimeline() async throws {
@@ -288,8 +344,8 @@ final class RepositoryTests: XCTestCase {
 
         let (first, second) = try await repo.split(rec, atSeconds: 2.0)
         defer {
-            tempFiles.append(URL(fileURLWithPath: first.audioPath))
-            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+            tempFiles += tempFilesForSplitHalf(first)
+            tempFiles += tempFilesForSplitHalf(second)
         }
 
         for kind in AudioCompressor.sidecarKinds {
@@ -331,8 +387,8 @@ final class RepositoryTests: XCTestCase {
         ])
         let (first, second) = try await repo.split(rec, atSeconds: 2.0)
         defer {
-            tempFiles.append(URL(fileURLWithPath: first.audioPath))
-            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+            tempFiles += tempFilesForSplitHalf(first)
+            tempFiles += tempFilesForSplitHalf(second)
         }
         // Text can't be sliced — the straddling segment's MIDPOINT (2.0)
         // lands on the second half whole, clamped to start at 0.
@@ -363,8 +419,8 @@ final class RepositoryTests: XCTestCase {
 
         let (first, second) = try await repo.split(rec, atSeconds: 1.0)
         defer {
-            tempFiles.append(URL(fileURLWithPath: first.audioPath))
-            tempFiles.append(URL(fileURLWithPath: second.audioPath))
+            tempFiles += tempFilesForSplitHalf(first)
+            tempFiles += tempFilesForSplitHalf(second)
         }
         XCTAssertEqual(first.folder?.id, folder.id)
         XCTAssertEqual(second.folder?.id, folder.id)

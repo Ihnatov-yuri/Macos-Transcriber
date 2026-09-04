@@ -61,6 +61,16 @@ final class MeetingRecorder: @unchecked Sendable {
     nonisolated(unsafe) private var micGain: Float = 1
 
     init() {
+        chunks = AsyncStream<WavRecorder.Chunk> { _ in }
+        makeChunkStream()
+    }
+
+    /// `stop()` finishes the chunk continuation (an `AsyncStream` can't be
+    /// un-finished), so every `start()` needs a fresh stream — otherwise live
+    /// transcription silently stops working from the second meeting
+    /// recording of the app session onward. Exact mirror of the identical
+    /// WavRecorder fix (v2.5.4), which this class never got.
+    private func makeChunkStream() {
         var continuation: AsyncStream<WavRecorder.Chunk>.Continuation!
         self.chunks = AsyncStream<WavRecorder.Chunk> { continuation = $0 }
         self.chunkContinuation = continuation
@@ -146,6 +156,7 @@ final class MeetingRecorder: @unchecked Sendable {
             self.audioFile = nil
             self.converter = nil
         }
+        chunkContinuation?.finish()
         AppLog.info("meeting", "stopped after \(elapsedMs / 1000)s → \(fileURL?.lastPathComponent ?? "?")")
         return fileURL
     }
@@ -220,6 +231,7 @@ final class MeetingRecorder: @unchecked Sendable {
             forWriting: dir.appendingPathComponent(base + ".sys.wav"),
             settings: target.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
 
+        makeChunkStream()
         ioQueue.sync {
             self.converter = conv
             self.audioFile = file

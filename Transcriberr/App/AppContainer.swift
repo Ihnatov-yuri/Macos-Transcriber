@@ -126,6 +126,7 @@ final class AppContainer: @unchecked Sendable {
         )
         // Hotkey monitors and the HUD panel want a running app — defer to
         // the first run-loop turn rather than doing AppKit work inside init.
+        dictation.onShowPane = { [weak self] in self?.requestDictatePane() }
         Task { @MainActor [weak self] in
             self?.dictation.bootstrap()
         }

@@ -28,6 +28,13 @@ final class UtteranceCapture: @unchecked Sendable {
     private var totalSamples: Int = 0
     private var startedAt: Date = .distantPast
     private var tick: Task<Void, Never>?
+    /// Voice-processing state the engine was last configured with; toggling
+    /// it costs seconds, so `start()` only touches it when the setting changed.
+    private var configuredVoiceProcessing: Bool?
+    private var configObserver: NSObjectProtocol?
+    // Diagnostics (ioQueue): how much the tap actually delivered.
+    private var tapCalls = 0
+    private var tapFrames = 0
 
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: UtteranceCapture.sampleRate,
@@ -67,9 +74,73 @@ final class UtteranceCapture: @unchecked Sendable {
         }
     }
 
+    /// Configure the input chain ahead of time. Enabling voice processing on
+    /// a fresh engine takes seconds — measured 4 s on first use — which is
+    /// exactly the moment the user starts talking. Called at launch and after
+    /// every stop (when the mic is already authorized, so it never prompts).
+    @MainActor
+    func prewarm() {
+        guard !isRunning, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+        let t0 = Date()
+        do {
+            try configureInput()
+            try ExceptionTrap.run { self.engine.prepare() }
+            AppLog.info("dictation", String(format: "capture prewarmed in %.2fs", Date().timeIntervalSince(t0)))
+        } catch {
+            AppLog.warn("dictation", "capture prewarm failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Grab the input node and apply the voice-processing preference (only
+    /// when it differs from what the engine already has).
+    @MainActor
+    @discardableResult
+    private func configureInput() throws -> AVAudioInputNode {
+        var grabbedInput: AVAudioInputNode?
+        do {
+            try ExceptionTrap.run { grabbedInput = self.engine.inputNode }
+        } catch {
+            throw CaptureError.noInput("Audio input unavailable: \(error.localizedDescription)")
+        }
+        guard let input = grabbedInput else { throw CaptureError.noInput("No audio input device.") }
+        let wantVP = RecorderSettings.shared.noiseSuppression
+        if configuredVoiceProcessing != wantVP {
+            let t0 = Date()
+            try? ExceptionTrap.run { try? input.setVoiceProcessingEnabled(wantVP) }
+            configuredVoiceProcessing = wantVP
+            AppLog.info("dictation", String(format: "voice processing %@ in %.2fs",
+                                            wantVP ? "enabled" : "disabled", Date().timeIntervalSince(t0)))
+        }
+        if configObserver == nil {
+            configObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.handleConfigurationChange() }
+            }
+        }
+        return input
+    }
+
+    /// The engine stops itself when the audio route changes (device
+    /// switch, voice-processing graph rebuild). Mid-session, restart it so the
+    /// tap keeps delivering instead of silently starving.
+    @MainActor
+    private func handleConfigurationChange() {
+        guard isRunning else { return }
+        AppLog.warn("dictation", "audio configuration changed mid-session — restarting engine")
+        var startError: Error?
+        try? ExceptionTrap.run {
+            do { try self.engine.start() } catch { startError = error }
+        }
+        if let startError {
+            AppLog.error("dictation", "engine restart failed: \(startError.localizedDescription)")
+        }
+    }
+
     @MainActor
     func start() async throws {
         guard !isRunning else { return }
+        let t0 = Date()
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: break
         case .notDetermined:
@@ -84,24 +155,14 @@ final class UtteranceCapture: @unchecked Sendable {
             voicedSinceDrain = false
             lastVoicedSample = 0
             totalSamples = 0
+            tapCalls = 0
+            tapFrames = 0
         }
         level = 0
         peakHistory = Array(repeating: 0, count: 48)
         elapsedSeconds = 0
 
-        var grabbedInput: AVAudioInputNode?
-        do {
-            try ExceptionTrap.run { grabbedInput = self.engine.inputNode }
-        } catch {
-            throw CaptureError.noInput("Audio input unavailable: \(error.localizedDescription)")
-        }
-        guard let input = grabbedInput else { throw CaptureError.noInput("No audio input device.") }
-
-        if RecorderSettings.shared.noiseSuppression {
-            try? ExceptionTrap.run { try? input.setVoiceProcessingEnabled(true) }
-        } else {
-            try? ExceptionTrap.run { try? input.setVoiceProcessingEnabled(false) }
-        }
+        let input = try configureInput()
 
         var nativeFormat: AVAudioFormat?
         do {
@@ -125,7 +186,7 @@ final class UtteranceCapture: @unchecked Sendable {
         do {
             try ExceptionTrap.run {
                 input.removeTap(onBus: 0)
-                input.installTap(onBus: 0, bufferSize: 2048, format: nativeFormat) { [weak self] buf, _ in
+                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buf, _ in
                     self?.ingest(buffer: buf)
                 }
             }
@@ -153,7 +214,9 @@ final class UtteranceCapture: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
-        AppLog.info("dictation", "capture started (\(Int(nativeFormat.sampleRate)) Hz, \(nativeFormat.channelCount) ch)")
+        AppLog.info("dictation", String(format: "capture started in %.2fs (%d Hz, %d ch)",
+                                        Date().timeIntervalSince(t0), Int(nativeFormat.sampleRate),
+                                        Int(nativeFormat.channelCount)))
     }
 
     /// Stop the engine and return everything captured since the last drain.
@@ -164,21 +227,26 @@ final class UtteranceCapture: @unchecked Sendable {
         isRunning = false
         tick?.cancel()
         tick = nil
+        let wasRunning = engine.isRunning
         try? ExceptionTrap.run {
             self.engine.stop()
             self.engine.inputNode.removeTap(onBus: 0)
         }
-        let out: [Float] = ioQueue.sync {
+        let (out, calls, frames): ([Float], Int, Int) = ioQueue.sync {
             flushConverterTail()
             let s = samples
             samples.removeAll()
             pendingInputs.removeAll()
             converter = nil
             voicedSinceDrain = false
-            return s
+            return (s, tapCalls, tapFrames)
         }
         level = 0
-        AppLog.info("dictation", String(format: "capture stopped: %.2fs", Double(out.count) / Self.sampleRate))
+        AppLog.info("dictation", String(format: "capture stopped: %.2fs (tap %d calls, %d frames, engine %@)",
+                                        Double(out.count) / Self.sampleRate, calls, frames,
+                                        wasRunning ? "running" : "stopped"))
+        // Keep the configured graph warm for the next passage.
+        try? ExceptionTrap.run { self.engine.prepare() }
         return out
     }
 
@@ -200,6 +268,8 @@ final class UtteranceCapture: @unchecked Sendable {
     }
 
     nonisolated private func enqueueAndDrain(_ input: AVAudioPCMBuffer) {
+        tapCalls += 1
+        tapFrames += Int(input.frameLength)
         guard let converter else { return }
         pendingInputs.append(input)
         let ratio = targetFormat.sampleRate / input.format.sampleRate

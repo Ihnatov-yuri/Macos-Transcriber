@@ -35,6 +35,7 @@ Hold a modifier key in **any app**, talk, release — the text lands at the curs
 - **Polish** (optional) — a short Gemma pass per passage, guarded: a result that isn't clearly the same passage cleaned up is discarded.
 - **Menu bar + floating status strip**; an in-app **Dictate** scratch pad; optional **history** — every passage saved with its audio as a normal recording in a "Dictation" folder (playable, re-transcribable, searchable via the KB CLI / MCP).
 - Insertion is pasteboard + ⌘V with the previous clipboard restored; without Accessibility access the text is copied instead.
+- Automation hook: `transcriberr://dictate/start`, `/stop`, `/toggle`, `/cancel`, `/pane` (Shortcuts, Raycast, Stream Deck). Use `open -g` to keep the current app in front so the text is pasted there; a plain `open` activates Transcriberr and the text lands in its scratch pad.
 
 ## Features
 

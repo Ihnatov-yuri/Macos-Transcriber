@@ -106,6 +106,7 @@ final class DictationController: @unchecked Sendable {
     @MainActor
     func bootstrap() {
         hud = DictationHUD(controller: self)
+        capture.prewarm()
         armHotkey()
         watchHotkeySetting()
         activationObserver = NotificationCenter.default.addObserver(
@@ -240,6 +241,32 @@ final class DictationController: @unchecked Sendable {
         toggle(target: resolveTarget())
     }
 
+    /// Set by AppContainer: switches the window to the Dictate screen.
+    var onShowPane: (() -> Void)?
+
+    /// `transcriberr://dictate/<start|stop|toggle|cancel|pane>` for Shortcuts,
+    /// Raycast, Stream Deck… (`transcriberr://dictate` alone toggles). Opening
+    /// a URL normally activates the app, so a plain `open` lands the text in
+    /// the Dictate screen; `open -g <url>` keeps the current app in front and
+    /// the text is pasted there.
+    @MainActor
+    func handle(url: URL) {
+        guard url.scheme?.lowercased() == "transcriberr" else { return }
+        let host = url.host?.lowercased() ?? ""
+        let action = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+        guard host == "dictate" else { return }
+        AppLog.info("dictation", "url action: \(action.isEmpty ? "toggle" : action)")
+        switch action {
+        case "start", "begin":  if canBegin { begin(target: resolveTarget()) }
+        case "stop", "finish":  finish()
+        case "cancel":          cancel()
+        case "pane", "show":
+            NSApp.activate(ignoringOtherApps: true)
+            onShowPane?()
+        default:                toggle(target: resolveTarget())
+        }
+    }
+
     @MainActor
     func begin(target: Target) {
         guard canBegin else { return }
@@ -300,8 +327,9 @@ final class DictationController: @unchecked Sendable {
             await start?.value
             guard let self else { return }
             let samples = self.capture.stop()
-            // A capture failure already replaced the phase with its message.
-            guard gen == self.generation, self.phase == .transcribing else { return }
+            // Only a cancel drops the audio. A new session may already be
+            // listening by now (fast double tap) — the passage still counts.
+            guard gen == self.generation else { return }
             self.enqueue(samples, final: true)
         }
     }
@@ -399,7 +427,7 @@ final class DictationController: @unchecked Sendable {
         // Empty / silent passes end quietly.
         guard samples.count >= 8_000, Self.hasSpeech(samples) else {
             AppLog.info("dictation", String(format: "skip %.2fs — no speech", seconds))
-            if final { showMessage("Nothing heard") }
+            if final { finalMessage("Nothing heard") }
             return
         }
 
@@ -435,12 +463,12 @@ final class DictationController: @unchecked Sendable {
         } catch {
             AppLog.error("dictation", "recognition failed: \(error.localizedDescription)")
             lastError = error.localizedDescription
-            showMessage("Recognition failed: \(error.localizedDescription)")
+            if final { finalMessage("Recognition failed: \(error.localizedDescription)") }
             return
         }
         guard gen == generation else { return }
         guard !text.isEmpty else {
-            if final { showMessage("Nothing heard") }
+            if final { finalMessage("Nothing heard") }
             return
         }
 
@@ -463,7 +491,7 @@ final class DictationController: @unchecked Sendable {
                     updateHUD(showResultBriefly: true)
                 }
             case .copiedOnly:
-                if stillOurs { showMessage("Copied — press ⌘V. Grant Accessibility to auto-insert.") }
+                finalMessage("Copied — press ⌘V. Grant Accessibility to auto-insert.")
             }
         } else if outcome == .copiedOnly {
             // Keep listening, but tell the user once.
@@ -637,6 +665,17 @@ final class DictationController: @unchecked Sendable {
         }
         let rms = (sumSq / Float(max(1, samples.count))).squareRoot()
         return UtteranceCapture.isVoiced(rms: rms, peak: peak)
+    }
+
+    /// Outcome notice for a FINAL pass. Skipped when a newer session is
+    /// already listening — a notice must never stop an active capture.
+    @MainActor
+    private func finalMessage(_ text: String) {
+        guard phase == .transcribing || phase == .inserting else {
+            AppLog.info("dictation", "notice suppressed (session active): \(text)")
+            return
+        }
+        showMessage(text)
     }
 
     @MainActor

@@ -41,9 +41,9 @@ Hold a modifier key in **any app**, talk, release — the text lands at the curs
 
 ## Permissions
 
-Dictation needs **Microphone** (first use) and **Accessibility** (global hotkey + pasting into other apps). macOS ties a grant to the app's code signature. Releases built without a signing identity are ad-hoc signed, whose identity is a per-build hash — so after every update the entries in System Settings look ticked but no longer match, and the app reports "not granted". Fix once: remove Transcriberr from the list (−) and add `/Applications/Transcriberr.app` again.
+Dictation needs **Microphone** (first use) and **Accessibility** (global hotkey + pasting into other apps). macOS ties a grant to the app's *designated requirement*. Ad-hoc signatures used to default that to a per-build hash, so after every update the entries in System Settings looked ticked but no longer matched and the app reported "not granted". Since 3.1.1 `scripts/package.sh` signs ad-hoc builds with an explicit identifier-based requirement (`designated => identifier "nl.ihnatov.Transcriberr"`), which every build satisfies — grant once, keep it.
 
-To make grants survive updates, give `scripts/package.sh` a stable identity: in **Keychain Access → Certificate Assistant → Create a Certificate…**, name `Transcriberr Signing`, type *Code Signing*, self-signed. The script picks up the first code-signing identity automatically; from then on every build carries the same requirement and macOS keeps the permissions.
+Upgrading from an older build: remove Transcriberr from the Accessibility list (−) and add `/Applications/Transcriberr.app` again, once. A real code-signing identity (self-signed "Transcriberr Signing" made in Keychain Access, or a Developer ID) is still picked up automatically when present and is the better choice for distribution.
 
 ## Features
 

@@ -36,7 +36,7 @@ struct DictationSettingsTab: View {
                     }
                 }
                 if !c.accessibilityTrusted, DictationController.isAdHocSigned {
-                    Text("Ticked already but still not granted? This build is ad-hoc signed, so its identity changes with every update and an older Transcriberr entry no longer matches. Remove Transcriberr from the Accessibility list (−) and add /Applications/Transcriberr.app again. To stop this happening on every update, sign releases with a stable certificate — see README → Permissions.")
+                    Text("Ticked already but still not granted? The entry belongs to an earlier build whose signature no longer matches. Remove Transcriberr from the Accessibility list (−) and add /Applications/Transcriberr.app again — once. From 3.1.1 on, releases carry a stable identifier-based signing requirement, so the grant survives updates.")
                         .font(.caption).foregroundStyle(.orange)
                 }
                 Text("A right-hand modifier is never a shortcut on its own, so it can't collide with the app you're typing in. If you pick fn / Globe, set “Press 🌐 key to” → Do Nothing in System Settings → Keyboard so macOS dictation doesn't also start. Accessibility access is what lets Transcriberr see the key in other apps and paste the result.")

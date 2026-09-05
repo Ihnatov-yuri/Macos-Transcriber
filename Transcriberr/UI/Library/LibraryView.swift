@@ -246,6 +246,12 @@ struct LibraryView: View {
                     Divider()
                     Button("Delete", role: .destructive) {
                         if selection?.id == rec.id { selection = nil }
+                        // A run in flight on this recording would keep
+                        // appending segments to a deleted model — stop it
+                        // first (JobManager also bails on its own if the
+                        // model vanishes, but don't make it find out the
+                        // hard way).
+                        container.jobManager.cancel(rec.id)
                         // Delete through the VIEW's context — @Query observes
                         // this context, and deleting a view-context object via
                         // the repository's separate context is a no-op (the

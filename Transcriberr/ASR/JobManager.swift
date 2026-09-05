@@ -22,6 +22,12 @@ final class TranscriptionJobManager: @unchecked Sendable {
     private let repository: RecordingRepository
     private var queue: [(Recording, TranscriptionRunner.Params, (() -> Void)?)] = []
     private var currentJob: Task<Void, Never>?
+    /// Which recording `currentJob` is working on. cancel() used to infer
+    /// "is this the running job?" from `fraction > 0`, which is false for
+    /// the first moments of a run (and for any run whose stage events
+    /// haven't advanced the fraction yet) — so cancelling right after
+    /// pressing Run removed the status row but let the job keep running.
+    private var currentRecordingId: UUID?
 
     /// Optional auto-titler. We keep it as a weak indirection so AppContainer
     /// can wire it up after construction without a retain cycle.
@@ -104,18 +110,25 @@ final class TranscriptionJobManager: @unchecked Sendable {
     func cancel(_ recordingId: UUID) {
         for entry in queue where entry.0.id == recordingId { entry.2?() }
         queue.removeAll { $0.0.id == recordingId }
-        if statuses[recordingId]?.fraction ?? 0 > 0 {
+        if currentRecordingId == recordingId {
             currentJob?.cancel()
         }
         statuses.removeValue(forKey: recordingId)
     }
 
+    /// True while a job for this recording is running or queued.
+    func isActive(_ recordingId: UUID) -> Bool {
+        currentRecordingId == recordingId || queue.contains { $0.0.id == recordingId }
+    }
+
     private func drain() {
         guard currentJob == nil, !queue.isEmpty else { return }
         let (recording, params, onSourceConsumed) = queue.removeFirst()
+        currentRecordingId = recording.id
         currentJob = Task { @MainActor [weak self] in
             defer {
                 self?.currentJob = nil
+                self?.currentRecordingId = nil
                 self?.drain()
             }
             await self?.runOne(recording: recording, params: params, onSourceConsumed: onSourceConsumed)
@@ -166,6 +179,17 @@ final class TranscriptionJobManager: @unchecked Sendable {
         var allSegments: [Segment] = []
         do {
             for try await event in stream {
+                // The recording can be deleted mid-run (library context
+                // menu, detail MORE menu, the split flow's "Delete
+                // Original"). Cancellation is cooperative and a chunk in
+                // flight still yields its .segments afterwards — writing
+                // those into a deleted model is a SwiftData crash. Stop
+                // touching it the moment it's gone.
+                if recording.isDeleted || recording.modelContext == nil {
+                    AppLog.warn("job", "recording deleted mid-run — abandoning job")
+                    statuses.removeValue(forKey: recording.id)
+                    return
+                }
                 switch event {
                 case .stage(let text, let fraction):
                     statuses[recording.id] = Status(

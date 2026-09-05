@@ -97,9 +97,15 @@ final class RecordingRepository: @unchecked Sendable {
     /// failure partway through can never leave `replacing` missing OR
     /// leave an orphaned scratch file behind.
     private func losslessTrim(source: URL, startSeconds: Double, endSeconds: Double, replacing path: String) async -> Bool {
+        let target = URL(fileURLWithPath: path)
+        // Only ever swap AAC bytes into an AAC-named file. If the half's own
+        // compression failed it is still `<name>.wav` — replacing that with
+        // an m4a payload would leave a WAV-named file with AAC inside, which
+        // AVAudioFile refuses to open by extension and a later migration
+        // would try to "compress" again.
+        guard target.pathExtension.lowercased() == "m4a" else { return false }
         guard let export = AVAssetExportSession(asset: AVURLAsset(url: source), presetName: AVAssetExportPresetPassthrough)
         else { return false }
-        let target = URL(fileURLWithPath: path)
         let scratch = target.deletingLastPathComponent()
             .appendingPathComponent(".lossless-\(UUID().uuidString.prefix(8)).m4a")
         export.timeRange = CMTimeRange(

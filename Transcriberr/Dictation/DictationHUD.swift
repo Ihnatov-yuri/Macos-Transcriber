@@ -140,7 +140,7 @@ struct DictationHUDView: View {
     private var bodyIsPlaceholder: Bool {
         switch controller.phase {
         case .listening:
-            return controller.lastText.isEmpty
+            return controller.lastText.isEmpty && controller.previewText.isEmpty
         case .message:
             return false
         default:
@@ -153,6 +153,7 @@ struct DictationHUDView: View {
         case .message(let m):
             return m
         case .listening:
+            if !controller.previewText.isEmpty { return controller.previewText + " …" }
             if !controller.lastText.isEmpty { return controller.lastText }
             return controller.settings.mode == .hold
                 ? "Speak, then release \(controller.settings.hotkey.glyph)."

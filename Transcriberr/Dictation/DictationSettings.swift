@@ -186,6 +186,12 @@ final class DictationSettings: @unchecked Sendable {
         static let selfCorrections   = "dictation.selfCorrections"
         static let languageFromContext = "dictation.languageFromContext"
         static let defaultMode       = "dictation.defaultMode"
+        static let useLearnedTerms   = "dictation.useLearnedTerms"
+        static let learnedTerms      = "dictation.learnedTerms"
+        static let learnedAt         = "dictation.learnedAt"
+        static let dismissedTerms    = "dictation.dismissedTerms"
+        static let livePreview       = "dictation.livePreview"
+        static let onboarded         = "dictation.onboarded"
     }
 
     var hotkey: Hotkey { didSet { defaults.set(hotkey.rawValue, forKey: Key.hotkey) } }
@@ -232,6 +238,31 @@ final class DictationSettings: @unchecked Sendable {
     /// text already in the field.
     var languageFromContext: Bool { didSet { defaults.set(languageFromContext, forKey: Key.languageFromContext) } }
 
+    /// Names harvested from the library's transcripts (see VocabularyHarvester).
+    var learnedTerms: [VocabularyHarvester.Term] {
+        didSet {
+            if let data = try? JSONEncoder().encode(learnedTerms) { defaults.set(data, forKey: Key.learnedTerms) }
+        }
+    }
+    var learnedAt: Date? { didSet { defaults.set(learnedAt, forKey: Key.learnedAt) } }
+    /// Learned terms the user rejected — never suggested or applied again.
+    var dismissedTermKeys: Set<String> {
+        didSet { defaults.set(Array(dismissedTermKeys), forKey: Key.dismissedTerms) }
+    }
+    /// Apply learned names automatically (vocabulary canonicalization + smart pass).
+    var useLearnedTerms: Bool { didSet { defaults.set(useLearnedTerms, forKey: Key.useLearnedTerms) } }
+    /// Show provisional text while still speaking (periodic decode of the
+    /// audio so far — no extra model).
+    var livePreview: Bool { didSet { defaults.set(livePreview, forKey: Key.livePreview) } }
+    /// First-run setup completed (or dismissed).
+    var onboarded: Bool { didSet { defaults.set(onboarded, forKey: Key.onboarded) } }
+
+    /// Learned spellings that are still active.
+    var activeLearnedSpellings: [String] {
+        guard useLearnedTerms else { return [] }
+        return learnedTerms.filter { !dismissedTermKeys.contains($0.key) }.map(\.spelling)
+    }
+
     /// The rule for a bundle identifier: exact match first, then the longest
     /// prefix rule (a bundleId ending in ".").
     func rule(for bundleId: String?) -> AppRule? {
@@ -269,6 +300,17 @@ final class DictationSettings: @unchecked Sendable {
         readContext = (defaults.object(forKey: Key.readContext) as? Bool) ?? true
         selfCorrections = (defaults.object(forKey: Key.selfCorrections) as? Bool) ?? true
         languageFromContext = (defaults.object(forKey: Key.languageFromContext) as? Bool) ?? true
+        if let data = defaults.data(forKey: Key.learnedTerms),
+           let terms = try? JSONDecoder().decode([VocabularyHarvester.Term].self, from: data) {
+            learnedTerms = terms
+        } else {
+            learnedTerms = []
+        }
+        learnedAt = defaults.object(forKey: Key.learnedAt) as? Date
+        dismissedTermKeys = Set((defaults.array(forKey: Key.dismissedTerms) as? [String]) ?? [])
+        useLearnedTerms = (defaults.object(forKey: Key.useLearnedTerms) as? Bool) ?? true
+        livePreview = (defaults.object(forKey: Key.livePreview) as? Bool) ?? true
+        onboarded = defaults.bool(forKey: Key.onboarded)
         let storedPause = defaults.double(forKey: Key.pauseFlushSeconds)
         pauseFlushSeconds = storedPause > 0 ? min(4, max(0.8, storedPause)) : 1.5
         playSounds = (defaults.object(forKey: Key.playSounds) as? Bool) ?? true

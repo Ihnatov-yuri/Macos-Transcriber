@@ -50,7 +50,7 @@ struct SettingsScreen: View {
                     sectionBlock("E", "STYLE & VOCABULARY") {
                         StyleSettingsTab()
                             .scrollContentBackground(.hidden)
-                            .frame(minHeight: 560)
+                            .frame(minHeight: 900)
                     }
 
                     sectionBlock("F", "SNIPPETS") {

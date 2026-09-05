@@ -264,6 +264,18 @@ final class DictationContextTests: XCTestCase {
         XCTAssertNil(ctx.contextLanguage)
     }
 
+    func testSmartGuardRejectsDroppedTail() {
+        // Verbatim from an end-to-end run: Gemma dropped the second sentence.
+        XCTAssertFalse(DictationText.acceptPolished(
+            raw: "This is a dictation test, the quick brown fox jumps over the lazy dog.\n\nSecond passage?",
+            polished: "This is a dictation test: the quick brown fox jumps over the lazy dog.",
+            minOverlap: 0.6))
+        XCTAssertTrue(DictationText.acceptPolished(
+            raw: "This is a dictation test, the quick brown fox jumps over the lazy dog.\n\nSecond passage?",
+            polished: "This is a dictation test: the quick brown fox jumps over the lazy dog.\n\nSecond passage?",
+            minOverlap: 0.6))
+    }
+
     func testSmartGuardAllowsSelfCorrectionRewrite() {
         XCTAssertTrue(DictationText.acceptPolished(
             raw: "so we ship it monday no tuesday and tell the whole team about it",
@@ -300,5 +312,46 @@ final class DictationBugHuntTests: XCTestCase {
         XCTAssertEqual(
             DictationText.canonicalizeVocabulary("Ask kim kim, then owasp.", terms: ["KimKim", "OWASP"]),
             "Ask KimKim, then OWASP.")
+    }
+}
+
+final class VocabularyHarvesterTests: XCTestCase {
+    func testCandidatesSkipSentenceInitialsButKeepRunsAndAcronyms() {
+        XCTAssertEqual(
+            VocabularyHarvester.candidates(in: "Yesterday we met KimKim at OWASP. Blits Insurance called. Then nothing."),
+            ["KimKim", "OWASP", "Blits Insurance"])
+        XCTAssertEqual(VocabularyHarvester.candidates(in: "Okay. Sure thing."), [])
+    }
+
+    func testHarvestRequiresRecurrenceAndRejectsOrdinaryWords() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let items: [(recording: UUID, text: String)] = [
+            (a, "We spoke with Kaiko about the Project. The project is late."),
+            (b, "Kaiko sent the plan. Another Project meeting tomorrow."),
+            (c, "Nothing about the project today. Kaiko again."),
+        ]
+        let terms = VocabularyHarvester.harvest(items, existingVocabulary: [])
+        XCTAssertEqual(terms.map(\.spelling), ["Kaiko"])
+        XCTAssertEqual(terms.first?.recordings, 3)
+        // Already in the vocabulary → not suggested.
+        XCTAssertTrue(VocabularyHarvester.harvest(items, existingVocabulary: ["kaiko"]).isEmpty)
+    }
+
+    func testHarvestRejectsContractionsFillersAndRepeats() {
+        let a = UUID(), b = UUID()
+        let items: [(recording: UUID, text: String)] = [
+            (a, "So That's it. Uh I'm done, Kim KimKim said. Ask Дякую again and Дякую."),
+            (b, "That's fine. Uh I'm here. Kim KimKim agreed. Дякую all."),
+        ]
+        XCTAssertTrue(VocabularyHarvester.harvest(items, existingVocabulary: []).isEmpty)
+    }
+
+    func testHarvestPrefersMostCommonSpelling() {
+        let a = UUID(), b = UUID()
+        let items: [(recording: UUID, text: String)] = [
+            (a, "Ask Kimkim. Then Kimkim again and KimKim once."),
+            (b, "Kimkim replied."),
+        ]
+        XCTAssertEqual(VocabularyHarvester.harvest(items, existingVocabulary: []).first?.spelling, "Kimkim")
     }
 }

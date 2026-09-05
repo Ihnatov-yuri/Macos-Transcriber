@@ -457,6 +457,7 @@ struct StyleSettingsTab: View {
                 Text("Injected only when a run's LANG matches — keeps Ukrainian runs free of English terms and vice versa.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            LearnedTermsSection()
             Section("Domain packs") {
                 ForEach(DomainVocabulary.Pack.allCases, id: \.self) { pack in
                     // TapButton — inline Button capturing @Observable container

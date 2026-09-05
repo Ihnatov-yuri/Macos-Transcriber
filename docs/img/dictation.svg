@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" font-family="Menlo, ui-monospace, monospace">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#E24A2E" stroke-width="1.6"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="560" fill="#F4EFE3"/>
+  <text x="40" y="52" font-size="15" letter-spacing="3" fill="#1A1918" font-weight="bold">DICTATION — THE SAME MACHINE, POINTED AT THE CURSOR</text>
+  <text x="40" y="72" font-size="11" fill="#8a857c">hold a key in any app, talk, let go · the passage lands where you were typing · nothing leaves the mac</text>
+
+  <!-- top row -->
+  <rect x="40" y="120" width="170" height="70" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="56" y="146" font-size="12" fill="#E24A2E" font-weight="bold">HOLD RIGHT ⌥</text>
+  <text x="56" y="164" font-size="10" fill="#8a857c">event tap, listen-only</text>
+  <text x="56" y="178" font-size="10" fill="#8a857c">hold, or tap to toggle</text>
+
+  <line x1="210" y1="155" x2="230" y2="155" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="234" y="120" width="180" height="70" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="250" y="146" font-size="12" fill="#1A1918" font-weight="bold">CAPTURE</text>
+  <text x="250" y="164" font-size="10" fill="#8a857c">warm: starts in 0.03 s</text>
+  <text x="250" y="178" font-size="10" fill="#8a857c">(cold, it took 4 s)</text>
+
+  <line x1="414" y1="155" x2="434" y2="155" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="438" y="120" width="176" height="70" fill="#1A1918"/>
+  <text x="454" y="146" font-size="12" fill="#F4EFE3" font-weight="bold">PARAKEET</text>
+  <text x="454" y="164" font-size="10" fill="#b7b2a8">whole passage, one pass,</text>
+  <text x="454" y="178" font-size="10" fill="#b7b2a8">a fraction of a second</text>
+
+  <line x1="614" y1="155" x2="634" y2="155" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="638" y="104" width="240" height="102" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="654" y="128" font-size="12" fill="#1A1918" font-weight="bold">PLAIN CODE, IN ORDER</text>
+  <text x="654" y="148" font-size="10" fill="#1A1918">1  your spellings first (Kim Kim)</text>
+  <text x="654" y="163" font-size="10" fill="#1A1918">2  stutters and fillers out</text>
+  <text x="654" y="178" font-size="10" fill="#1A1918">3  "monday, no, tuesday"</text>
+  <text x="654" y="193" font-size="10" fill="#1A1918">4  "new paragraph", "comma", …</text>
+
+  <line x1="878" y1="155" x2="896" y2="155" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <!-- router: three lanes -->
+  <rect x="900" y="92" width="260" height="126" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="916" y="116" font-size="12" fill="#E24A2E" font-weight="bold">WHICH LANE</text>
+  <text x="916" y="140" font-size="10" fill="#1A1918" font-weight="bold">VERBATIM</text>
+  <text x="990" y="140" font-size="9.5" fill="#8a857c">terminals, code, passwords</text>
+  <text x="916" y="162" font-size="10" fill="#1A1918" font-weight="bold">CLEAN</text>
+  <text x="990" y="162" font-size="9.5" fill="#8a857c">the default: stages 1–4 only</text>
+  <text x="916" y="184" font-size="10" fill="#1A1918" font-weight="bold">SMART</text>
+  <text x="990" y="184" font-size="9.5" fill="#8a857c">chat, mail: a gemma pass that</text>
+  <text x="990" y="198" font-size="9.5" fill="#8a857c">knows the app, the register</text>
+
+  <!-- the guard -->
+  <path d="M 1030 218 L 1030 254" fill="none" stroke="#E24A2E" stroke-width="1.6" marker-end="url(#arrR)"/>
+  <rect x="900" y="258" width="260" height="60" fill="none" stroke="#E24A2E" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <text x="916" y="280" font-size="10.5" fill="#E24A2E" font-weight="bold">THE GUARD</text>
+  <text x="916" y="296" font-size="9.5" fill="#8a857c">under 60% of the words in order?</text>
+  <text x="916" y="309" font-size="9.5" fill="#8a857c">the model answered. plain text goes in.</text>
+
+  <!-- context, feeding stages and router -->
+  <rect x="438" y="258" width="440" height="120" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="454" y="282" font-size="12" fill="#1A1918" font-weight="bold">WHERE IS THIS GOING?</text>
+  <text x="454" y="300" font-size="9.5" fill="#8a857c">read once, when the key goes down, through accessibility</text>
+  <text x="454" y="320" font-size="10" fill="#1A1918">· the app in front, and the kind of field</text>
+  <text x="454" y="336" font-size="10" fill="#1A1918">· up to 600 characters before the caret</text>
+  <text x="454" y="352" font-size="10" fill="#1A1918">· its language, and whether the join needs a space or a capital</text>
+  <text x="454" y="368" font-size="10" fill="#E24A2E">· a password field: verbatim, and never read</text>
+  <path d="M 760 258 L 760 224" fill="none" stroke="#1A1918" stroke-width="1.4" marker-end="url(#arr)"/>
+  <path d="M 878 300 L 890 300 L 890 226" fill="none" stroke="#1A1918" stroke-width="1.4" marker-end="url(#arr)"/>
+
+  <!-- paste -->
+  <path d="M 1030 318 L 1030 400 L 820 400 L 820 428" fill="none" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="620" y="432" width="400" height="64" fill="#1A1918"/>
+  <text x="636" y="456" font-size="12" fill="#F4EFE3" font-weight="bold">PASTE AT THE CURSOR</text>
+  <text x="636" y="474" font-size="10" fill="#b7b2a8">pasteboard, a synthetic ⌘V, your old clipboard put back</text>
+  <text x="636" y="488" font-size="10" fill="#b7b2a8">"scratch that" sends backspaces · no access? copy only</text>
+
+  <!-- history -->
+  <rect x="40" y="432" width="400" height="64" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="56" y="456" font-size="12" fill="#1A1918" font-weight="bold">HISTORY (optional)</text>
+  <text x="56" y="474" font-size="10" fill="#8a857c">every passage saved with its audio as a recording</text>
+  <text x="56" y="488" font-size="10" fill="#8a857c">in a "Dictation" folder · searchable in the knowledge base</text>
+  <path d="M 526 190 L 526 238 L 240 238 L 240 428" fill="none" stroke="#8a857c" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#arr)"/>
+
+  <text x="40" y="536" font-size="9.5" fill="#8a857c">the pieces are all borrowed: the recorder's input chain, the transcription engine, the destutter pass, the vocabulary lists, the library, the llm queue</text>
+</svg>

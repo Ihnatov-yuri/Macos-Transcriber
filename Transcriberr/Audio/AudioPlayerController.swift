@@ -10,6 +10,7 @@ import Observation
 final class AudioPlayerController: @unchecked Sendable {
     private var player: AVPlayer?
     private var timeObserver: Any?
+    private var endObserver: NSObjectProtocol?
 
     private(set) var currentTime: Double = 0
     private(set) var duration: Double = 0
@@ -21,8 +22,24 @@ final class AudioPlayerController: @unchecked Sendable {
     func load(url: URL) {
         teardown()
         waveform = []
+        // Fresh item, fresh state. Without this, switching recordings kept
+        // the PREVIOUS recording's isPlaying (a pause glyph over a stopped
+        // player — the first tap then "did nothing"), its currentTime
+        // (highlighting/scrolling a segment from the wrong recording until
+        // the first observer tick), and its duration (a wrong "/ total").
+        isPlaying = false
+        currentTime = 0
+        duration = 0
         let item = AVPlayerItem(url: url)
         let p = AVPlayer(playerItem: item)
+        // Reaching the end must flip the button back to "play" — AVPlayer
+        // stops silently, and a stale isPlaying made the next tap a no-op
+        // pause instead of a replay.
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.isPlaying = false }
+        }
         // AVPlayer fires the callback on the queue we pass (.main), but the
         // closure signature is `@Sendable` so we can't mutate main-isolated
         // state inline. Hop into MainActor with the captured time.
@@ -49,7 +66,16 @@ final class AudioPlayerController: @unchecked Sendable {
         }
     }
 
-    func play() { player?.play(); isPlaying = true }
+    func play() {
+        guard let player else { return }
+        // Play from the end = replay from the start, like every other player.
+        if duration > 0, currentTime >= duration - 0.05 {
+            player.seek(to: .zero)
+            currentTime = 0
+        }
+        player.play()
+        isPlaying = true
+    }
     func pause() { player?.pause(); isPlaying = false }
     func toggle() { isPlaying ? pause() : play() }
 
@@ -60,6 +86,8 @@ final class AudioPlayerController: @unchecked Sendable {
     private func teardown() {
         if let p = player, let obs = timeObserver { p.removeTimeObserver(obs) }
         timeObserver = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
         player?.pause()
         player = nil
     }

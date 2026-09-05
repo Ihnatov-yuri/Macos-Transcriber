@@ -418,5 +418,11 @@ final class PostProcessor: @unchecked Sendable {
         ctx.insert(doc)
         recording.outputs.append(doc)
         try ctx.save()
+        // The file-based shadow copy. This is the ONLY production path that
+        // writes an OutputDoc (RecordingRepository.replaceOutput is the
+        // tested twin nobody calls), so without this line generated
+        // summaries/minutes never reached ~/Documents/Transcriberr Backups
+        // — restore-backups had nothing to restore for them.
+        BackupService.backupOutput(doc, recordingId: recording.id)
     }
 }

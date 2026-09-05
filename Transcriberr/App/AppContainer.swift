@@ -48,9 +48,16 @@ final class AppContainer: @unchecked Sendable {
     let dictation: DictationController
 
     // MARK: - Cross-screen signals
+    /// Bumped by File → New Recording (⌘N). AppShell watches it to switch to
+    /// the Record section; RecordView consumes `pendingNewRecording` to
+    /// actually start recording once it's on screen. The counter alone
+    /// wasn't enough — a RecordView created AFTER the bump never sees a
+    /// change, and for a season the menu item did nothing at all because
+    /// nothing observed either.
     private(set) var newRecordingRequested = 0
     /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
     private(set) var dictatePaneRequested = 0
+    var pendingNewRecording = false
 
     init() {
         let schema = Schema(TranscriberrSchema.models)
@@ -183,6 +190,9 @@ final class AppContainer: @unchecked Sendable {
             if trimmed.count >= 3 && trimmed.count < 90 {
                 recording.title = trimmed
                 try? recording.modelContext?.save()
+                // The run's own backup fired before the title landed —
+                // refresh it so recording.json carries the real title.
+                BackupService.backupRecording(recording)
             }
         } catch {
             // Auto-title is best-effort; swallow.
@@ -190,6 +200,7 @@ final class AppContainer: @unchecked Sendable {
     }
 
     func requestNewRecording() {
+        pendingNewRecording = true
         newRecordingRequested &+= 1
     }
 

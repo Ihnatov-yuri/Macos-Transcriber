@@ -120,8 +120,17 @@ final class RecordModel {
                 uiState = .idle
                 return
             }
-            let duration = Double(wasMeeting ? container.meetingRecorder.elapsedMs
+            // Prefer what actually landed on disk over the wall-clock
+            // ticker: the ticker is a display convenience (100 ms
+            // granularity, pause bookkeeping) — the sample count is the
+            // truth the player and the library will show.
+            let duration: Double
+            if !wasMeeting, case .saved(_, let written) = container.recorder.state, written > 0 {
+                duration = written
+            } else {
+                duration = Double(wasMeeting ? container.meetingRecorder.elapsedMs
                                              : container.recorder.elapsedMs) / 1000
+            }
             let title = "\(wasMeeting ? "Meeting" : "Recording") \(DateFormatter.short.string(from: Date()))"
             // Save with the WAV path FIRST — compressing before the row
             // exists would widen the crash/quit window between "audio

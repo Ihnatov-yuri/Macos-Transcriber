@@ -103,9 +103,12 @@ struct SegmentEditSheet: View {
                     Spacer()
                     TapButton {
                         segment.text = text
-            try? segment.modelContext?.save()
+                        try? segment.modelContext?.save()
                         if let rec = segment.recording {
                             try? TranscriptExporter.export(recording: rec)
+                            // Hand-corrected text is exactly what the
+                            // file backup exists to preserve.
+                            BackupService.backupRecording(rec)
                         }
                         dismiss()
                     } label: {
@@ -241,6 +244,7 @@ struct SplitRecordingSheet: View {
             return
         }
         do {
+            container.jobManager.cancel(recording.id)
             try container.repository.delete(recording)
             onDone(true)
         } catch {

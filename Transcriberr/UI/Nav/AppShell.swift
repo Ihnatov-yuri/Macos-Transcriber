@@ -24,7 +24,11 @@ struct AppShell: View {
         }
     }
 
+    @Environment(AppContainer.self) private var container
     @State private var section: Section = .library
+    /// The Record screen's model lives here, for the app's lifetime — see
+    /// RecordView.model for why a view-scoped one lost in-flight recordings.
+    @State private var recordModel: RecordModel?
     private let sidebarWidth: CGFloat = 200
 
     var body: some View {
@@ -37,7 +41,12 @@ struct AppShell: View {
 
             Group {
                 switch section {
-                case .record:   RecordView()
+                case .record:
+                    if let recordModel {
+                        RecordView(model: recordModel)
+                    } else {
+                        Sheet { ProgressView().padding() }
+                    }
                 case .library:  LibraryView()
                 case .settings: SettingsScreen()
                 }
@@ -47,6 +56,14 @@ struct AppShell: View {
         }
         .background(AppColor.paper)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // File → New Recording (⌘N): bring the Record section forward;
+        // RecordView picks up the pending request and starts recording.
+        .onChange(of: container.newRecordingRequested) { _, _ in
+            section = .record
+        }
+        .task {
+            if recordModel == nil { recordModel = RecordModel(container: container) }
+        }
     }
 
     // MARK: - Sidebar

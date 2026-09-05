@@ -139,7 +139,12 @@ final class MeetingRecorder: @unchecked Sendable {
         isRunning = false
         teardownCoreAudio()
         // Drain any in-flight IO callback, then flush the converter tail.
+        var finalMs: Int64 = 0
         ioQueue.sync {
+            // Exact elapsed time from the frames actually captured — the
+            // published value is throttled (~30 Hz) and can lag the last
+            // callback, and the caller saves the recording's duration from it.
+            finalMs = Int64(Double(self.framesSeen) / self.nativeRate * 1000)
             self.flushConverterTail()
             self.flushTrackTail(converter: self.micConverter, file: self.micFile)
             self.flushTrackTail(converter: self.sysConverter, file: self.sysFile)
@@ -158,6 +163,7 @@ final class MeetingRecorder: @unchecked Sendable {
             self.audioFile = nil
             self.converter = nil
         }
+        if finalMs > 0 { elapsedMs = finalMs }
         chunkContinuation?.finish()
         AppLog.info("meeting", "stopped after \(elapsedMs / 1000)s → \(fileURL?.lastPathComponent ?? "?")")
         return fileURL

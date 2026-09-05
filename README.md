@@ -49,10 +49,13 @@ Hold a modifier key in **any app**, talk, release — the text lands at the curs
 ## Tests
 
 ```bash
-xcodebuild test -scheme Transcriberr -destination "platform=macOS"
+xcodebuild test -project Transcriberr.xcodeproj -scheme Transcriberr -destination "platform=macOS" \
+    -derivedDataPath ~/Library/Caches/transcriberr-test-dd -clonedSourcePackagesDirPath .build/xcode/SourcePackages
 ```
 
-Unit tests over the pure-logic core (destutter, echo scrub/trim, ROVER merge, chunk windowing, NLMS canceller with synthetic ground truth, dictation text stages). **Every release must pass the suite first.**
+Unit tests over the pure-logic core (destutter, echo scrub/trim, ROVER merge, chunk windowing, NLMS canceller with synthetic ground truth, dictation text stages), the repository (merge/split/versions/folders/tags), the compressor, the KB layer and the player. **Every release must pass the suite first.**
+
+Keep the test derived-data path *outside* `~/Documents`: the test host is launched by launchd and would block in the dynamic loader on the "access your Documents folder" permission prompt (`The test runner hung before establishing connection`), which nobody is there to answer in a headless run.
 
 ## Build
 

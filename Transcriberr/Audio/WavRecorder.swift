@@ -66,6 +66,11 @@ final class WavRecorder: @unchecked Sendable {
     private var sessionStart: Date = .distantPast
     private var pausedAccumulatedMs: Int64 = 0
     private var pauseBeganAt: Date?
+    /// The elapsed-time ticker. Held so resume() can restart it: the loop
+    /// exits the moment state leaves `.recording` (pause), and without a
+    /// restart the on-screen timer — and the duration saved from it —
+    /// froze at the pause point for the rest of the session.
+    private var tickTask: Task<Void, Never>?
 
     private var chunkContinuation: AsyncStream<Chunk>.Continuation?
     private(set) var chunks: AsyncStream<Chunk>
@@ -340,6 +345,8 @@ final class WavRecorder: @unchecked Sendable {
             state = .failed(reason: "Resume failed: \(startError.localizedDescription)")
         } else {
             state = .recording(file: file)
+            // The ticker stopped itself on pause — bring it back.
+            startTickTask()
         }
     }
 
@@ -596,8 +603,11 @@ final class WavRecorder: @unchecked Sendable {
     }
 
     private func startTickTask() {
-        Task { @MainActor [weak self] in
-            while let self, case .recording = self.state {
+        // One ticker at a time: a pause→resume inside the 100 ms sleep would
+        // otherwise leave the old loop alive next to the new one.
+        tickTask?.cancel()
+        tickTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled, let self, case .recording = self.state {
                 let now = Date()
                 self.elapsedMs = Int64(now.timeIntervalSince(self.sessionStart) * 1000) - self.pausedAccumulatedMs
                 try? await Task.sleep(nanoseconds: 100_000_000) // 100 ms

@@ -81,9 +81,39 @@ Names decide whether you trust a transcript. The app keeps per-language vocabula
 
 Twice before shipping, an independent review pass attacked the newest code with orders to break it. Twice it found real bugs the happy path hides: a double-press race saving duplicate recordings, a frozen meeting timer, a queue that one wedged generation could block forever, a cleanup pass quietly deleting sentence boundaries. Today's code deserves a hostile reader today — while the design is still soft.
 
+## Part two: the keyboard
+
+*Added September 2026. The app grew a second job — dictation: hold a key in any app, talk, let go, and the text lands at the cursor. Three more hardships, one more architecture note.*
+
+### Hardship #4: The first second is the whole product
+
+Recognition was never the problem. Parakeet decodes a 20-second passage in 0.15 s on the Neural Engine. The problem was the microphone. Enabling Apple's voice processing on a cold audio engine took **4 seconds** — measured, not felt — and those are exactly the seconds you are already talking. The first end-to-end run captured 0.2 s of a 10-second sentence.
+
+The fix is dull and decisive: the input chain is configured at launch and re-armed after every passage, so the key press only starts an engine that is already warm. Start latency went from 4 s to 0.03 s. Nobody praises a fast recognizer behind a slow mic.
+
+### Hardship #5: macOS keeps its promises to a signature
+
+The hotkey needs Accessibility. I granted it. The app said: not granted. I granted it again. Same answer. The grant was real — it just belonged to the *previous* build. An ad-hoc signature's identity is a hash of the binary, and macOS keys permissions to that hash. Every build I shipped that day silently invalidated the last grant, and System Settings showed a tick next to a dead entry. No error anywhere.
+
+One line in the packaging script now gives every build the same identifier-based requirement, so a grant made once stays valid. A day of confusion for one line. That ratio is the job.
+
+### Hardship #6: Context-aware means reading the room, not the cloud
+
+Cloud dictation tools got good at one thing: the text comes out shaped for where it is going. I wanted the same reflexes without a server. So at the key press the app looks at the destination — which app, which field, the sentences before the cursor — through the Accessibility API. Terminal or code editor: verbatim, no spoken commands, because "new line" in a shell executes. Slack: short and casual. Mail: full sentences. A Dutch email keeps getting Dutch, because the language of what is already in the field steers the recognizer.
+
+The order of operations matters more than the model. Names first (a vocabulary term heard as two words — "kim kim" — would be collapsed by the stutter pass), then fillers, then self-corrections in code ("send it Monday, no, Tuesday" → "send it Tuesday"), then spoken punctuation. Only after all that does the small local LLM get a turn, and only for judgment: register, continuity, an enumeration that wants to be a list. Its answer is guarded — if what comes back isn't clearly the same passage in the same order, it is thrown away and the deterministic text ships. The rule from part one held without amendment: prompt for judgment, code for mechanics.
+
+### Architectural note: the library is the dictionary
+
+The app already holds hours of my own meetings. A capitalized word that recurs across recordings, never appears as an ordinary lowercase word, and isn't in the vocabulary yet is almost always a name I actually say. So the library is harvested at launch — people, companies, products, places — and those spellings feed dictation automatically. Every new passage also offers its unknown capitalized words as one-tap additions. Vocabulary stopped being a list I maintain and became a thing the app maintains from evidence. Same principle as part one, now closing the loop.
+
+### What it is today
+
+System-wide dictation on Parakeet; hold-to-talk and tap-to-toggle with pause-flushing for hands-free passages; live preview while speaking, decoded from the buffer so far; spoken commands in English, Dutch, German and Ukrainian; "scratch that" that reaches into the target app; per-app rules; Shortcuts actions; every passage optionally saved with its audio to the library. All on Apple Silicon, all offline.
+
 ## The one-line summary
 
-Local-first AI is not cloud AI, smaller. It's a different discipline: prove each layer with evidence, let deterministic code do everything it can, give the model only short, judgment-shaped work — and never trust a demo.
+Local-first AI is not cloud AI, smaller. It's a different discipline: prove each layer with evidence, let deterministic code do everything it can, give the model only short, judgment-shaped work — and never trust a demo. Part two added one clause: measure the first second, because that is where the product lives.
 
 ---
 

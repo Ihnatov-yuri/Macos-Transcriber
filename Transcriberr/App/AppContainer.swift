@@ -14,6 +14,10 @@ import SwiftData
 /// in practice, but the *type* must not declare actor isolation.
 @Observable
 final class AppContainer: @unchecked Sendable {
+    /// The one live container, for entry points that SwiftUI doesn't hand
+    /// an environment to (App Intents).
+    nonisolated(unsafe) static weak var shared: AppContainer?
+
     // MARK: - Persistence
     let modelContainer: ModelContainer
     let repository: RecordingRepository
@@ -43,8 +47,21 @@ final class AppContainer: @unchecked Sendable {
     let postProcessor: PostProcessor
     let jobManager: TranscriptionJobManager
 
+    // MARK: - Dictation
+    let dictationSettings: DictationSettings
+    let dictation: DictationController
+
     // MARK: - Cross-screen signals
+    /// Bumped by File → New Recording (⌘N). AppShell watches it to switch to
+    /// the Record section; RecordView consumes `pendingNewRecording` to
+    /// actually start recording once it's on screen. The counter alone
+    /// wasn't enough — a RecordView created AFTER the bump never sees a
+    /// change, and for a season the menu item did nothing at all because
+    /// nothing observed either.
     private(set) var newRecordingRequested = 0
+    /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
+    private(set) var dictatePaneRequested = 0
+    var pendingNewRecording = false
 
     init() {
         let schema = Schema(TranscriberrSchema.models)
@@ -100,6 +117,24 @@ final class AppContainer: @unchecked Sendable {
             runner: transcriptionRunner,
             repository: repository
         )
+
+        dictationSettings = DictationSettings()
+        dictation = DictationController(
+            settings: dictationSettings,
+            factory: backendFactory,
+            prompts: promptStore,
+            repository: repository,
+            uiPrefs: uiPrefs,
+            recorder: recorder,
+            meetingRecorder: meetingRecorder
+        )
+        // Hotkey monitors and the HUD panel want a running app — defer to
+        // the first run-loop turn rather than doing AppKit work inside init.
+        dictation.onShowPane = { [weak self] in self?.requestDictatePane() }
+        AppContainer.shared = self
+        Task { @MainActor [weak self] in
+            self?.dictation.bootstrap()
+        }
 
         // Wire auto-titler after construction so we can capture `self`.
         jobManager.autoTitler = { [weak self] recording, segments, params in
@@ -161,6 +196,9 @@ final class AppContainer: @unchecked Sendable {
             if trimmed.count >= 3 && trimmed.count < 90 {
                 recording.title = trimmed
                 try? recording.modelContext?.save()
+                // The run's own backup fired before the title landed —
+                // refresh it so recording.json carries the real title.
+                BackupService.backupRecording(recording)
             }
         } catch {
             // Auto-title is best-effort; swallow.
@@ -168,7 +206,12 @@ final class AppContainer: @unchecked Sendable {
     }
 
     func requestNewRecording() {
+        pendingNewRecording = true
         newRecordingRequested &+= 1
+    }
+
+    func requestDictatePane() {
+        dictatePaneRequested &+= 1
     }
 
 }

@@ -16,7 +16,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: "2.5.8"
+    MARKETING_VERSION: "3.2.0"
 
 # Gemma4Swift transitively brings mlx-swift, mlx-swift-lm, swift-transformers.
 # Sherpa-onnx for diarization (pending diarization-research recommendation).
@@ -66,6 +66,10 @@ targets:
         NSAudioCaptureUsageDescription: Meeting mode records the audio other apps play (your meeting participants) so calls can be transcribed locally on this Mac.
         NSDocumentsFolderUsageDescription: Transcriberr saves recordings, transcripts, and sidecar files alongside your audio.
         NSHumanReadableCopyright: ""
+        # transcriberr://dictate/<start|stop|toggle|cancel|pane> — automation hook
+        CFBundleURLTypes:
+          - CFBundleURLName: nl.ihnatov.Transcriberr
+            CFBundleURLSchemes: [transcriberr]
     entitlements:
       path: Transcriberr/Transcriberr.entitlements
       properties:

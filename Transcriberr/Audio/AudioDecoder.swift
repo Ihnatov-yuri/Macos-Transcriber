@@ -260,6 +260,11 @@ struct AudioDecoder: Sendable {
             AppLog.info("decoder", "applying offline noise suppression to \(file.lastPathComponent) (\(pcm.count) samples)")
             pcm = NoiseSuppressor.process(samples: pcm, sampleRate: Self.sampleRate)
         }
+        // Settings → Audio Input → Mic Boost. AUTO only lifts quiet takes;
+        // fixed steps multiply. Applied to every file the same way so the
+        // Record screen's option is honored for real recordings, not only for
+        // dictation.
+        pcm = UtteranceCapture.applyGain(pcm, sensitivity: RecorderSettings.shared.micSensitivity)
         let duration = Double(pcm.count) / Self.sampleRate
         let silences = scanSilences(samples: pcm)
         let cuts = computeCutPoints(silences: silences, durationSeconds: duration)

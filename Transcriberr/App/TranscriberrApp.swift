@@ -16,6 +16,7 @@ struct TranscriberrApp: App {
     var body: some Scene {
         WindowGroup {
             AppShell()
+                .onOpenURL { url in container.dictation.handle(url: url) }
                 .environment(container)
                 .modelContainer(container.modelContainer)
                 .frame(minWidth: 980, minHeight: 640)
@@ -32,7 +33,31 @@ struct TranscriberrApp: App {
                 Button("New Recording") { container.requestNewRecording() }
                     .keyboardShortcut("n")
             }
+            CommandMenu("Dictation") {
+                Button(container.dictation.phase == .listening ? "Stop Dictation" : "Start Dictation") {
+                    container.dictation.toggleFromMenu()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("Cancel Dictation") { container.dictation.cancel() }
+                    .disabled(container.dictation.phase != .listening)
+                Divider()
+                Button("Show Dictate Screen") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    container.requestDictatePane()
+                }
+            }
         }
+
+        // Menu bar presence so dictation is reachable without the window.
+        MenuBarExtra(isInserted: Binding(
+            get: { container.dictationSettings.showMenuBar },
+            set: { container.dictationSettings.showMenuBar = $0 }
+        )) {
+            DictationMenu(container: container)
+        } label: {
+            DictationMenuBarLabel(controller: container.dictation)
+        }
+        .menuBarExtraStyle(.menu)
 
         Settings {
             SettingsView()

@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" font-family="Menlo, ui-monospace, monospace">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#E24A2E" stroke-width="1.6"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="440" fill="#F4EFE3"/>
+  <text x="40" y="52" font-size="15" letter-spacing="3" fill="#1A1918" font-weight="bold">ONE BURNER, AND A CHEF WHO FREEZES</text>
+  <text x="40" y="72" font-size="11" fill="#8a857c">the local llm serves one conversation at a time · when it hangs, the queue must not die with it</text>
+
+  <!-- callers -->
+  <text x="40" y="112" font-size="10" letter-spacing="2" fill="#8a857c">WHO WANTS THE ENGINE</text>
+  <rect x="40" y="124" width="200" height="34" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+  <text x="54" y="146" font-size="11" fill="#1A1918">super-mode referee</text>
+  <rect x="40" y="168" width="200" height="34" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+  <text x="54" y="190" font-size="11" fill="#1A1918">preset rewrite</text>
+  <rect x="40" y="212" width="200" height="34" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+  <text x="54" y="234" font-size="11" fill="#1A1918">dictation, smart pass</text>
+  <rect x="40" y="256" width="200" height="34" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+  <text x="54" y="278" font-size="11" fill="#1A1918">auto-title</text>
+  <rect x="40" y="300" width="200" height="34" fill="none" stroke="#8a857c" stroke-width="1.2" stroke-dasharray="3 3"/>
+  <text x="54" y="322" font-size="11" fill="#8a857c">parakeet / whisper (gpu)</text>
+  <text x="40" y="356" font-size="9" fill="#8a857c">even the other engines wait while gemma is loaded:</text>
+  <text x="40" y="369" font-size="9" fill="#8a857c">parallel gpu work is what hangs its metal path</text>
+
+  <!-- arrows into the queue -->
+  <path d="M 240 141 C 280 141, 280 229, 316 229" fill="none" stroke="#1A1918" stroke-width="1.4" marker-end="url(#arr)"/>
+  <path d="M 240 185 C 280 185, 280 229, 316 229" fill="none" stroke="#1A1918" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="240" y1="229" x2="316" y2="229" stroke="#1A1918" stroke-width="1.4" marker-end="url(#arr)"/>
+  <path d="M 240 273 C 280 273, 280 229, 316 229" fill="none" stroke="#1A1918" stroke-width="1.4" marker-end="url(#arr)"/>
+  <path d="M 240 317 C 280 317, 280 229, 316 229" fill="none" stroke="#8a857c" stroke-width="1.2" stroke-dasharray="3 3"/>
+
+  <!-- the queue -->
+  <rect x="320" y="184" width="330" height="90" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="336" y="208" font-size="12" fill="#1A1918" font-weight="bold">THE QUEUE</text>
+  <text x="336" y="224" font-size="9" fill="#8a857c">first come, first served · one in at a time</text>
+  <rect x="336" y="236" width="52" height="24" fill="#1A1918"/>
+  <rect x="396" y="236" width="52" height="24" fill="none" stroke="#1A1918" stroke-width="1.2"/>
+  <rect x="456" y="236" width="52" height="24" fill="none" stroke="#1A1918" stroke-width="1.2"/>
+  <rect x="516" y="236" width="52" height="24" fill="none" stroke="#1A1918" stroke-width="1.2"/>
+  <text x="586" y="252" font-size="10" fill="#E24A2E" font-weight="bold">gen 7</text>
+  <text x="586" y="266" font-size="8.5" fill="#8a857c">stamped</text>
+
+  <!-- engine -->
+  <line x1="650" y1="229" x2="700" y2="229" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="704" y="184" width="200" height="90" fill="#1A1918"/>
+  <text x="720" y="210" font-size="12" fill="#F4EFE3" font-weight="bold">GEMMA · LiteRT</text>
+  <text x="720" y="228" font-size="10" fill="#b7b2a8">one native call at a time</text>
+  <text x="720" y="244" font-size="10" fill="#b7b2a8">cannot be cancelled</text>
+  <text x="720" y="262" font-size="10" fill="#b7b2a8">sometimes never returns</text>
+  <line x1="904" y1="229" x2="954" y2="229" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text x="962" y="226" font-size="11" fill="#1A1918" font-weight="bold">RESPONSE</text>
+  <text x="962" y="242" font-size="9" fill="#8a857c">never empty any more</text>
+
+  <!-- watchdog ladder -->
+  <path d="M 804 274 L 804 312" fill="none" stroke="#E24A2E" stroke-width="1.6" marker-end="url(#arrR)"/>
+  <rect x="704" y="318" width="456" height="94" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="720" y="342" font-size="12" fill="#E24A2E" font-weight="bold">WATCHDOG · 120 s</text>
+  <text x="720" y="362" font-size="10" fill="#1A1918">1. rebuild the engine in place, gen 7 → 8; waiters wake on the new one</text>
+  <text x="720" y="378" font-size="10" fill="#1A1918">2. the frozen call's late release is ignored: wrong generation</text>
+  <text x="720" y="394" font-size="10" fill="#1A1918">3. a chunk that hangs twice is skipped; two hangs and gemma sits out</text>
+
+  <!-- the gen loop back -->
+  <path d="M 704 365 L 606 365 L 606 280" fill="none" stroke="#E24A2E" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrR)"/>
+  <text x="336" y="300" font-size="9" fill="#8a857c">measured: about 3 hangs per 30 chunks,</text>
+  <text x="336" y="313" font-size="9" fill="#8a857c">whichever engine gemma was paired with</text>
+</svg>

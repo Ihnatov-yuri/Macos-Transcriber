@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" font-family="Menlo, ui-monospace, monospace">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#1A1918" stroke-width="1.6"/>
+    </marker>
+    <marker id="arrR" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8" fill="none" stroke="#E24A2E" stroke-width="1.6"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="600" fill="#F4EFE3"/>
+  <text x="40" y="52" font-size="15" letter-spacing="3" fill="#1A1918" font-weight="bold">THE MACHINE, A MONTH LATER</text>
+  <text x="40" y="72" font-size="11" fill="#8a857c">what goes in, what comes out, where the models sit · all of it on the mac</text>
+
+  <!-- inputs -->
+  <text x="40" y="112" font-size="10" letter-spacing="2" fill="#8a857c">IN</text>
+  <rect x="40" y="122" width="200" height="60" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="56" y="147" font-size="12" fill="#1A1918" font-weight="bold">MIC</text>
+  <text x="56" y="165" font-size="10" fill="#8a857c">plain recording</text>
+  <circle cx="220" cy="140" r="5" fill="#E24A2E"/>
+
+  <rect x="40" y="196" width="200" height="74" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="56" y="221" font-size="12" fill="#1A1918" font-weight="bold">MEETING TAP</text>
+  <text x="56" y="239" font-size="10" fill="#8a857c">mic + system tap, one clock</text>
+  <text x="56" y="253" font-size="10" fill="#8a857c">raw tracks kept, echo removed</text>
+
+  <rect x="40" y="284" width="200" height="60" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="56" y="309" font-size="12" fill="#E24A2E" font-weight="bold">HOLD A KEY</text>
+  <text x="56" y="327" font-size="10" fill="#8a857c">dictation, in any app</text>
+
+  <!-- converge to decode -->
+  <path d="M 240 152 C 264 152, 264 233, 282 233" fill="none" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="240" y1="233" x2="282" y2="233" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="240" y1="314" x2="482" y2="314" stroke="#E24A2E" stroke-width="1.6" marker-end="url(#arrR)"/>
+  <text x="252" y="334" font-size="9" fill="#E24A2E">skips decode, one pass</text>
+
+  <rect x="286" y="200" width="160" height="66" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="302" y="226" font-size="12" fill="#1A1918" font-weight="bold">DECODE</text>
+  <text x="302" y="244" font-size="10" fill="#8a857c">16 kHz mono,</text>
+  <text x="302" y="257" font-size="10" fill="#8a857c">silence-aware chunks</text>
+
+  <!-- engines -->
+  <line x1="446" y1="233" x2="482" y2="233" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="486" y="122" width="210" height="222" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="504" y="148" font-size="13" fill="#1A1918" font-weight="bold">ENGINES</text>
+  <rect x="504" y="160" width="174" height="36" fill="#1A1918"/>
+  <text x="516" y="178" font-size="11" fill="#F4EFE3">PARAKEET v3</text>
+  <text x="516" y="190" font-size="9" fill="#b7b2a8">neural engine · dictation too</text>
+  <rect x="504" y="204" width="174" height="36" fill="none" stroke="#1A1918" stroke-width="1.4"/>
+  <text x="516" y="222" font-size="11" fill="#1A1918">WHISPER large-v3</text>
+  <text x="516" y="234" font-size="9" fill="#8a857c">anchors Ukrainian</text>
+  <rect x="504" y="248" width="174" height="36" fill="none" stroke="#1A1918" stroke-width="1.4"/>
+  <text x="516" y="266" font-size="11" fill="#1A1918">GEMMA · LiteRT</text>
+  <text x="516" y="278" font-size="9" fill="#8a857c">hangs sometimes, gets benched</text>
+  <rect x="504" y="292" width="174" height="36" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="516" y="310" font-size="11" fill="#E24A2E" font-weight="bold">SUPER</text>
+  <text x="516" y="322" font-size="9" fill="#8a857c">a vote, then a referee</text>
+
+  <!-- the gate under the engines -->
+  <rect x="486" y="358" width="210" height="54" fill="none" stroke="#E24A2E" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <text x="500" y="379" font-size="10.5" fill="#E24A2E" font-weight="bold">ONE MODEL AT A TIME</text>
+  <text x="500" y="393" font-size="9" fill="#8a857c">two models running at once</text>
+  <text x="500" y="405" font-size="9" fill="#8a857c">made gemma hang, so: a queue</text>
+
+  <!-- who spoke -->
+  <line x1="696" y1="233" x2="732" y2="233" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="736" y="200" width="190" height="66" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="752" y="226" font-size="12" fill="#1A1918" font-weight="bold">WHO SPOKE</text>
+  <text x="752" y="244" font-size="10" fill="#8a857c">meetings: my track = me,</text>
+  <text x="752" y="257" font-size="10" fill="#8a857c">diarize only the others</text>
+
+  <!-- versions -->
+  <line x1="926" y1="233" x2="962" y2="233" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="966" y="200" width="190" height="66" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <rect x="974" y="208" width="190" height="66" fill="none" stroke="#8a857c" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="982" y="226" font-size="12" fill="#1A1918" font-weight="bold">VERSIONS</text>
+  <text x="982" y="244" font-size="10" fill="#8a857c">every run kept,</text>
+  <text x="982" y="257" font-size="10" fill="#8a857c">merge · split · restore</text>
+
+  <!-- down to stutters, presets -->
+  <path d="M 1061 274 L 1061 312" fill="none" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="966" y="318" width="190" height="56" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="982" y="342" font-size="11" fill="#1A1918" font-weight="bold">REMOVE STUTTERS</text>
+  <text x="982" y="360" font-size="10" fill="#8a857c">pure code, no model</text>
+  <line x1="966" y1="346" x2="930" y2="346" stroke="#1A1918" stroke-width="1.6" marker-end="url(#arr)"/>
+  <rect x="736" y="318" width="190" height="56" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="752" y="342" font-size="12" fill="#E24A2E" font-weight="bold">LLM PRESETS</text>
+  <text x="752" y="360" font-size="10" fill="#8a857c">chunked · queued · local</text>
+
+  <!-- outputs -->
+  <text x="40" y="452" font-size="10" letter-spacing="2" fill="#8a857c">OUT</text>
+  <rect x="40" y="462" width="320" height="68" fill="none" stroke="#1A1918" stroke-width="2"/>
+  <text x="56" y="487" font-size="12" fill="#1A1918" font-weight="bold">THE TRANSCRIPT</text>
+  <text x="56" y="505" font-size="10" fill="#8a857c">speakers, versions, summaries, minutes,</text>
+  <text x="56" y="518" font-size="10" fill="#8a857c">translations · txt / srt / json</text>
+
+  <rect x="380" y="462" width="320" height="68" fill="none" stroke="#E24A2E" stroke-width="2"/>
+  <text x="396" y="487" font-size="12" fill="#E24A2E" font-weight="bold">AT THE CURSOR</text>
+  <text x="396" y="505" font-size="10" fill="#8a857c">dictated text pasted into whatever app</text>
+  <text x="396" y="518" font-size="10" fill="#8a857c">is in front · clipboard put back</text>
+
+  <rect x="720" y="462" width="436" height="68" fill="#1A1918"/>
+  <text x="736" y="487" font-size="12" fill="#F4EFE3" font-weight="bold">KNOWLEDGE BASE</text>
+  <text x="736" y="505" font-size="10" fill="#b7b2a8">any assistant on the mac can search the library:</text>
+  <text x="736" y="518" font-size="10" fill="#b7b2a8">cli + mcp server · read-only, always</text>
+
+  <!-- feed lines from pipeline to outs -->
+  <path d="M 831 374 L 831 420 L 200 420 L 200 458" fill="none" stroke="#1A1918" stroke-width="1.4" marker-end="url(#arr)"/>
+  <path d="M 486 330 L 466 330 L 466 430 L 540 430 L 540 458" fill="none" stroke="#E24A2E" stroke-width="1.4" marker-end="url(#arrR)"/>
+  <path d="M 1156 240 L 1176 240 L 1176 420 L 938 420 L 938 458" fill="none" stroke="#1A1918" stroke-width="1.4" marker-end="url(#arr)"/>
+
+  <!-- the floor: what happens to files -->
+  <line x1="40" y1="556" x2="1160" y2="556" stroke="#8a857c" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="40" y="580" font-size="10" fill="#8a857c">AFTER STOP · audio shrinks to aac, a tenth of the size (7.7 GB → 1.0 GB) · every transcript, version and output shadowed as plain json in a folder nothing deletes</text>
+</svg>

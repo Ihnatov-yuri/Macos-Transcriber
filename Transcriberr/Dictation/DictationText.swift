@@ -511,7 +511,16 @@ enum DictationText {
         let polWords = polished.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
         guard !polWords.isEmpty, !rawWords.isEmpty else { return false }
         let lcs = longestCommonSubsequence(Array(rawWords.prefix(400)), Array(polWords.prefix(400)))
-        return Double(lcs) / Double(min(rawWords.count, polWords.count)) >= minOverlap
+        guard Double(lcs) / Double(min(rawWords.count, polWords.count)) >= minOverlap else { return false }
+        // A model that trims the END of a passage ("…dog. Second passage?" →
+        // "…dog.") still scores high in-order overlap. The last words the
+        // user said must still be there, near the end.
+        if let lastRaw = rawWords.last, rawWords.count >= 4 {
+            let tail = polWords.suffix(6)
+            guard tail.contains(lastRaw) || tail.contains(where: { $0.hasPrefix(lastRaw) || lastRaw.hasPrefix($0) }) else { return false }
+        }
+        // …and the model must not have dropped more than a fifth of the words.
+        return Double(lcs) / Double(rawWords.count) >= 0.75
     }
 
     static func longestCommonSubsequence(_ a: [String], _ b: [String]) -> Int {

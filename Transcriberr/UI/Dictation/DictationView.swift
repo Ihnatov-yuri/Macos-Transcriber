@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 
 /// In-app dictation pane: a scratch editor that the hotkey (or the footer
@@ -8,6 +9,8 @@ import SwiftUI
 /// has focus.
 struct DictationView: View {
     @Environment(AppContainer.self) private var container
+    @State private var showSetup = false
+    @State private var micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
 
     var body: some View {
         let controller = container.dictation
@@ -27,6 +30,12 @@ struct DictationView: View {
                         .padding(.horizontal, AppMetric.sheetPadding)
 
                     Spacer().frame(height: AppMetric.l)
+
+                    if showSetup || !controller.settings.onboarded {
+                        setupBlock(controller)
+                            .padding(.horizontal, AppMetric.sheetPadding)
+                        Spacer().frame(height: AppMetric.l)
+                    }
 
                     optionsRow(controller)
                         .padding(.horizontal, AppMetric.sheetPadding)
@@ -80,8 +89,13 @@ struct DictationView: View {
         case .transcribing, .inserting:
             Text("RECOGNIZING").monoLabel(10, color: AppColor.inkSoft)
         default:
-            Text(c.hotkeyArmed ? "HOTKEY · \(c.settings.hotkey.glyph)" : "HOTKEY · OFF")
-                .monoLabel(10, color: c.hotkeyArmed ? AppColor.ink : AppColor.inkMuted)
+            HStack(spacing: AppMetric.m) {
+                TapButton { showSetup.toggle() } label: {
+                    Text("SETUP").monoLabel(10, color: AppColor.inkMuted)
+                }
+                Text(c.hotkeyArmed ? "HOTKEY · \(c.settings.hotkey.glyph)" : "HOTKEY · OFF")
+                    .monoLabel(10, color: c.hotkeyArmed ? AppColor.ink : AppColor.inkMuted)
+            }
         }
     }
 
@@ -96,6 +110,71 @@ struct DictationView: View {
         case (_, .toggle):  how = "Tap \(s.hotkey.label) in any app to start, tap again to stop."
         }
         return "\(how) Engine: \(engine). Language: \(lang)."
+    }
+
+    // MARK: - Setup (first run)
+
+    @ViewBuilder
+    private func setupBlock(_ c: DictationController) -> some View {
+        let s = c.settings
+        let micOK = micStatus == .authorized
+        let allDone = micOK && c.accessibilityTrusted && c.inputMonitoringGranted
+        VStack(alignment: .leading, spacing: AppMetric.s) {
+            HStack {
+                Text("SETUP · \(allDone ? "ALL SET" : "THREE PERMISSIONS, ONCE")").monoLabel(10, color: allDone ? AppColor.ink : AppColor.accent)
+                Spacer()
+                if allDone || s.onboarded {
+                    TapButton {
+                        s.onboarded = true
+                        showSetup = false
+                    } label: { Text(allDone ? "DONE" : "HIDE").monoLabel(10, color: AppColor.inkSoft) }
+                }
+            }
+            setupRow(1, "MICROPHONE", done: micOK,
+                     detail: micOK ? "Granted." : "Needed to hear you. Nothing is recorded until you press the key.",
+                     action: micOK ? nil : ("ALLOW", {
+                        AVCaptureDevice.requestAccess(for: .audio) { _ in
+                            DispatchQueue.main.async { micStatus = AVCaptureDevice.authorizationStatus(for: .audio) }
+                        }
+                     }))
+            setupRow(2, "ACCESSIBILITY", done: c.accessibilityTrusted,
+                     detail: c.accessibilityTrusted ? "Granted." : "Lets the app see the hotkey in other apps and paste the text at the cursor.",
+                     action: c.accessibilityTrusted ? nil : ("GRANT", { c.requestAccessibility() }))
+            setupRow(3, "INPUT MONITORING", done: c.inputMonitoringGranted,
+                     detail: c.inputMonitoringGranted ? "Granted." : "Lets the app receive the key press itself. Usually ticked together with Accessibility.",
+                     action: c.inputMonitoringGranted ? nil : ("GRANT", { c.requestInputMonitoring() }))
+            setupRow(4, "TRY IT", done: !c.lastHotkeyEvent.isEmpty,
+                     detail: c.lastHotkeyEvent.isEmpty
+                        ? "Press \(s.hotkey.label) once. This line changes the moment the key is seen."
+                        : "Seen: \(c.lastHotkeyEvent). \(s.mode == .hold ? "Hold it and talk." : "Tap to start, tap to stop — or hold to talk.")",
+                     action: nil)
+        }
+        .padding(AppMetric.m)
+        .overlay(Rectangle().stroke(allDone ? AppColor.hairline : AppColor.accent, lineWidth: 1))
+        .onAppear { micStatus = AVCaptureDevice.authorizationStatus(for: .audio) }
+    }
+
+    @ViewBuilder
+    private func setupRow(
+        _ n: Int, _ title: String, done: Bool, detail: String,
+        action: (String, () -> Void)?
+    ) -> some View {
+        HStack(alignment: .top, spacing: AppMetric.m) {
+            Rectangle().fill(done ? AppColor.accent : AppColor.inkFaint).frame(width: 8, height: 8).padding(.top, 4)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(n) · \(title)").monoLabel(10, color: done ? AppColor.ink : AppColor.inkSoft)
+                Text(detail).font(AppFont.inter(12)).foregroundStyle(AppColor.inkSoft)
+                    .frame(maxWidth: 560, alignment: .leading)
+            }
+            Spacer()
+            if let action {
+                TapButton(action: action.1) {
+                    Text(action.0).monoLabel(10, color: AppColor.paper)
+                        .padding(.horizontal, AppMetric.m).padding(.vertical, 6)
+                        .background(AppColor.ink)
+                }
+            }
+        }
     }
 
     // MARK: - Options
@@ -311,9 +390,31 @@ struct DictationView: View {
                     EditorialChip(label: "CLEAR") { text.wrappedValue = "" }
                 }
             }
+            if !c.suggestedNames.isEmpty {
+                HStack(spacing: AppMetric.s) {
+                    Text("NEW NAMES · TAP TO ADD TO VOCABULARY").monoLabel(9, color: AppColor.inkSoft)
+                    ForEach(c.suggestedNames.prefix(6), id: \.self) { name in
+                        HStack(spacing: 4) {
+                            TapButton { c.addToVocabulary(name) } label: {
+                                Text("+ \(name)")
+                                    .font(AppFont.mono(10))
+                                    .foregroundStyle(AppColor.ink)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .overlay(Rectangle().stroke(AppColor.accent, lineWidth: 1))
+                            }
+                            TapButton { c.dismissSuggestion(name) } label: {
+                                Text("×").monoLabel(10, color: AppColor.inkMuted)
+                            }
+                        }
+                    }
+                    Spacer()
+                }
+            }
             ZStack(alignment: .topLeading) {
                 if text.wrappedValue.isEmpty {
-                    Text(c.settings.hotkey == .off
+                    Text(c.phase == .listening && !c.previewText.isEmpty
+                         ? c.previewText + " …"
+                         : c.settings.hotkey == .off
                          ? "Press DICTATE below and start talking."
                          : "Hold \(c.settings.hotkey.label) and start talking — or press DICTATE below.")
                         .font(AppFont.fraunces(20, italic: true))

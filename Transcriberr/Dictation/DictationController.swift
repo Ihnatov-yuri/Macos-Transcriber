@@ -60,6 +60,13 @@ final class DictationController: @unchecked Sendable {
     private var trustWatch: Task<Void, Never>?
     private(set) var lastError: String?
     private(set) var sessionCount = 0
+    /// Provisional text while still speaking (periodic decode of the buffer).
+    private(set) var previewText = ""
+    /// Capitalized words from the last passage that aren't in the vocabulary
+    /// yet — offered as one-click additions.
+    private(set) var suggestedNames: [String] = []
+    private var previewLoop: Task<Void, Never>?
+    private var previewInFlight = false
 
     /// What "scratch that" removes: the last passage we delivered.
     private struct LastInsertion {
@@ -143,6 +150,7 @@ final class DictationController: @unchecked Sendable {
         hud = DictationHUD(controller: self)
         capture.prewarm()
         armHotkey()
+        refreshLearnedTerms()
         watchHotkeySetting()
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
@@ -460,6 +468,40 @@ final class DictationController: @unchecked Sendable {
 
         if settings.mode == .toggle { startFlushLoop() }
         else { startHoldWatchdog() }
+        previewText = ""
+        if settings.livePreview { startPreviewLoop() }
+    }
+
+    /// Live preview: every 2.5 s decode everything buffered since the last
+    /// flush and show it as provisional text. Parakeet is ~100× realtime, so
+    /// even a 60 s buffer costs a fraction of a second; a final pass in
+    /// flight always takes precedence (one engine, strictly serialized).
+    @MainActor
+    private func startPreviewLoop() {
+        previewLoop?.cancel()
+        let session = sessionID
+        previewLoop = Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled, session == self.sessionID, self.phase == .listening {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard session == self.sessionID, self.phase == .listening, self.capture.isRunning,
+                      self.capture.hasVoiceSinceDrain, !self.previewInFlight, self.pendingPasses == 0
+                else { continue }
+                let samples = self.capture.snapshot()
+                guard samples.count >= 16_000 else { continue }
+                self.previewInFlight = true
+                defer { self.previewInFlight = false }
+                let backend = self.factory.backend(for: self.settings.engine)
+                guard await backend.isReady else { continue }
+                if let text = try? await backend.transcribeChunk(
+                    samples: UtteranceCapture.applyGain(samples, sensitivity: RecorderSettings.shared.micSensitivity),
+                    languages: self.settings.languages, translateTo: nil, diarize: false,
+                    previousContext: nil, speakerHints: []
+                ), session == self.sessionID, self.phase == .listening {
+                    let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !cleaned.isEmpty { self.previewText = cleaned }
+                }
+            }
+        }
     }
 
     /// Release / second tap: stop capturing and process the last passage.
@@ -468,6 +510,8 @@ final class DictationController: @unchecked Sendable {
         guard phase == .listening else { return }
         flushLoop?.cancel()
         flushLoop = nil
+        previewLoop?.cancel()
+        previewLoop = nil
         phase = .transcribing
         updateHUD()
         let start = startTask
@@ -488,6 +532,9 @@ final class DictationController: @unchecked Sendable {
         generation &+= 1
         flushLoop?.cancel()
         flushLoop = nil
+        previewLoop?.cancel()
+        previewLoop = nil
+        previewText = ""
         let start = startTask
         teardown = Task { @MainActor [weak self] in
             await start?.value
@@ -641,8 +688,10 @@ final class DictationController: @unchecked Sendable {
         }
 
         lastText = text
+        previewText = ""
         sessionCount += 1
         let outcome = deliver(text)
+        suggestNames(from: text)
 
         if settings.keepHistory {
             saveHistory(samples: raw, seconds: seconds, text: text)
@@ -866,10 +915,80 @@ final class DictationController: @unchecked Sendable {
     // MARK: - Helpers
 
     private func vocabularyTerms() -> [String] {
+        userVocabularyTerms() + settings.activeLearnedSpellings
+    }
+
+    private func userVocabularyTerms() -> [String] {
         prompts.vocabulary(for: settings.languages)
             .split(whereSeparator: { $0 == "," || $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    // MARK: - Learning names
+
+    /// Re-harvest names from every transcript in the library. Cheap (text
+    /// only) and off the main thread; runs at launch and on demand.
+    @MainActor
+    func refreshLearnedTerms() {
+        let items: [(recording: UUID, text: String)]
+        do {
+            items = try repository.all().map { rec in
+                (rec.id, rec.segments.sorted { $0.startSeconds < $1.startSeconds }.map(\.text).joined(separator: "\n"))
+            }
+        } catch {
+            AppLog.warn("dictation", "learn names: could not read library (\(error.localizedDescription))")
+            return
+        }
+        let existing = userVocabularyTerms()
+        Task.detached(priority: .utility) { [weak self] in
+            let t0 = Date()
+            let terms = VocabularyHarvester.harvest(items, existingVocabulary: existing)
+            await MainActor.run {
+                guard let self else { return }
+                self.settings.learnedTerms = terms
+                self.settings.learnedAt = Date()
+                AppLog.info("dictation", String(format: "learned %d names from %d transcripts in %.2fs",
+                                                terms.count, items.count, Date().timeIntervalSince(t0)))
+            }
+        }
+    }
+
+    /// Capitalized words / acronyms in a passage that no vocabulary knows yet.
+    @MainActor
+    private func suggestNames(from text: String) {
+        let known = Set((userVocabularyTerms() + settings.learnedTerms.map(\.spelling)).map(VocabularyHarvester.key))
+        var seen = Set<String>()
+        suggestedNames = VocabularyHarvester.candidates(in: text).filter { cand in
+            let k = VocabularyHarvester.key(cand)
+            guard k.count >= 3, !known.contains(k), !settings.dismissedTermKeys.contains(k), !seen.contains(k) else { return false }
+            seen.insert(k)
+            return true
+        }
+    }
+
+    /// Promote a spelling into the permanent (all-languages) vocabulary.
+    @MainActor
+    func addToVocabulary(_ term: String) {
+        let t = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        let k = VocabularyHarvester.key(t)
+        let current = prompts.vocabulary
+            .split(whereSeparator: { $0 == "," || $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if !current.contains(where: { VocabularyHarvester.key($0) == k }) {
+            prompts.vocabulary = (current + [t]).joined(separator: ", ")
+        }
+        suggestedNames.removeAll { VocabularyHarvester.key($0) == k }
+        settings.learnedTerms.removeAll { $0.key == k }
+    }
+
+    @MainActor
+    func dismissSuggestion(_ term: String) {
+        let k = VocabularyHarvester.key(term)
+        settings.dismissedTermKeys.insert(k)
+        suggestedNames.removeAll { VocabularyHarvester.key($0) == k }
     }
 
     /// Whole-utterance speech gate (mirror of the live captioner's).

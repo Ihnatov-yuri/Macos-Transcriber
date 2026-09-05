@@ -78,6 +78,10 @@ struct DictationSettingsTab: View {
                        isOn: Binding(get: { s.selfCorrections }, set: { s.selfCorrections = $0 }))
                 Toggle("Language on auto: follow the language of the text in the field",
                        isOn: Binding(get: { s.languageFromContext }, set: { s.languageFromContext = $0 }))
+                Toggle("Live preview while speaking (provisional text in the status strip)",
+                       isOn: Binding(get: { s.livePreview }, set: { s.livePreview = $0 }))
+                Toggle("Use names learned from my transcripts (Settings → Style & Vocabulary)",
+                       isOn: Binding(get: { s.useLearnedTerms }, set: { s.useLearnedTerms = $0 }))
                 Text("Verbatim inserts the recognizer's words untouched. Clean applies the deterministic passes (vocabulary, fillers, commands, self-corrections) in well under a second. Smart additionally runs Gemma with the target app, its register, and the text before the cursor — chat stays short and casual, mail gets full sentences, an enumeration becomes a list. Password fields are always verbatim and never read.")
                     .font(.caption).foregroundStyle(.secondary)
             }

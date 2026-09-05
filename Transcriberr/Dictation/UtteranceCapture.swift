@@ -44,10 +44,16 @@ final class UtteranceCapture: @unchecked Sendable {
     // MARK: - Voice activity
 
     /// Same conservative gate as the live captioner: real speech peaks far
-    /// above room tone even when the smoothed RMS is quiet.
-    nonisolated static func isVoiced(rms: Float, peak: Float) -> Bool {
-        peak > 0.02 && rms > 0.0025
+    /// above room tone even when the smoothed RMS is quiet. `noiseFloor`
+    /// (RMS of the quietest recent frames) raises the bar in a noisy room so
+    /// steady fan/traffic noise never counts as speech.
+    nonisolated static func isVoiced(rms: Float, peak: Float, noiseFloor: Float = 0) -> Bool {
+        peak > max(0.02, noiseFloor * 6) && rms > max(0.0025, noiseFloor * 3)
     }
+
+    /// Rolling per-frame RMS history (ioQueue) for the adaptive noise floor.
+    private var frameRMS: [Float] = []
+    private var noiseFloor: Float = 0
 
     /// Seconds of silence since the last voiced frame (0 while talking).
     var silenceSeconds: Double {
@@ -157,6 +163,8 @@ final class UtteranceCapture: @unchecked Sendable {
             totalSamples = 0
             tapCalls = 0
             tapFrames = 0
+            frameRMS.removeAll(keepingCapacity: true)
+            noiseFloor = 0
         }
         level = 0
         peakHistory = Array(repeating: 0, count: 48)
@@ -250,6 +258,11 @@ final class UtteranceCapture: @unchecked Sendable {
         return out
     }
 
+    /// Copy of the audio buffered so far (live preview) — nothing is consumed.
+    func snapshot() -> [Float] {
+        ioQueue.sync { samples }
+    }
+
     /// Take the buffered audio (for a pause flush) and keep capturing.
     func drain() -> [Float] {
         ioQueue.sync {
@@ -318,7 +331,14 @@ final class UtteranceCapture: @unchecked Sendable {
             if a > peak { peak = a }
         }
         let rms = (sumSq / Float(max(1, chunk.count))).squareRoot()
-        if Self.isVoiced(rms: rms, peak: peak) {
+        // Adaptive floor: the 20th percentile of the last ~4 s of frames.
+        frameRMS.append(rms)
+        if frameRMS.count > 200 { frameRMS.removeFirst(frameRMS.count - 200) }
+        if frameRMS.count >= 20 {
+            let sorted = frameRMS.sorted()
+            noiseFloor = sorted[sorted.count / 5]
+        }
+        if Self.isVoiced(rms: rms, peak: peak, noiseFloor: noiseFloor) {
             voicedSinceDrain = true
             lastVoicedSample = totalSamples
         }

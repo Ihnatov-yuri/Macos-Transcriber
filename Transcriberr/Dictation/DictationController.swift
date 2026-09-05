@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import Observation
+import Security
 
 /// Dictation state machine: hotkey → capture → recognize → clean → insert.
 ///
@@ -42,9 +43,30 @@ final class DictationController: @unchecked Sendable {
     private(set) var hotkeyArmed = false
     /// Set by `DictationView` while it is on screen: a hotkey press with the
     /// app active then targets the pane instead of pasting into ourselves.
-    var paneVisible = false
+    /// While the pane is up and trust is missing, trust is re-checked every
+    /// two seconds so the permission strip updates the moment the checkbox
+    /// is ticked — no button press, no relaunch.
+    var paneVisible = false {
+        didSet { paneVisible ? startTrustWatch() : stopTrustWatch() }
+    }
+    private var trustWatch: Task<Void, Never>?
     private(set) var lastError: String?
     private(set) var sessionCount = 0
+
+    /// What "scratch that" removes: the last passage we delivered.
+    private struct LastInsertion {
+        let target: Target
+        let inserted: String      // exactly what went into the target app
+        let paneLength: Int       // characters appended to the pane
+        let app: String?          // bundle id of the app pasted into
+        let at: Date
+    }
+    private var lastInsertion: LastInsertion?
+    /// Where the current session's text is going — captured at begin().
+    private(set) var context = DictationContext()
+    /// Formatting mode resolved from the per-app rules for this session.
+    private(set) var activeMode: DictationSettings.FormatMode = .clean
+    private var activeTone: DictationSettings.Tone = .neutral
 
     let settings: DictationSettings
     let capture = UtteranceCapture()
@@ -135,6 +157,52 @@ final class DictationController: @unchecked Sendable {
         if trusted != accessibilityTrusted || (trusted && !hotkeyArmed && settings.hotkey != .off) {
             armHotkey()
         }
+        accessibilityTrusted = trusted
+    }
+
+    private func startTrustWatch() {
+        trustWatch?.cancel()
+        trustWatch = Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled, self.paneVisible {
+                self.refreshTrust()
+                if self.accessibilityTrusted { return }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    private func stopTrustWatch() {
+        trustWatch?.cancel()
+        trustWatch = nil
+    }
+
+    /// System Settings → Privacy & Security → Accessibility.
+    @MainActor
+    func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// True when this build's signature is ad-hoc: its identity is a per-build
+    /// hash, so a permission ticked for an earlier build doesn't carry over.
+    nonisolated static var isAdHocSigned: Bool {
+        guard let code = try? secStaticCode() else { return false }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any],
+              let flags = dict[kSecCodeInfoFlags as String] as? UInt32
+        else { return false }
+        return SecCodeSignatureFlags(rawValue: flags).contains(.adhoc)
+    }
+
+    private nonisolated static func secStaticCode() throws -> SecStaticCode {
+        var code: SecStaticCode?
+        let status = SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &code)
+        guard status == errSecSuccess, let code else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        return code
     }
 
     @MainActor
@@ -284,6 +352,19 @@ final class DictationController: @unchecked Sendable {
         self.target = target
         sessionID &+= 1
         let session = sessionID
+        // Snapshot the destination NOW: the app in front at the key press is
+        // the one that gets the text, and its field decides the register.
+        if target == .frontmostApp {
+            context = DictationContext.capture(readText: settings.readContext)
+        } else {
+            context = DictationContext()
+            context.appName = "Transcriberr"
+            context.bundleId = Bundle.main.bundleIdentifier
+        }
+        let rule = settings.rule(for: context.bundleId)
+        activeMode = context.isSecure ? .verbatim : (rule?.mode ?? settings.defaultMode)
+        if let tone = rule?.tone, tone != .auto { activeTone = tone } else { activeTone = context.inferredTone }
+        AppLog.info("dictation", "target \(context.appName ?? "?") [\(context.bundleId ?? "-")] role=\(context.role ?? "-") mode=\(activeMode.rawValue) tone=\(activeTone.rawValue) context=\(context.preceding?.count ?? 0)ch")
         phase = .listening
         lastText = ""
         updateHUD()
@@ -438,10 +519,16 @@ final class DictationController: @unchecked Sendable {
                 try await Self.withTimeout(seconds: 240) { try await backend.load(modelPath: nil) }
             }
             let t0 = Date()
+            // Language: the explicit setting, else the language of the text
+            // already in the field (a Dutch email keeps getting Dutch).
+            var languages = settings.languages
+            if languages.isEmpty, settings.languageFromContext, let lang = context.contextLanguage {
+                languages = [lang]
+            }
             let recognized = try await Self.withTimeout(seconds: 60) {
                 try await backend.transcribeChunk(
                     samples: samples,
-                    languages: self.settings.languages,
+                    languages: languages,
                     translateTo: nil,
                     diarize: false,
                     previousContext: nil,
@@ -451,13 +538,26 @@ final class DictationController: @unchecked Sendable {
             AppLog.info("dictation", String(
                 format: "recognized %.1fs → %d chars in %.2fs", seconds, recognized.count,
                 Date().timeIntervalSince(t0)))
-            var cleaned = DictationText.process(recognized, options: DictationText.Options(
-                destutter: settings.destutter,
-                commands: settings.spokenCommands,
-                vocabulary: settings.applyVocabulary ? vocabularyTerms() : []
-            ))
-            if settings.polish, !cleaned.isEmpty {
-                cleaned = await polish(cleaned)
+            if settings.spokenCommands, DictationText.isScratchOnly(recognized) {
+                scratchLastInsertion(final: final)
+                return
+            }
+            var cleaned: String
+            switch activeMode {
+            case .verbatim:
+                // Terminals, editors, search boxes: nothing clever, and no
+                // spoken commands (a "new line" in a terminal would execute).
+                cleaned = recognized.trimmingCharacters(in: .whitespacesAndNewlines)
+            case .clean, .smart:
+                cleaned = DictationText.process(recognized, options: DictationText.Options(
+                    destutter: settings.destutter,
+                    commands: settings.spokenCommands,
+                    selfCorrections: settings.selfCorrections,
+                    vocabulary: settings.applyVocabulary ? vocabularyTerms() : []
+                ))
+                if activeMode == .smart, !cleaned.isEmpty {
+                    cleaned = await polish(cleaned)
+                }
             }
             text = cleaned
         } catch {
@@ -507,22 +607,59 @@ final class DictationController: @unchecked Sendable {
         // into our own window when the pane is what's showing.
         let usePane = target == .pane || (NSApp.isActive && paneVisible)
         if usePane {
+            let before = paneText.count
             paneText = DictationText.join(existing: paneText, new: text)
+            lastInsertion = LastInsertion(target: .pane, inserted: text,
+                                          paneLength: paneText.count - before, app: nil, at: Date())
             return .paneAppended
         }
         if phase == .transcribing {
             phase = .inserting
             updateHUD()
         }
-        let payload = DictationText.forInsertion(text, spacing: settings.spacing)
+        // Context-aware join: look at what's left of the caret when the
+        // target app exposes it through Accessibility.
+        let preceding = settings.spacing == .auto ? FocusedTextContext.textBeforeCaret() : nil
+        let payload = DictationText.forInsertion(text, spacing: settings.spacing, preceding: preceding)
         switch TextInserter.insert(payload, restoreClipboard: settings.restoreClipboard) {
         case .pasted:
+            lastInsertion = LastInsertion(
+                target: .frontmostApp, inserted: payload, paneLength: 0,
+                app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, at: Date())
             return .pasted
         case .copiedOnly:
             // Nothing is lost: the pane keeps a copy.
             paneText = DictationText.join(existing: paneText, new: text)
+            lastInsertion = nil
             return .copiedOnly
         }
+    }
+
+    /// "Scratch that" as a whole passage: take back the previous one.
+    @MainActor
+    private func scratchLastInsertion(final: Bool) {
+        guard let last = lastInsertion, Date().timeIntervalSince(last.at) < 180 else {
+            if final { finalMessage("Nothing to scratch") }
+            return
+        }
+        var removed = false
+        switch last.target {
+        case .pane:
+            if paneText.count >= last.paneLength {
+                paneText = String(paneText.dropLast(last.paneLength))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                removed = true
+            }
+        case .frontmostApp:
+            let sameApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier == last.app
+            if sameApp {
+                removed = TextInserter.deleteBackward(characters: last.inserted.count)
+            }
+        }
+        lastInsertion = nil
+        AppLog.info("dictation", "scratch that → \(removed ? "removed \(last.inserted.count) chars" : "not possible")")
+        lastText = removed ? "Scratched: “\(last.inserted.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))…”" : ""
+        if final { finalMessage(removed ? "Removed the last passage" : "Couldn't remove the last passage") }
     }
 
     // MARK: - Polish (optional Gemma pass)
@@ -540,12 +677,16 @@ final class DictationController: @unchecked Sendable {
         }
         let backend = factory.backend(for: kind)
         let vocab = vocabularyTerms()
-        var system = settings.polishPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        if system.isEmpty { system = DictationSettings.defaultPolishPrompt }
-        if !vocab.isEmpty {
-            system += "\nVocabulary (authoritative spellings): " + vocab.prefix(60).joined(separator: ", ")
+        // Context-aware prompt (app, register, text before the cursor). The
+        // user's own prompt text, when customized, is appended as extra
+        // instructions so their tweaks still apply.
+        var system = DictationPrompt.system(tone: activeTone, singleLine: context.isSingleLine)
+        let custom = settings.polishPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty, custom != DictationSettings.defaultPolishPrompt {
+            system += "\nAdditional instructions from the user:\n" + custom
         }
         let systemPrompt = system
+        let userPrompt = DictationPrompt.user(passage: text, context: context, vocabulary: vocab)
         do {
             if await !backend.isReady {
                 try await Self.withTimeout(seconds: 120) { try await backend.load(modelPath: nil) }
@@ -553,12 +694,19 @@ final class DictationController: @unchecked Sendable {
             let maxTokens = min(1200, text.count / 2 + 120)
             let t0 = Date()
             let out = try await Self.withTimeout(seconds: 45) {
-                try await backend.generateText(systemInstruction: systemPrompt, userMessage: text, maxTokens: maxTokens)
+                try await backend.generateText(systemInstruction: systemPrompt, userMessage: userPrompt, maxTokens: maxTokens)
             }
-            let trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
-            AppLog.info("dictation", String(format: "polish %d → %d chars in %.1fs",
+            var trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A model that echoes the context is caught by the guard; strip a
+            // quoted wrapper it sometimes adds.
+            if trimmed.count > 2, trimmed.hasPrefix("\""), trimmed.hasSuffix("\"") {
+                trimmed = String(trimmed.dropFirst().dropLast())
+            }
+            AppLog.info("dictation", String(format: "smart pass %d → %d chars in %.1fs",
                                             text.count, trimmed.count, Date().timeIntervalSince(t0)))
-            return DictationText.acceptPolished(raw: text, polished: trimmed) ? trimmed : text
+            // Self-corrections legitimately change words, so the in-order
+            // overlap bar is lower than for a plain cleanup.
+            return DictationText.acceptPolished(raw: text, polished: trimmed, minOverlap: 0.6) ? trimmed : text
         } catch {
             AppLog.warn("dictation", "polish failed (\(error.localizedDescription)) — using raw text")
             return text

@@ -13,6 +13,8 @@ enum DictationText {
     struct Options: Sendable {
         var destutter = true
         var commands = true
+        /// "Monday, no, Tuesday" → "Tuesday".
+        var selfCorrections = true
         /// Canonical spellings ("KimKim", "OWASP"). Matching is exact after
         /// normalization (case, spacing, punctuation ignored) — never fuzzy.
         var vocabulary: [String] = []
@@ -25,6 +27,7 @@ enum DictationText {
         // for KimKim) would otherwise be collapsed by the stutter pass.
         if !options.vocabulary.isEmpty { text = canonicalizeVocabulary(text, terms: options.vocabulary) }
         if options.destutter { text = TextDestutter.collapse(text) }
+        if options.selfCorrections { text = applySelfCorrections(text) }
         if options.commands { text = applyCommands(text) }
         text = tidy(text)
         // The recognizer capitalized its sentence start; if destutter dropped
@@ -44,10 +47,56 @@ enum DictationText {
         case paragraph
         case openQuote
         case closeQuote
+        /// "scratch that": drop everything said so far in this passage.
+        case scratch
     }
 
     /// Multi-word forms first so "new paragraph" isn't eaten by "new".
+    /// English, Dutch, German and Ukrainian — the languages Parakeet v3 is
+    /// used with here. Single nouns ("period", "punt", "Punkt", "крапка")
+    /// are ambiguous and go through the determiner / sentence-start checks.
     private static let commands: [(words: [String], command: Command)] = [
+        // scratch / delete the passage so far
+        (["scratch", "that"],         .scratch),
+        (["delete", "that"],          .scratch),
+        (["strike", "that"],          .scratch),
+        (["undo", "that"],            .scratch),
+        (["schrap", "dat"],           .scratch),
+        (["verwijder", "dat"],        .scratch),
+        (["streich", "das"],          .scratch),
+        (["lösche", "das"],           .scratch),
+        (["видали", "це"],            .scratch),
+        (["скасуй", "це"],            .scratch),
+        // Dutch
+        (["nieuwe", "alinea"],        .paragraph),
+        (["nieuwe", "paragraaf"],     .paragraph),
+        (["nieuwe", "regel"],         .newline),
+        (["vraagteken"],              .punctuation("?")),
+        (["uitroepteken"],            .punctuation("!")),
+        (["dubbele", "punt"],         .punctuation(":")),
+        (["puntkomma"],               .punctuation(";")),
+        (["punt"],                    .punctuation(".")),
+        (["komma"],                   .punctuation(",")),
+        // German
+        (["neuer", "absatz"],         .paragraph),
+        (["neue", "zeile"],           .newline),
+        (["fragezeichen"],            .punctuation("?")),
+        (["ausrufezeichen"],          .punctuation("!")),
+        (["doppelpunkt"],             .punctuation(":")),
+        (["semikolon"],               .punctuation(";")),
+        (["strichpunkt"],             .punctuation(";")),
+        (["punkt"],                   .punctuation(".")),
+        // Ukrainian
+        (["новий", "абзац"],          .paragraph),
+        (["новий", "рядок"],          .newline),
+        (["з", "нового", "рядка"],    .newline),
+        (["знак", "питання"],         .punctuation("?")),
+        (["знак", "оклику"],          .punctuation("!")),
+        (["крапка", "з", "комою"],    .punctuation(";")),
+        (["двокрапка"],               .punctuation(":")),
+        (["крапка"],                  .punctuation(".")),
+        (["кома"],                    .punctuation(",")),
+        // English
         (["new", "paragraph"],        .paragraph),
         (["next", "paragraph"],       .paragraph),
         (["new", "line"],             .newline),
@@ -72,12 +121,27 @@ enum DictationText {
     /// command when they are NOT preceded by a determiner/preposition
     /// ("the period", "a comma", "this period", "of period") and are
     /// followed by end of text, a capitalized word, or another command.
-    private static let ambiguous: Set<String> = ["period", "comma", "colon", "semicolon"]
+    private static let ambiguous: Set<String> = [
+        "period", "comma", "colon", "semicolon",
+        "punt", "komma", "punkt", "крапка", "кома",
+    ]
+    /// Nouns need a sentence start after them to count as a terminator.
+    private static let sentenceEnders: Set<String> = ["period", "punt", "punkt", "крапка"]
     private static let determiners: Set<String> = [
         "the", "a", "an", "this", "that", "each", "every", "one", "first", "second",
         "last", "next", "same", "long", "short", "of", "in", "per", "his", "her",
         "my", "your", "our", "their", "its", "no", "any", "some", "another", "which",
         "what", "trial", "grace", "time", "waiting", "rest", "orbital", "menstrual",
+        // nl
+        "de", "het", "een", "dit", "dat", "deze", "die", "elke", "elk", "geen", "mijn",
+        "jouw", "zijn", "haar", "ons", "onze", "hun", "welke", "welk", "op", "van",
+        // de
+        "der", "die", "das", "ein", "eine", "einen", "einem", "einer", "dieser", "diese",
+        "dieses", "diesen", "jeder", "jede", "jedes", "kein", "keine", "mein", "meine",
+        "dein", "sein", "ihr", "unser", "welcher", "welche", "welches", "zum", "am",
+        // uk
+        "цей", "ця", "це", "цю", "той", "та", "те", "ту", "кожен", "кожна", "кожне",
+        "мій", "моя", "твій", "наш", "наша", "їх", "який", "яка", "яке", "у", "в", "на",
     ]
 
     private static func norm(_ token: Substring) -> String {
@@ -157,11 +221,11 @@ enum DictationText {
                     // command). A lowercase continuation ("that period. we
                     // lost") is the noun. Mid-sentence marks (comma, colon,
                     // semicolon) are naturally followed by lowercase words.
-                    if entry.words[0] == "period" {
+                    if sentenceEnders.contains(entry.words[0]) {
+                        // Any language's command may follow ("period new
+                        // paragraph", "крапка новий рядок").
                         let nextIsCommand = next.map { nx in
-                            commands.contains { $0.words.count == 1 && $0.words[0] == norm(nx) }
-                                || ["new", "next", "open", "close", "end", "full", "question", "exclamation", "line"]
-                                    .contains(norm(nx))
+                            commands.contains { $0.words.first == norm(nx) }
                         } ?? false
                         guard startsSentence(next) || nextIsCommand else { continue }
                     }
@@ -182,6 +246,9 @@ enum DictationText {
                 case .closeQuote:
                     // Keep the terminator inside the quotes: `word.”`
                     out += "”"
+                case .scratch:
+                    out = ""
+                    capitalizeNext = false
                 }
                 // The recognizer's own terminator on the command word
                 // ("paragraph.") is dropped; its capital on the next word is
@@ -195,6 +262,108 @@ enum DictationText {
             i += 1
         }
         return out
+    }
+
+    /// A passage that is nothing but a scratch command ("Scratch that.") —
+    /// the caller removes the PREVIOUS passage instead of inserting anything.
+    static func isScratchOnly(_ raw: String) -> Bool {
+        let words = raw.lowercased()
+            .split { !$0.isLetter }
+            .map(String.init)
+        guard !words.isEmpty, words.count <= 3 else { return false }
+        return commands.contains { entry in
+            if case .scratch = entry.command { return entry.words == words }
+            return false
+        }
+    }
+
+    // MARK: - Self-corrections
+
+    /// Cue phrases that introduce a correction of what was just said.
+    /// Matched after the recognizer's own punctuation is stripped; the cue
+    /// must be set off by a comma/dash before it, or the words are just
+    /// conversation ("no problem", "I mean it").
+    private static let correctionCues: [[String]] = [
+        ["no", "wait"], ["i", "mean"], ["no"], ["sorry"], ["actually"], ["rather"],
+        ["nee"], ["ik", "bedoel"], ["ні"], ["тобто"], ["вибач"], ["nein"], ["ich", "meine"],
+    ]
+
+    private static let idiomTails: Set<String> = [
+        "it", "that", "this", "them", "him", "her", "you", "me", "us", "so", "yes", "no",
+        "really", "though", "then", "now", "het", "dat", "dit", "je", "це", "так",
+    ]
+
+    /// "send it Monday, no, Tuesday" → "send it Tuesday". The replacement is
+    /// the words after the cue up to the next punctuation; the same number
+    /// of words before the cue is dropped. Conservative: no cue, no change.
+    static func applySelfCorrections(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { applySelfCorrectionsToLine(String($0)) }
+            .joined(separator: "\n")
+    }
+
+    private static func applySelfCorrectionsToLine(_ line: String) -> String {
+        var tokens = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        guard tokens.count >= 3 else { return line }
+        func bare(_ t: String) -> String { t.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+        func endsClause(_ t: String) -> Bool { t.last.map { ",;:.!?—–-".contains($0) } ?? false }
+
+        var i = 1
+        var guardCount = 0
+        while i < tokens.count, guardCount < 20 {
+            guardCount += 1
+            var matched = false
+            for cue in correctionCues {
+                let n = cue.count
+                guard i + n < tokens.count, i >= 1 else { continue }
+                guard tokens[i ..< i + n].map(bare) == cue else { continue }
+                // The cue must follow a clause break ("Monday, no") and the
+                // cue itself must end one ("no," / "no —") or be "I mean".
+                let prevBreak = endsClause(tokens[i - 1])
+                let cueBreak = endsClause(tokens[i + n - 1]) || cue == ["i", "mean"] || cue == ["ik", "bedoel"] || cue == ["ich", "meine"]
+                guard prevBreak, cueBreak else { continue }
+                // Replacement span: words after the cue until a clause end.
+                var end = i + n
+                while end < tokens.count {
+                    end += 1
+                    if endsClause(tokens[end - 1]) { break }
+                }
+                let replacement = Array(tokens[(i + n) ..< end])
+                guard !replacement.isEmpty, replacement.count <= 6 else { continue }
+                // "I mean it", "no, really": a lone function word after the
+                // cue is idiom, not a correction.
+                if replacement.count == 1, idiomTails.contains(bare(replacement[0])) { continue }
+                // Drop the same number of words before the cue (not past the
+                // start of the sentence).
+                var start = i - 1
+                var dropped = 1
+                while dropped < replacement.count, start > 0, !endsClause(tokens[start - 1]) {
+                    start -= 1
+                    dropped += 1
+                }
+                // Carry the dropped span's trailing punctuation onto the
+                // replacement's last word if the replacement has none.
+                var repl = replacement
+                let droppedPunct = trailingPunctuation(tokens[i - 1][...])
+                if trailingPunctuation(repl[repl.count - 1][...]).isEmpty,
+                   !droppedPunct.isEmpty, droppedPunct != "," {
+                    repl[repl.count - 1] += droppedPunct
+                }
+                // Keep sentence-initial capitalization if the dropped span
+                // started the sentence.
+                if start == 0 || endsClause(tokens[start - 1]),
+                   let first = tokens[start].first, first.isUppercase,
+                   let rf = repl[0].first, rf.isLowercase {
+                    repl[0] = rf.uppercased() + repl[0].dropFirst()
+                }
+                tokens.replaceSubrange(start ..< end, with: repl)
+                i = start + repl.count
+                matched = true
+                break
+            }
+            if !matched { i += 1 }
+        }
+        return tokens.joined(separator: " ")
     }
 
     // MARK: - Vocabulary
@@ -282,11 +451,38 @@ enum DictationText {
     }
 
     /// Text exactly as it will be typed into the target app.
-    static func forInsertion(_ text: String, spacing: DictationSettings.Spacing) -> String {
+    ///
+    /// `preceding` is what sits left of the caret in the target (read through
+    /// the Accessibility API; nil when the app doesn't expose it). In `.auto`
+    /// mode it decides the join: a space only when the caret follows a word or
+    /// punctuation, a capital only at a sentence start. Without context,
+    /// `.auto` behaves like `.trailingSpace`.
+    static func forInsertion(
+        _ text: String,
+        spacing: DictationSettings.Spacing,
+        preceding: String? = nil
+    ) -> String {
         switch spacing {
         case .trailingSpace: return text.hasSuffix("\n") ? text : text + " "
         case .leadingSpace:  return " " + text
         case .none:          return text
+        case .auto:
+            guard let preceding else {
+                return text.hasSuffix("\n") ? text : text + " "
+            }
+            var out = text
+            let trimmed = preceding.trimmingCharacters(in: .whitespacesAndNewlines)
+            let atSentenceStart = trimmed.isEmpty
+                || preceding.hasSuffix("\n")
+                || trimmed.last.map { ".?!…".contains($0) } == true
+            if atSentenceStart, let first = out.first, first.isLowercase {
+                out = first.uppercased() + out.dropFirst()
+            }
+            if let last = preceding.last, !last.isWhitespace, !last.isNewline,
+               let first = out.first, !first.isPunctuation {
+                out = " " + out
+            }
+            return out
         }
     }
 
@@ -295,7 +491,7 @@ enum DictationText {
     /// The polish step must only ever return the same passage, cleaned. A
     /// small model sometimes answers the text, summarizes, or echoes the
     /// instructions — reject those and keep the deterministic output.
-    static func acceptPolished(raw: String, polished: String) -> Bool {
+    static func acceptPolished(raw: String, polished: String, minOverlap: Double = 0.75) -> Bool {
         let p = polished.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !p.isEmpty else { return false }
         let ratio = Double(p.count) / Double(max(1, raw.count))
@@ -315,7 +511,7 @@ enum DictationText {
         let polWords = polished.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
         guard !polWords.isEmpty, !rawWords.isEmpty else { return false }
         let lcs = longestCommonSubsequence(Array(rawWords.prefix(400)), Array(polWords.prefix(400)))
-        return Double(lcs) / Double(min(rawWords.count, polWords.count)) >= 0.75
+        return Double(lcs) / Double(min(rawWords.count, polWords.count)) >= minOverlap
     }
 
     static func longestCommonSubsequence(_ a: [String], _ b: [String]) -> Int {

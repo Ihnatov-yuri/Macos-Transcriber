@@ -69,6 +69,10 @@ final class DictationSettings: @unchecked Sendable {
     }
 
     enum Spacing: String, CaseIterable, Sendable {
+        /// Look at what's left of the caret (Accessibility API): a space
+        /// only after a word, a capital only at a sentence start. Falls back
+        /// to `trailingSpace` where the app doesn't expose its text.
+        case auto
         /// "Hello world. " — consecutive dictations chain naturally.
         case trailingSpace
         /// " Hello world." — for inserting into the middle of existing text.
@@ -77,12 +81,78 @@ final class DictationSettings: @unchecked Sendable {
 
         var label: String {
             switch self {
+            case .auto:          return "Automatic (reads the text around the cursor)"
             case .trailingSpace: return "Add a space after"
             case .leadingSpace:  return "Add a space before"
             case .none:          return "No extra spacing"
             }
         }
     }
+
+    /// How a passage is shaped before insertion, chosen per target app.
+    enum FormatMode: String, CaseIterable, Codable, Sendable {
+        /// Recognizer output untouched (terminals, code editors, search boxes).
+        case verbatim
+        /// Deterministic only: vocabulary, destutter, spoken commands,
+        /// self-corrections. Sub-second.
+        case clean
+        /// Clean, then a Gemma pass that formats for the app and the text
+        /// around the cursor (tone, continuity, lists). Adds 2–4 s.
+        case smart
+
+        var label: String {
+            switch self {
+            case .verbatim: return "Verbatim"
+            case .clean:    return "Clean (deterministic)"
+            case .smart:    return "Smart (Gemma, context-aware)"
+            }
+        }
+    }
+
+    enum Tone: String, CaseIterable, Codable, Sendable {
+        case auto, casual, neutral, formal
+        var label: String {
+            switch self {
+            case .auto:    return "Match the app"
+            case .casual:  return "Casual"
+            case .neutral: return "Neutral"
+            case .formal:  return "Formal"
+            }
+        }
+    }
+
+    /// Per-app rule: bundle identifier (exact or prefix ending in ".") → mode.
+    struct AppRule: Codable, Identifiable, Equatable, Sendable {
+        var id = UUID()
+        var bundleId: String
+        var name: String
+        var mode: FormatMode
+        var tone: Tone = .auto
+    }
+
+    /// Sensible starting rules — editable in Settings.
+    static let defaultAppRules: [AppRule] = [
+        AppRule(bundleId: "com.apple.Terminal",        name: "Terminal",     mode: .verbatim),
+        AppRule(bundleId: "com.googlecode.iterm2",     name: "iTerm2",       mode: .verbatim),
+        AppRule(bundleId: "dev.warp.Warp-Stable",      name: "Warp",         mode: .verbatim),
+        AppRule(bundleId: "com.mitchellh.ghostty",     name: "Ghostty",      mode: .verbatim),
+        AppRule(bundleId: "com.apple.dt.Xcode",        name: "Xcode",        mode: .verbatim),
+        AppRule(bundleId: "com.microsoft.VSCode",      name: "VS Code",      mode: .verbatim),
+        AppRule(bundleId: "com.todesktop.230313mzl4w4u92", name: "Cursor",   mode: .verbatim),
+        AppRule(bundleId: "com.jetbrains.",            name: "JetBrains IDEs", mode: .verbatim),
+        AppRule(bundleId: "com.sublimetext.",          name: "Sublime Text", mode: .verbatim),
+        AppRule(bundleId: "com.tinyspeck.slackmacgap", name: "Slack",        mode: .smart, tone: .casual),
+        AppRule(bundleId: "com.apple.MobileSMS",       name: "Messages",     mode: .smart, tone: .casual),
+        AppRule(bundleId: "net.whatsapp.WhatsApp",     name: "WhatsApp",     mode: .smart, tone: .casual),
+        AppRule(bundleId: "ru.keepcoder.Telegram",     name: "Telegram",     mode: .smart, tone: .casual),
+        AppRule(bundleId: "com.hnc.Discord",           name: "Discord",      mode: .smart, tone: .casual),
+        AppRule(bundleId: "com.apple.mail",            name: "Mail",         mode: .smart, tone: .formal),
+        AppRule(bundleId: "com.microsoft.Outlook",     name: "Outlook",      mode: .smart, tone: .formal),
+        AppRule(bundleId: "com.readdle.smartemail-macos", name: "Spark",     mode: .smart, tone: .formal),
+        AppRule(bundleId: "com.apple.Notes",           name: "Notes",        mode: .smart, tone: .neutral),
+        AppRule(bundleId: "com.apple.Pages",           name: "Pages",        mode: .smart, tone: .neutral),
+        AppRule(bundleId: "com.microsoft.Word",        name: "Word",         mode: .smart, tone: .neutral),
+    ]
 
     static let defaultPolishPrompt = """
     You are a dictation editor. You receive ONE short passage of speech-to-text \
@@ -110,6 +180,11 @@ final class DictationSettings: @unchecked Sendable {
         static let showHUD           = "dictation.showHUD"
         static let pauseFlushSeconds = "dictation.pauseFlushSeconds"
         static let playSounds        = "dictation.playSounds"
+        static let appRules          = "dictation.appRules"
+        static let readContext       = "dictation.readContext"
+        static let selfCorrections   = "dictation.selfCorrections"
+        static let languageFromContext = "dictation.languageFromContext"
+        static let defaultMode       = "dictation.defaultMode"
     }
 
     var hotkey: Hotkey { didSet { defaults.set(hotkey.rawValue, forKey: Key.hotkey) } }
@@ -139,6 +214,32 @@ final class DictationSettings: @unchecked Sendable {
     /// Toggle mode: silence (seconds) after speech that flushes a passage.
     var pauseFlushSeconds: Double { didSet { defaults.set(pauseFlushSeconds, forKey: Key.pauseFlushSeconds) } }
     var playSounds: Bool { didSet { defaults.set(playSounds, forKey: Key.playSounds) } }
+    /// Per-app formatting rules (see `FormatMode`).
+    var appRules: [AppRule] {
+        didSet {
+            if let data = try? JSONEncoder().encode(appRules) { defaults.set(data, forKey: Key.appRules) }
+        }
+    }
+    /// Mode for apps without a rule. `polish` (legacy toggle) maps onto this.
+    var defaultMode: FormatMode { didSet { defaults.set(defaultMode.rawValue, forKey: Key.defaultMode) } }
+    /// Read the text around the cursor (Accessibility) for spacing,
+    /// language, and the smart pass.
+    var readContext: Bool { didSet { defaults.set(readContext, forKey: Key.readContext) } }
+    /// "send it Monday, no, Tuesday" → "send it Tuesday" (deterministic).
+    var selfCorrections: Bool { didSet { defaults.set(selfCorrections, forKey: Key.selfCorrections) } }
+    /// With language on auto, hint the recognizer with the language of the
+    /// text already in the field.
+    var languageFromContext: Bool { didSet { defaults.set(languageFromContext, forKey: Key.languageFromContext) } }
+
+    /// The rule for a bundle identifier: exact match first, then the longest
+    /// prefix rule (a bundleId ending in ".").
+    func rule(for bundleId: String?) -> AppRule? {
+        guard let bundleId, !bundleId.isEmpty else { return nil }
+        if let exact = appRules.first(where: { $0.bundleId == bundleId }) { return exact }
+        return appRules
+            .filter { $0.bundleId.hasSuffix(".") && bundleId.hasPrefix($0.bundleId) }
+            .max { $0.bundleId.count < $1.bundleId.count }
+    }
 
     init() {
         hotkey = Hotkey(rawValue: defaults.string(forKey: Key.hotkey) ?? "") ?? .rightOption
@@ -151,11 +252,22 @@ final class DictationSettings: @unchecked Sendable {
         spokenCommands = (defaults.object(forKey: Key.spokenCommands) as? Bool) ?? true
         destutter = (defaults.object(forKey: Key.destutter) as? Bool) ?? true
         applyVocabulary = (defaults.object(forKey: Key.applyVocabulary) as? Bool) ?? true
-        spacing = Spacing(rawValue: defaults.string(forKey: Key.spacing) ?? "") ?? .trailingSpace
+        spacing = Spacing(rawValue: defaults.string(forKey: Key.spacing) ?? "") ?? .auto
         restoreClipboard = (defaults.object(forKey: Key.restoreClipboard) as? Bool) ?? true
         keepHistory = defaults.bool(forKey: Key.keepHistory)
         showMenuBar = (defaults.object(forKey: Key.showMenuBar) as? Bool) ?? true
         showHUD = (defaults.object(forKey: Key.showHUD) as? Bool) ?? true
+        if let data = defaults.data(forKey: Key.appRules),
+           let rules = try? JSONDecoder().decode([AppRule].self, from: data) {
+            appRules = rules
+        } else {
+            appRules = Self.defaultAppRules
+        }
+        defaultMode = FormatMode(rawValue: defaults.string(forKey: Key.defaultMode) ?? "")
+            ?? (defaults.bool(forKey: Key.polish) ? .smart : .clean)
+        readContext = (defaults.object(forKey: Key.readContext) as? Bool) ?? true
+        selfCorrections = (defaults.object(forKey: Key.selfCorrections) as? Bool) ?? true
+        languageFromContext = (defaults.object(forKey: Key.languageFromContext) as? Bool) ?? true
         let storedPause = defaults.double(forKey: Key.pauseFlushSeconds)
         pauseFlushSeconds = storedPause > 0 ? min(4, max(0.8, storedPause)) : 1.5
         playSounds = (defaults.object(forKey: Key.playSounds) as? Bool) ?? true

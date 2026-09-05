@@ -14,6 +14,10 @@ import SwiftData
 /// in practice, but the *type* must not declare actor isolation.
 @Observable
 final class AppContainer: @unchecked Sendable {
+    /// The one live container, for entry points that SwiftUI doesn't hand
+    /// an environment to (App Intents).
+    nonisolated(unsafe) static weak var shared: AppContainer?
+
     // MARK: - Persistence
     let modelContainer: ModelContainer
     let repository: RecordingRepository
@@ -127,6 +131,7 @@ final class AppContainer: @unchecked Sendable {
         // Hotkey monitors and the HUD panel want a running app — defer to
         // the first run-loop turn rather than doing AppKit work inside init.
         dictation.onShowPane = { [weak self] in self?.requestDictatePane() }
+        AppContainer.shared = self
         Task { @MainActor [weak self] in
             self?.dictation.bootstrap()
         }

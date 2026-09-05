@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Settings → Dictation. Everything the in-app option pills expose, plus the
@@ -30,8 +31,13 @@ struct DictationSettingsTab: View {
                     Text(c.accessibilityTrusted ? "Granted" : "Not granted")
                         .foregroundStyle(c.accessibilityTrusted ? .primary : .secondary)
                     if !c.accessibilityTrusted {
+                        Button("Open Settings…") { c.openAccessibilitySettings() }
                         Button("Grant…") { c.requestAccessibility() }
                     }
+                }
+                if !c.accessibilityTrusted, DictationController.isAdHocSigned {
+                    Text("Ticked already but still not granted? This build is ad-hoc signed, so its identity changes with every update and an older Transcriberr entry no longer matches. Remove Transcriberr from the Accessibility list (−) and add /Applications/Transcriberr.app again. To stop this happening on every update, sign releases with a stable certificate — see README → Permissions.")
+                        .font(.caption).foregroundStyle(.orange)
                 }
                 Text("A right-hand modifier is never a shortcut on its own, so it can't collide with the app you're typing in. If you pick fn / Globe, set “Press 🌐 key to” → Do Nothing in System Settings → Keyboard so macOS dictation doesn't also start. Accessibility access is what lets Transcriberr see the key in other apps and paste the result.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -52,7 +58,7 @@ struct DictationSettingsTab: View {
                     Text("Auto-detect").tag("")
                     ForEach(languageOptions, id: \.self) { Text($0).tag($0) }
                 }
-                Toggle("Spoken commands (“new paragraph”, “comma”, “question mark”…)",
+                Toggle("Spoken commands (“new paragraph”, “comma”, “scratch that”… — also Dutch, German, Ukrainian)",
                        isOn: Binding(get: { s.spokenCommands }, set: { s.spokenCommands = $0 }))
                 Toggle("Collapse fillers and stutters (um, “the the”)",
                        isOn: Binding(get: { s.destutter }, set: { s.destutter = $0 }))
@@ -62,16 +68,32 @@ struct DictationSettingsTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Polish") {
-                Toggle("Run each passage through the text engine before inserting",
-                       isOn: Binding(get: { s.polish }, set: { s.polish = $0 }))
-                if s.polish {
-                    TextEditor(text: Binding(get: { s.polishPrompt }, set: { s.polishPrompt = $0 }))
-                        .font(.system(.body, design: .monospaced))
-                        .frame(minHeight: 120)
-                    Button("Reset prompt") { s.polishPrompt = DictationSettings.defaultPolishPrompt }
+            Section("Formatting & context") {
+                Picker("Apps without a rule", selection: Binding(get: { s.defaultMode }, set: { s.defaultMode = $0 })) {
+                    ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
                 }
-                Text("Uses the post-processing text engine (Settings → Engines). Adds roughly 2–4 s per passage on Gemma LiteRT. A result that isn't clearly the same passage cleaned up (wrong length, answers the text, echoes the prompt) is discarded and the deterministic output is used instead.")
+                Toggle("Read the text around the cursor (spacing, language, continuity)",
+                       isOn: Binding(get: { s.readContext }, set: { s.readContext = $0 }))
+                Toggle("Apply spoken self-corrections (“Monday, no, Tuesday” → “Tuesday”)",
+                       isOn: Binding(get: { s.selfCorrections }, set: { s.selfCorrections = $0 }))
+                Toggle("Language on auto: follow the language of the text in the field",
+                       isOn: Binding(get: { s.languageFromContext }, set: { s.languageFromContext = $0 }))
+                Text("Verbatim inserts the recognizer's words untouched. Clean applies the deterministic passes (vocabulary, fillers, commands, self-corrections) in well under a second. Smart additionally runs Gemma with the target app, its register, and the text before the cursor — chat stays short and casual, mail gets full sentences, an enumeration becomes a list. Password fields are always verbatim and never read.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Per-app rules") {
+                AppRulesEditor(settings: s)
+                Text("Rules match the app's bundle identifier; an identifier ending in “.” matches a family (com.jetbrains.). Terminals and code editors default to verbatim, chat apps to smart & casual, mail to smart & formal.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Smart pass prompt") {
+                TextEditor(text: Binding(get: { s.polishPrompt }, set: { s.polishPrompt = $0 }))
+                    .font(.system(.body, design: .monospaced))
+                    .frame(minHeight: 100)
+                Button("Reset to default") { s.polishPrompt = DictationSettings.defaultPolishPrompt }
+                Text("Appended to the built-in context prompt when you change it. Uses the post-processing text engine (Settings → Engines); roughly 2–4 s per passage on Gemma LiteRT. A result that isn't clearly the same passage (wrong length, answers the text, echoes the prompt) is discarded in favour of the deterministic output.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -87,7 +109,7 @@ struct DictationSettingsTab: View {
                        isOn: Binding(get: { s.showMenuBar }, set: { s.showMenuBar = $0 }))
                 Toggle("Start / stop sounds",
                        isOn: Binding(get: { s.playSounds }, set: { s.playSounds = $0 }))
-                Text("Text is inserted with ⌘V into whatever has keyboard focus; the previous clipboard contents come back 0.8 s later. When Transcriberr itself is in front with the Dictate screen open, text goes to its scratch pad instead.")
+                Text("Text is inserted with ⌘V into whatever has keyboard focus; the previous clipboard contents come back 0.8 s later. Automatic spacing reads the characters before the cursor through Accessibility (a space only after a word, a capital only at a sentence start) and falls back to a trailing space where an app hides its text. Say “scratch that” to take the last passage back. When Transcriberr itself is in front with the Dictate screen open, text goes to its scratch pad instead.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -99,5 +121,75 @@ struct DictationSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+
+/// Editable list of per-app formatting rules with an "add current app" menu.
+struct AppRulesEditor: View {
+    let settings: DictationSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(settings.appRules) { rule in
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(rule.name).font(.body)
+                        Text(rule.bundleId).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .frame(minWidth: 160, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { rule.mode },
+                        set: update(rule.id) { $0.mode = $1 }
+                    )) {
+                        ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 210)
+                    Picker("", selection: Binding(
+                        get: { rule.tone },
+                        set: update(rule.id) { $0.tone = $1 }
+                    )) {
+                        ForEach(DictationSettings.Tone.allCases, id: \.rawValue) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+                    .disabled(rule.mode != .smart)
+                    Button(role: .destructive) {
+                        settings.appRules.removeAll { $0.id == rule.id }
+                    } label: { Image(systemName: "minus.circle") }
+                    .buttonStyle(.borderless)
+                }
+            }
+            HStack {
+                Menu("Add running app…") {
+                    ForEach(runningApps, id: \.bundleIdentifier) { app in
+                        Button(app.localizedName ?? app.bundleIdentifier ?? "?") {
+                            guard let id = app.bundleIdentifier,
+                                  !settings.appRules.contains(where: { $0.bundleId == id }) else { return }
+                            settings.appRules.append(DictationSettings.AppRule(
+                                bundleId: id, name: app.localizedName ?? id, mode: .clean))
+                        }
+                    }
+                }
+                .frame(width: 180)
+                Button("Restore defaults") { settings.appRules = DictationSettings.defaultAppRules }
+            }
+        }
+    }
+
+    private var runningApps: [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil }
+            .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
+    }
+
+    private func update<T>(_ id: UUID, _ change: @escaping (inout DictationSettings.AppRule, T) -> Void) -> (T) -> Void {
+        { value in
+            guard let idx = settings.appRules.firstIndex(where: { $0.id == id }) else { return }
+            var rule = settings.appRules[idx]
+            change(&rule, value)
+            settings.appRules[idx] = rule
+        }
     }
 }

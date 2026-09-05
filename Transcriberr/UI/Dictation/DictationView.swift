@@ -110,7 +110,7 @@ struct DictationView: View {
                 option("HOTKEY", s.hotkey.glyph, active: s.hotkey != .off,
                        hint: "modifier key that\nstarts dictation") { cycleHotkey(s) }
                 option("MODE", s.mode == .hold ? "HOLD" : "TOGGLE", active: s.mode == .toggle,
-                       hint: s.mode == .hold ? "hold to talk,\nrelease to insert" : "tap to start, tap\nto stop · flushes on pauses") {
+                       hint: s.mode == .hold ? "hold to talk,\nrelease to insert" : "tap to start, tap to\nstop · or hold to talk") {
                     s.mode = s.mode == .hold ? .toggle : .hold
                 }
                 option("MODE·DEFAULT", s.defaultMode == .smart ? "SMART" : s.defaultMode == .verbatim ? "VERBATIM" : "CLEAN",
@@ -197,6 +197,26 @@ struct DictationView: View {
                     .font(AppFont.inter(12))
                     .foregroundStyle(AppColor.inkSoft)
                     .frame(maxWidth: 520, alignment: .leading)
+                if c.accessibilityTrusted, !c.inputMonitoringGranted {
+                    HStack(spacing: AppMetric.m) {
+                        Text("INPUT MONITORING · NOT GRANTED — THE HOTKEY STAYS DEAF WITHOUT IT")
+                            .monoLabel(9, color: AppColor.accent)
+                        TapButton { c.requestInputMonitoring() } label: {
+                            Text("GRANT INPUT MONITORING")
+                                .monoLabel(9, color: AppColor.paper)
+                                .padding(.horizontal, AppMetric.s)
+                                .padding(.vertical, 5)
+                                .background(AppColor.accent)
+                        }
+                    }
+                }
+                if c.accessibilityTrusted, c.settings.hotkey != .off {
+                    Text(c.hotkeyArmed
+                         ? "HOTKEY \(c.settings.hotkey.glyph) · \(c.hotkeyMechanism.uppercased()) · LAST EVENT: \(c.lastHotkeyEvent.isEmpty ? "NONE YET — PRESS IT" : c.lastHotkeyEvent)"
+                         : "HOTKEY NOT ARMED — RELAUNCH TRANSCRIBERR")
+                        .monoLabel(9, color: c.hotkeyArmed && !c.lastHotkeyEvent.isEmpty ? AppColor.ink : AppColor.inkSoft)
+                        .lineLimit(2)
+                }
                 if !c.accessibilityTrusted, DictationController.isAdHocSigned {
                     Text("Already ticked in System Settings? The entry belongs to an earlier build whose signature no longer matches: remove Transcriberr from the Accessibility list with −, then add /Applications/Transcriberr.app again. Builds from 3.1.1 on keep the grant across updates. The strip updates by itself once it's granted.")
                         .font(AppFont.inter(11))

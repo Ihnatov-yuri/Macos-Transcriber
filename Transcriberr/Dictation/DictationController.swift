@@ -40,7 +40,15 @@ final class DictationController: @unchecked Sendable {
     /// In-app editor buffer.
     var paneText = ""
     private(set) var accessibilityTrusted = false
+    /// Input Monitoring (kTCCServiceListenEvent). Keyboard event taps need
+    /// it; on some macOS versions Accessibility alone is not enough, and the
+    /// symptom is a silently deaf hotkey. Checked with the CG preflight call.
+    private(set) var inputMonitoringGranted = false
     private(set) var hotkeyArmed = false
+    /// What the monitor last saw ("flagsChanged keyCode=61 down"), so the
+    /// Dictate screen can prove the key is being received.
+    private(set) var lastHotkeyEvent = ""
+    private(set) var hotkeyMechanism = ""
     /// Set by `DictationView` while it is on screen: a hotkey press with the
     /// app active then targets the pane instead of pasting into ourselves.
     /// While the pane is up and trust is missing, trust is re-checked every
@@ -100,6 +108,11 @@ final class DictationController: @unchecked Sendable {
     private var sessionID = 0
     private var pressedAt: Date?
     private var comboUsed = false
+    /// Toggle mode doubles as push-to-talk: a press held longer than this
+    /// starts a session that ends on release (Wispr-style "tap or hold").
+    private var holdTimer: Task<Void, Never>?
+    private var holdSessionActive = false
+    private static let holdThreshold: TimeInterval = 0.45
     private var activationObserver: NSObjectProtocol?
 
     init(
@@ -154,10 +167,35 @@ final class DictationController: @unchecked Sendable {
     @MainActor
     func refreshTrust() {
         let trusted = HotkeyMonitor.isTrusted()
-        if trusted != accessibilityTrusted || (trusted && !hotkeyArmed && settings.hotkey != .off) {
+        let listen = CGPreflightListenEventAccess()
+        if trusted != accessibilityTrusted || listen != inputMonitoringGranted
+            || (trusted && !hotkeyArmed && settings.hotkey != .off) {
             armHotkey()
         }
         accessibilityTrusted = trusted
+        inputMonitoringGranted = listen
+    }
+
+    /// Shows the Input Monitoring prompt (adds the app to that list) and
+    /// opens the pane so the user can tick it.
+    @MainActor
+    func requestInputMonitoring() {
+        if !CGRequestListenEventAccess() {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        trustPoll?.cancel()
+        trustPoll = Task { @MainActor [weak self] in
+            for _ in 0 ..< 60 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                if CGPreflightListenEventAccess() {
+                    self.armHotkey()
+                    return
+                }
+            }
+        }
     }
 
     private func startTrustWatch() {
@@ -165,7 +203,7 @@ final class DictationController: @unchecked Sendable {
         trustWatch = Task { @MainActor [weak self] in
             while let self, !Task.isCancelled, self.paneVisible {
                 self.refreshTrust()
-                if self.accessibilityTrusted { return }
+                if self.accessibilityTrusted && self.inputMonitoringGranted { return }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
@@ -210,6 +248,8 @@ final class DictationController: @unchecked Sendable {
         monitor?.uninstall()
         monitor = nil
         accessibilityTrusted = HotkeyMonitor.isTrusted()
+        inputMonitoringGranted = CGPreflightListenEventAccess()
+        AppLog.info("dictation", "permissions: accessibility=\(accessibilityTrusted) inputMonitoring=\(inputMonitoringGranted)")
         guard let code = settings.hotkey.keyCode else {
             hotkeyArmed = false
             return
@@ -219,10 +259,13 @@ final class DictationController: @unchecked Sendable {
             AppLog.info("dictation", "hotkey not armed — Accessibility not granted")
             return
         }
-        let m = HotkeyMonitor { [weak self] event in
+        let m = HotkeyMonitor(handler: { [weak self] event in
             Task { @MainActor [weak self] in self?.handleHotkey(event) }
-        }
+        }, onTrace: { [weak self] trace in
+            Task { @MainActor [weak self] in self?.lastHotkeyEvent = trace }
+        })
         hotkeyArmed = m.install(keyCode: code)
+        hotkeyMechanism = m.mechanism
         monitor = m
     }
 
@@ -248,25 +291,50 @@ final class DictationController: @unchecked Sendable {
 
     @MainActor
     private func handleHotkey(_ event: HotkeyMonitor.Event) {
+        AppLog.info("dictation", "hotkey \(event) · mode=\(settings.mode.rawValue) phase=\(phase)")
         switch event {
         case .pressed:
             pressedAt = Date()
             comboUsed = false
-            if settings.mode == .hold, canBegin {
-                begin(target: resolveTarget())
+            holdSessionActive = false
+            holdTimer?.cancel()
+            switch settings.mode {
+            case .hold:
+                if canBegin { begin(target: resolveTarget()) }
+            case .toggle:
+                // Still held after the threshold and nothing else pressed →
+                // push-to-talk session (ends on release). A quick tap toggles.
+                let target = resolveTarget()
+                holdTimer = Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(Self.holdThreshold * 1_000_000_000))
+                    guard let self, !Task.isCancelled, self.pressedAt != nil, !self.comboUsed,
+                          self.phase != .listening, self.canBegin else { return }
+                    self.holdSessionActive = true
+                    self.begin(target: target)
+                }
             }
         case .otherKeyDown:
             comboUsed = true
+            holdTimer?.cancel()
             // ⌥-e, ⌘-c … while the key is held: the user wanted the modifier.
-            if settings.mode == .hold, phase == .listening { cancel(quiet: true) }
+            if phase == .listening, settings.mode == .hold || holdSessionActive {
+                holdSessionActive = false
+                cancel(quiet: true)
+            }
         case .released:
             let held = pressedAt.map { Date().timeIntervalSince($0) } ?? 0
             pressedAt = nil
+            holdTimer?.cancel()
             switch settings.mode {
             case .hold:
                 guard phase == .listening else { return }
                 if held < 0.25 { cancel(quiet: true) } else { finish() }
             case .toggle:
+                if holdSessionActive {
+                    holdSessionActive = false
+                    if phase == .listening { finish() }
+                    return
+                }
                 guard !comboUsed, held < 0.8 else { return }
                 toggle(target: resolveTarget())
             }
@@ -538,7 +606,7 @@ final class DictationController: @unchecked Sendable {
             AppLog.info("dictation", String(
                 format: "recognized %.1fs → %d chars in %.2fs", seconds, recognized.count,
                 Date().timeIntervalSince(t0)))
-            if settings.spokenCommands, DictationText.isScratchOnly(recognized) {
+            if settings.spokenCommands, activeMode != .verbatim, DictationText.isScratchOnly(recognized) {
                 scratchLastInsertion(final: final)
                 return
             }
@@ -645,7 +713,9 @@ final class DictationController: @unchecked Sendable {
         var removed = false
         switch last.target {
         case .pane:
-            if paneText.count >= last.paneLength {
+            // Only if the pad still ends with that passage — the user may
+            // have edited it by hand since.
+            if paneText.hasSuffix(last.inserted), paneText.count >= last.paneLength {
                 paneText = String(paneText.dropLast(last.paneLength))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 removed = true

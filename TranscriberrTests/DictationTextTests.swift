@@ -271,3 +271,34 @@ final class DictationContextTests: XCTestCase {
             minOverlap: 0.6))
     }
 }
+
+final class DictationBugHuntTests: XCTestCase {
+    /// v3.1.2: "scratch that" only counts as a command outside verbatim mode;
+    /// the phrase itself must still be recognized as a whole-passage command.
+    func testScratchPhrasesInAllLanguages() {
+        for phrase in ["scratch that", "Delete that.", "schrap dat", "видали це", "streich das"] {
+            XCTAssertTrue(DictationText.isScratchOnly(phrase), phrase)
+        }
+        XCTAssertFalse(DictationText.isScratchOnly("scratch"))
+        XCTAssertFalse(DictationText.isScratchOnly("that"))
+    }
+
+    func testSelfCorrectionKeepsSentenceCapital() {
+        XCTAssertEqual(
+            DictationText.applySelfCorrections("Monday, no, tuesday works."),
+            "Tuesday works.")
+    }
+
+    func testCommandsNeverProduceDoubleSpacesOrLeadingSpace() {
+        let out = DictationText.process("comma hello comma world period", options: .init())
+        XCTAssertFalse(out.hasPrefix(" "))
+        XCTAssertFalse(out.contains("  "))
+        XCTAssertEqual(out, "comma hello, world.")   // raw was lowercase: no capital is invented
+    }
+
+    func testVocabularyWindowDoesNotSwallowPunctuation() {
+        XCTAssertEqual(
+            DictationText.canonicalizeVocabulary("Ask kim kim, then owasp.", terms: ["KimKim", "OWASP"]),
+            "Ask KimKim, then OWASP.")
+    }
+}

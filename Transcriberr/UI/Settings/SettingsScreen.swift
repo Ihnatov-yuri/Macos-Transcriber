@@ -70,6 +70,12 @@ struct SettingsScreen: View {
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 480)
                     }
+
+                    sectionBlock("I", "DICTATION") {
+                        DictationSettingsTab()
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 760)
+                    }
                 }
                 .padding(.bottom, AppMetric.xl)
             }

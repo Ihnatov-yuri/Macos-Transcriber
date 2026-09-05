@@ -71,6 +71,24 @@ enum TextInserter {
         return .pasted
     }
 
+    /// "Scratch that" for text already pasted into another app: delete it
+    /// again with Backspace key events. Only for a passage we inserted
+    /// ourselves moments ago, and only while the same app is still in front.
+    @discardableResult
+    static func deleteBackward(characters count: Int) -> Bool {
+        guard count > 0, HotkeyMonitor.isTrusted(),
+              let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        let key = CGKeyCode(kVK_Delete)
+        for _ in 0 ..< min(count, 4000) {
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
+            else { return false }
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+        }
+        return true
+    }
+
     static func copyOnly(_ text: String) {
         pendingRestore?.cancel()
         pendingRestore = nil

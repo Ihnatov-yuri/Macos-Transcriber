@@ -113,8 +113,9 @@ struct DictationView: View {
                        hint: s.mode == .hold ? "hold to talk,\nrelease to insert" : "tap to start, tap\nto stop · flushes on pauses") {
                     s.mode = s.mode == .hold ? .toggle : .hold
                 }
-                option("POLISH", s.polish ? "ON" : "OFF", active: s.polish,
-                       hint: "Gemma cleanup pass\n(+2–4 s per passage)") { s.polish.toggle() }
+                option("MODE·DEFAULT", s.defaultMode == .smart ? "SMART" : s.defaultMode == .verbatim ? "VERBATIM" : "CLEAN",
+                       active: s.defaultMode == .smart,
+                       hint: "apps without a rule ·\nsmart = Gemma, context-aware") { cycleMode(s) }
                 option("HISTORY", s.keepHistory ? "ON" : "OFF", active: s.keepHistory,
                        hint: "save each passage to\nthe Dictation folder") { s.keepHistory.toggle() }
                 option("LANG", s.languages.isEmpty ? "AUTO" : s.languages.sorted().joined(separator: ",").uppercased(),
@@ -139,6 +140,11 @@ struct DictationView: View {
                 .lineSpacing(1)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func cycleMode(_ s: DictationSettings) {
+        let opts = DictationSettings.FormatMode.allCases
+        if let i = opts.firstIndex(of: s.defaultMode) { s.defaultMode = opts[(i + 1) % opts.count] }
     }
 
     private func cycleHotkey(_ s: DictationSettings) {
@@ -191,17 +197,34 @@ struct DictationView: View {
                     .font(AppFont.inter(12))
                     .foregroundStyle(AppColor.inkSoft)
                     .frame(maxWidth: 520, alignment: .leading)
+                if !c.accessibilityTrusted, DictationController.isAdHocSigned {
+                    Text("Already ticked in System Settings? This build is ad-hoc signed, so an entry from an earlier Transcriberr doesn't count: remove Transcriberr from the Accessibility list with −, then add /Applications/Transcriberr.app again. The strip updates by itself once it's granted.")
+                        .font(AppFont.inter(11))
+                        .foregroundStyle(AppColor.accent)
+                        .frame(maxWidth: 520, alignment: .leading)
+                }
             }
             Spacer()
             if !c.accessibilityTrusted {
-                TapButton {
-                    c.requestAccessibility()
-                } label: {
-                    Text("GRANT ACCESS")
-                        .monoLabel(10, color: AppColor.paper)
-                        .padding(.horizontal, AppMetric.m)
-                        .padding(.vertical, 8)
-                        .background(AppColor.ink)
+                HStack(spacing: AppMetric.s) {
+                    TapButton {
+                        c.openAccessibilitySettings()
+                    } label: {
+                        Text("OPEN SETTINGS")
+                            .monoLabel(10, color: AppColor.ink)
+                            .padding(.horizontal, AppMetric.m)
+                            .padding(.vertical, 8)
+                            .overlay(Rectangle().stroke(AppColor.ink, lineWidth: 1))
+                    }
+                    TapButton {
+                        c.requestAccessibility()
+                    } label: {
+                        Text("GRANT ACCESS")
+                            .monoLabel(10, color: AppColor.paper)
+                            .padding(.horizontal, AppMetric.m)
+                            .padding(.vertical, 8)
+                            .background(AppColor.ink)
+                    }
                 }
             }
         }
@@ -319,7 +342,7 @@ struct DictationView: View {
                 }
             }
         case .transcribing, .inserting:
-            InverseFooter("Recognizing…", subtitle: c.settings.polish ? "PARAKEET → GEMMA POLISH" : "PARAKEET ON THE NEURAL ENGINE", left: {
+            InverseFooter("Recognizing…", subtitle: c.activeMode == .smart ? "PARAKEET → GEMMA FORMATTING" : "PARAKEET ON THE NEURAL ENGINE", left: {
                 ProgressView().controlSize(.small).tint(AppColor.paper)
             })
         default:

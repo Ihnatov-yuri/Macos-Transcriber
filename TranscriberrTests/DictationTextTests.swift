@@ -182,3 +182,92 @@ final class DictationTextTests: XCTestCase {
         XCTAssertLessThanOrEqual(fixed.map(abs).max()!, 1.0)
     }
 }
+
+// MARK: - Context-aware additions (v3.1)
+
+final class DictationContextTests: XCTestCase {
+
+    func testScratchMidPassageDropsWhatCameBefore() {
+        XCTAssertEqual(
+            DictationText.applyCommands("Send the report scratch that send the invoice period"),
+            "send the invoice.")
+        XCTAssertTrue(DictationText.isScratchOnly("Scratch that."))
+        XCTAssertTrue(DictationText.isScratchOnly("delete that"))
+        XCTAssertFalse(DictationText.isScratchOnly("please scratch that idea"))
+    }
+
+    func testDutchGermanUkrainianCommands() {
+        XCTAssertEqual(
+            DictationText.applyCommands("Hallo allemaal komma tot morgen punt Nieuwe alinea Groeten"),
+            "Hallo allemaal, tot morgen.\n\nGroeten")
+        XCTAssertEqual(
+            DictationText.applyCommands("Guten Tag komma bis morgen fragezeichen"),
+            "Guten Tag, bis morgen?")
+        XCTAssertEqual(
+            DictationText.applyCommands("Привіт кома до завтра крапка новий рядок бувай"),
+            "Привіт, до завтра.\nБувай")
+        // Nouns stay nouns.
+        XCTAssertEqual(DictationText.applyCommands("Dat is een punt van zorg."), "Dat is een punt van zorg.")
+    }
+
+    func testSelfCorrections() {
+        XCTAssertEqual(
+            DictationText.applySelfCorrections("Send it Monday, no, Tuesday."),
+            "Send it Tuesday.")
+        XCTAssertEqual(
+            DictationText.applySelfCorrections("Call John, I mean Jane, tomorrow."),
+            "Call Jane, tomorrow.")
+        XCTAssertEqual(
+            DictationText.applySelfCorrections("Stuur het maandag, nee, dinsdag."),
+            "Stuur het dinsdag.")
+        // No clause break before the cue → plain conversation, untouched.
+        XCTAssertEqual(
+            DictationText.applySelfCorrections("There is no way, sorry."),
+            "There is no way, sorry.")
+        XCTAssertEqual(
+            DictationText.applySelfCorrections("No problem, I mean it."),
+            "No problem, I mean it.")
+    }
+
+    func testAutoSpacingFromContext() {
+        XCTAssertEqual(DictationText.forInsertion("hello there.", spacing: .auto, preceding: ""), "Hello there.")
+        XCTAssertEqual(DictationText.forInsertion("hello there.", spacing: .auto, preceding: "Dear Kim,\n"), "Hello there.")
+        XCTAssertEqual(DictationText.forInsertion("and more.", spacing: .auto, preceding: "Some text"), " and more.")
+        XCTAssertEqual(DictationText.forInsertion("and more.", spacing: .auto, preceding: "Some text "), "and more.")
+        XCTAssertEqual(DictationText.forInsertion("next one.", spacing: .auto, preceding: "Done."), " Next one.")
+        XCTAssertEqual(DictationText.forInsertion(", really", spacing: .auto, preceding: "Yes"), ", really")
+        // No context → previous default (trailing space).
+        XCTAssertEqual(DictationText.forInsertion("hi.", spacing: .auto, preceding: nil), "hi. ")
+    }
+
+    func testAppRuleMatching() {
+        let s = DictationSettings()
+        let saved = s.appRules
+        defer { s.appRules = saved }
+        s.appRules = DictationSettings.defaultAppRules
+        XCTAssertEqual(s.rule(for: "com.apple.Terminal")?.mode, .verbatim)
+        XCTAssertEqual(s.rule(for: "com.jetbrains.intellij")?.mode, .verbatim)
+        XCTAssertEqual(s.rule(for: "com.tinyspeck.slackmacgap")?.tone, .casual)
+        XCTAssertNil(s.rule(for: "com.example.unknown"))
+        XCTAssertNil(s.rule(for: nil))
+    }
+
+    func testContextToneAndLanguage() {
+        var ctx = DictationContext()
+        ctx.bundleId = "com.tinyspeck.slackmacgap"
+        XCTAssertEqual(ctx.inferredTone, .casual)
+        ctx.bundleId = "com.apple.mail"
+        XCTAssertEqual(ctx.inferredTone, .formal)
+        ctx.preceding = "Beste Kim, bedankt voor je bericht van gisteren over de nieuwe planning."
+        XCTAssertEqual(ctx.contextLanguage, "Dutch")
+        ctx.preceding = "ok"
+        XCTAssertNil(ctx.contextLanguage)
+    }
+
+    func testSmartGuardAllowsSelfCorrectionRewrite() {
+        XCTAssertTrue(DictationText.acceptPolished(
+            raw: "so we ship it monday no tuesday and tell the whole team about it",
+            polished: "So we ship it Tuesday and tell the whole team about it.",
+            minOverlap: 0.6))
+    }
+}

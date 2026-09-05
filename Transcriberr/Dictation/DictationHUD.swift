@@ -123,7 +123,7 @@ struct DictationHUDView: View {
             let t = Int(controller.capture.elapsedSeconds)
             let pending = controller.pendingPasses > 0 ? " · WRITING…" : ""
             return String(format: "LISTENING · %d:%02d%@", t / 60, t % 60, pending)
-        case .transcribing: return controller.settings.polish ? "RECOGNIZING · POLISHING" : "RECOGNIZING"
+        case .transcribing: return controller.activeMode == .smart ? "RECOGNIZING · FORMATTING" : "RECOGNIZING"
         case .inserting:    return "INSERTING"
         case .message:      return "DICTATION"
         case .idle:         return "INSERTED"

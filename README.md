@@ -32,10 +32,18 @@ Hold a modifier key in **any app**, talk, release — the text lands at the curs
 
 - **Hotkey** — Right ⌥ by default (Right ⌘ / ⌃ / ⇧ or fn selectable); hold-to-talk or tap-to-toggle. Toggle mode flushes a passage at every pause, so hands-free dictation appears paragraph by paragraph. Needs Accessibility access once (System Settings → Privacy & Security → Accessibility) for the global key and for the paste.
 - **Cleanup** — the same deterministic destutter pass as the presets (fillers, "the the", phrase echoes), spoken commands ("new paragraph", "comma", "question mark", "open quote"…), and your vocabulary's canonical spellings (exact, never fuzzy).
-- **Polish** (optional) — a short Gemma pass per passage, guarded: a result that isn't clearly the same passage cleaned up is discarded.
+- **Context-aware formatting** (Wispr-Flow style, on-device) — the app in front and the text before the cursor are read through Accessibility when a session starts. Per-app rules pick the mode: *verbatim* for terminals and code editors, *clean* (deterministic) by default, *smart* for chat and mail — a Gemma pass conditioned on the target app, its register (casual/formal), and the surrounding text. Self-corrections ("Monday, no, Tuesday") are applied deterministically; the language of the text in the field steers recognition; spacing and capitalization at the join follow the real context. Password fields are always verbatim and never read. Every smart result is guarded: if it isn't clearly the same passage, the deterministic text is used.
+- **Editing by voice** — "scratch that" (also Dutch, German, Ukrainian) removes the last passage, in the target app too.
+- **Shortcuts actions** — Start / Stop / Toggle / Cancel Dictation, with Siri phrases; they don't activate the app, so the text lands where you are.
 - **Menu bar + floating status strip**; an in-app **Dictate** scratch pad; optional **history** — every passage saved with its audio as a normal recording in a "Dictation" folder (playable, re-transcribable, searchable via the KB CLI / MCP).
 - Insertion is pasteboard + ⌘V with the previous clipboard restored; without Accessibility access the text is copied instead.
 - Automation hook: `transcriberr://dictate/start`, `/stop`, `/toggle`, `/cancel`, `/pane` (Shortcuts, Raycast, Stream Deck). Use `open -g` to keep the current app in front so the text is pasted there; a plain `open` activates Transcriberr and the text lands in its scratch pad.
+
+## Permissions
+
+Dictation needs **Microphone** (first use) and **Accessibility** (global hotkey + pasting into other apps). macOS ties a grant to the app's code signature. Releases built without a signing identity are ad-hoc signed, whose identity is a per-build hash — so after every update the entries in System Settings look ticked but no longer match, and the app reports "not granted". Fix once: remove Transcriberr from the list (−) and add `/Applications/Transcriberr.app` again.
+
+To make grants survive updates, give `scripts/package.sh` a stable identity: in **Keychain Access → Certificate Assistant → Create a Certificate…**, name `Transcriberr Signing`, type *Code Signing*, self-signed. The script picks up the first code-signing identity automatically; from then on every build carries the same requirement and macOS keeps the permissions.
 
 ## Features
 

@@ -39,7 +39,9 @@ struct DictationMenu: View {
         Picker("Mode", selection: Binding(get: { s.mode }, set: { s.mode = $0 })) {
             ForEach(DictationSettings.Mode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
         }
-        Toggle("Polish with Gemma", isOn: Binding(get: { s.polish }, set: { s.polish = $0 }))
+        Picker("Default formatting", selection: Binding(get: { s.defaultMode }, set: { s.defaultMode = $0 })) {
+            ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
+        }
         Toggle("Keep history in Library", isOn: Binding(get: { s.keepHistory }, set: { s.keepHistory = $0 }))
         Divider()
         if !c.accessibilityTrusted {

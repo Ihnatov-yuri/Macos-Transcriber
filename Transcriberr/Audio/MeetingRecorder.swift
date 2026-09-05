@@ -94,7 +94,9 @@ final class MeetingRecorder: @unchecked Sendable {
     nonisolated(unsafe) private var framesSeen: Int64 = 0
     private var nativeRate: Double = 48_000
     private var fileURL: URL?
-    private var isRunning = false
+    /// Exposed read-only so dictation can refuse to open a second input
+    /// chain while a meeting is being captured.
+    private(set) var isRunning = false
     private var isStarting = false
 
     // MARK: - Public surface (mirrors WavRecorder)

@@ -43,8 +43,14 @@ final class AppContainer: @unchecked Sendable {
     let postProcessor: PostProcessor
     let jobManager: TranscriptionJobManager
 
+    // MARK: - Dictation
+    let dictationSettings: DictationSettings
+    let dictation: DictationController
+
     // MARK: - Cross-screen signals
     private(set) var newRecordingRequested = 0
+    /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
+    private(set) var dictatePaneRequested = 0
 
     init() {
         let schema = Schema(TranscriberrSchema.models)
@@ -100,6 +106,22 @@ final class AppContainer: @unchecked Sendable {
             runner: transcriptionRunner,
             repository: repository
         )
+
+        dictationSettings = DictationSettings()
+        dictation = DictationController(
+            settings: dictationSettings,
+            factory: backendFactory,
+            prompts: promptStore,
+            repository: repository,
+            uiPrefs: uiPrefs,
+            recorder: recorder,
+            meetingRecorder: meetingRecorder
+        )
+        // Hotkey monitors and the HUD panel want a running app — defer to
+        // the first run-loop turn rather than doing AppKit work inside init.
+        Task { @MainActor [weak self] in
+            self?.dictation.bootstrap()
+        }
 
         // Wire auto-titler after construction so we can capture `self`.
         jobManager.autoTitler = { [weak self] recording, segments, params in
@@ -169,6 +191,10 @@ final class AppContainer: @unchecked Sendable {
 
     func requestNewRecording() {
         newRecordingRequested &+= 1
+    }
+
+    func requestDictatePane() {
+        dictatePaneRequested &+= 1
     }
 
 }

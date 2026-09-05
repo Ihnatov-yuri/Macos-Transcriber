@@ -26,6 +26,16 @@ Companion to [Transcriber-Android](https://github.com/Ihnatov-yuri) — same sid
 
 Records your **microphone and system audio** (Zoom/Teams/Meet participants, tapped digitally via a CoreAudio process tap) on one drift-compensated clock. Saves the mix plus raw per-source tracks; transcription runs **split-track**: your voice is ground-truth "you" (named from Settings → Engines → My name), diarization only untangles the others, and an **offline NLMS echo canceller** subtracts the far side's room echo from your mic (measured: −11.8 dB on echo, −0.2 dB on speech). A capture gate keeps playback echo-free; sentence-level scrubs catch the rest.
 
+## Dictation
+
+Hold a modifier key in **any app**, talk, release — the text lands at the cursor. Parakeet decodes the whole passage in a fraction of a second on the Neural Engine, so there is no streaming lag and full-context accuracy. Everything the transcription path learned is reused:
+
+- **Hotkey** — Right ⌥ by default (Right ⌘ / ⌃ / ⇧ or fn selectable); hold-to-talk or tap-to-toggle. Toggle mode flushes a passage at every pause, so hands-free dictation appears paragraph by paragraph. Needs Accessibility access once (System Settings → Privacy & Security → Accessibility) for the global key and for the paste.
+- **Cleanup** — the same deterministic destutter pass as the presets (fillers, "the the", phrase echoes), spoken commands ("new paragraph", "comma", "question mark", "open quote"…), and your vocabulary's canonical spellings (exact, never fuzzy).
+- **Polish** (optional) — a short Gemma pass per passage, guarded: a result that isn't clearly the same passage cleaned up is discarded.
+- **Menu bar + floating status strip**; an in-app **Dictate** scratch pad; optional **history** — every passage saved with its audio as a normal recording in a "Dictation" folder (playable, re-transcribable, searchable via the KB CLI / MCP).
+- Insertion is pasteboard + ⌘V with the previous clipboard restored; without Accessibility access the text is copied instead.
+
 ## Features
 
 - **Versioned transcripts** — every engine run is snapshotted; compare engines side-by-side and restore any version. Transcripts are never lost on re-runs (rescue snapshots + lazy wipe + launch healing).
@@ -42,7 +52,7 @@ Records your **microphone and system audio** (Zoom/Teams/Meet participants, tapp
 xcodebuild test -scheme Transcriberr -destination "platform=macOS"
 ```
 
-16 unit tests over the pure-logic core (destutter, echo scrub/trim, ROVER merge, chunk windowing, NLMS canceller with synthetic ground truth). **Every release must pass the suite first.**
+Unit tests over the pure-logic core (destutter, echo scrub/trim, ROVER merge, chunk windowing, NLMS canceller with synthetic ground truth, dictation text stages). **Every release must pass the suite first.**
 
 ## Build
 

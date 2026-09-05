@@ -11,6 +11,8 @@ struct SettingsView: View {
                 .tabItem { Label("Models", systemImage: "shippingbox") }
             RecorderSettingsTab()
                 .tabItem { Label("Audio Input", systemImage: "mic") }
+            DictationSettingsTab()
+                .tabItem { Label("Dictation", systemImage: "keyboard") }
             PromptsSettingsTab()
                 .tabItem { Label("Prompts", systemImage: "text.bubble") }
             PresetsSettingsTab()

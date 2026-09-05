@@ -6,12 +6,13 @@ import SwiftUI
 /// non-resizable and ensures every section button is reliably hittable.
 struct AppShell: View {
     enum Section: String, CaseIterable, Identifiable, Hashable {
-        case record, library, settings
+        case record, library, dictate, settings
         var id: String { rawValue }
         var label: String {
             switch self {
             case .record:   return "RECORD"
             case .library:  return "LIBRARY"
+            case .dictate:  return "DICTATE"
             case .settings: return "SETTINGS"
             }
         }
@@ -19,15 +20,22 @@ struct AppShell: View {
             switch self {
             case .record:   return 2
             case .library:  return 1
+            case .dictate:  return 3
             case .settings: return 4
             }
         }
     }
 
+    @Environment(AppContainer.self) private var container
     @State private var section: Section = .library
     private let sidebarWidth: CGFloat = 200
 
     var body: some View {
+        shell
+            .onChange(of: container.dictatePaneRequested) { _, _ in section = .dictate }
+    }
+
+    private var shell: some View {
         HStack(spacing: 0) {
             sidebar
                 .frame(width: sidebarWidth)
@@ -39,6 +47,7 @@ struct AppShell: View {
                 switch section {
                 case .record:   RecordView()
                 case .library:  LibraryView()
+                case .dictate:  DictationView()
                 case .settings: SettingsScreen()
                 }
             }

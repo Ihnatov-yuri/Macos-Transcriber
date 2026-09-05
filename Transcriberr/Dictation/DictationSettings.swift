@@ -56,14 +56,15 @@ final class DictationSettings: @unchecked Sendable {
     enum Mode: String, CaseIterable, Sendable {
         /// Press and hold the key; release to transcribe and insert.
         case hold
-        /// Tap to start, tap again to stop. Text is flushed at every pause,
-        /// so long hands-free dictation appears paragraph by paragraph.
+        /// Tap to start, tap again to stop (text is flushed at every pause,
+        /// so long hands-free dictation appears paragraph by paragraph) —
+        /// and holding the key still works as push-to-talk.
         case toggle
 
         var label: String {
             switch self {
             case .hold:   return "Hold to talk"
-            case .toggle: return "Tap to start / stop"
+            case .toggle: return "Tap to start / stop (hold also works)"
             }
         }
     }

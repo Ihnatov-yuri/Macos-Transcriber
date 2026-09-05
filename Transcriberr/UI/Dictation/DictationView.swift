@@ -198,7 +198,7 @@ struct DictationView: View {
                     .foregroundStyle(AppColor.inkSoft)
                     .frame(maxWidth: 520, alignment: .leading)
                 if !c.accessibilityTrusted, DictationController.isAdHocSigned {
-                    Text("Already ticked in System Settings? This build is ad-hoc signed, so an entry from an earlier Transcriberr doesn't count: remove Transcriberr from the Accessibility list with −, then add /Applications/Transcriberr.app again. The strip updates by itself once it's granted.")
+                    Text("Already ticked in System Settings? The entry belongs to an earlier build whose signature no longer matches: remove Transcriberr from the Accessibility list with −, then add /Applications/Transcriberr.app again. Builds from 3.1.1 on keep the grant across updates. The strip updates by itself once it's granted.")
                         .font(AppFont.inter(11))
                         .foregroundStyle(AppColor.accent)
                         .frame(maxWidth: 520, alignment: .leading)

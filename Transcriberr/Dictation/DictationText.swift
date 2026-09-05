@@ -109,8 +109,16 @@ enum DictationText {
         guard !tokens.isEmpty else { return line }
         var out = ""          // built text
         var i = 0
+        // A spoken terminator / paragraph starts a new sentence; the
+        // recognizer didn't know that, so it left the next word lowercase.
+        var capitalizeNext = false
 
-        func appendWord(_ word: String) {
+        func appendWord(_ raw: String) {
+            var word = raw
+            if capitalizeNext, let first = word.first, first.isLowercase {
+                word = first.uppercased() + word.dropFirst()
+            }
+            capitalizeNext = false
             if out.isEmpty || out.hasSuffix("\n") || out.hasSuffix("“") {
                 out += word
             } else {
@@ -162,10 +170,13 @@ enum DictationText {
                 case .punctuation(let p):
                     // A leading "full stop" has nothing to attach to — drop it.
                     if !out.isEmpty { attach(p) }
+                    if [".", "?", "!"].contains(p) { capitalizeNext = true }
                 case .newline:
                     out = out.trimmingCharacters(in: .whitespaces) + "\n"
+                    capitalizeNext = true
                 case .paragraph:
                     out = out.trimmingCharacters(in: .whitespaces) + "\n\n"
+                    capitalizeNext = true
                 case .openQuote:
                     appendWord("“")
                 case .closeQuote:

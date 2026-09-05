@@ -16,6 +16,7 @@ struct TranscriberrApp: App {
     var body: some Scene {
         WindowGroup {
             AppShell()
+                .onOpenURL { url in container.dictation.handle(url: url) }
                 .environment(container)
                 .modelContainer(container.modelContainer)
                 .frame(minWidth: 980, minHeight: 640)

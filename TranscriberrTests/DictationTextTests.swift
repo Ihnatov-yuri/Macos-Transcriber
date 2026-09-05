@@ -23,7 +23,18 @@ final class DictationTextTests: XCTestCase {
     func testNewLineVersusNewParagraph() {
         XCTAssertEqual(
             DictationText.applyCommands("First new line second new paragraph third"),
-            "First\nsecond\n\nthird")
+            "First\nSecond\n\nThird")
+    }
+
+    func testSentenceStartsCapitalizedAfterSpokenTerminators() {
+        // Verbatim from the end-to-end run: the recognizer left "second"
+        // lowercase because it didn't know "new paragraph" was a command.
+        XCTAssertEqual(
+            DictationText.applyCommands("the lazy dog period new paragraph second passage question mark"),
+            "the lazy dog.\n\nSecond passage?")
+        XCTAssertEqual(
+            DictationText.applyCommands("done period next one question mark and more"),
+            "done. Next one? And more")
     }
 
     func testNounPeriodIsNotACommand() {

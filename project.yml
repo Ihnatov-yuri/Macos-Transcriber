@@ -66,6 +66,10 @@ targets:
         NSAudioCaptureUsageDescription: Meeting mode records the audio other apps play (your meeting participants) so calls can be transcribed locally on this Mac.
         NSDocumentsFolderUsageDescription: Transcriberr saves recordings, transcripts, and sidecar files alongside your audio.
         NSHumanReadableCopyright: ""
+        # transcriberr://dictate/<start|stop|toggle|cancel|pane> — automation hook
+        CFBundleURLTypes:
+          - CFBundleURLName: nl.ihnatov.Transcriberr
+            CFBundleURLSchemes: [transcriberr]
     entitlements:
       path: Transcriberr/Transcriberr.entitlements
       properties:

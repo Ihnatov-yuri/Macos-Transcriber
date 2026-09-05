@@ -3,18 +3,29 @@ import SwiftUI
 /// Editorial port of Android `record/RecordScreen.kt`.
 struct RecordView: View {
     @Environment(AppContainer.self) private var container
-    @State private var model: RecordModel?
+    /// Owned by AppShell (app lifetime), NOT a view-scoped @State: this view
+    /// is torn down every time the sidebar switches sections, and a model
+    /// that died with it forgot an in-progress recording — coming back
+    /// mid-recording showed an idle screen with no Stop button and no live
+    /// captions while the recorder kept running underneath.
+    let model: RecordModel
 
     var body: some View {
-        Group {
-            if let model {
-                content(model)
-            } else {
-                Sheet { ProgressView().padding() }
+        content(model)
+            .task { await consumePendingNewRecording() }
+            .onChange(of: container.newRecordingRequested) { _, _ in
+                Task { @MainActor in await consumePendingNewRecording() }
             }
-        }
-        .task {
-            if model == nil { model = RecordModel(container: container) }
+    }
+
+    /// ⌘N while already on this screen (onChange) or arriving here because
+    /// of it (task) — either way, start a recording if nothing is running.
+    private func consumePendingNewRecording() async {
+        guard container.pendingNewRecording else { return }
+        container.pendingNewRecording = false
+        switch model.uiState {
+        case .idle, .finished: await model.toggleRecord()
+        case .recording, .paused: break
         }
     }
 

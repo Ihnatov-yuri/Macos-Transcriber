@@ -263,6 +263,11 @@ struct DetailView: View {
             let new = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !new.isEmpty {
                 recording.title = new
+                // Explicit save + backup: main-context autosave would get
+                // there eventually, but the file shadow only refreshes on
+                // repository writes — a manual rename never reached it.
+                try? recording.modelContext?.save()
+                BackupService.backupRecording(recording)
             }
         }
     }
@@ -336,6 +341,9 @@ struct DetailView: View {
                     renameRecordingPrompt()
                 }
                 Button("Delete recording", role: .destructive) {
+                    // Same reasoning as the library's Delete: a run still
+                    // streaming into this recording must not outlive it.
+                    container.jobManager.cancel(recording.id)
                     try? container.repository.delete(recording)
                     onClose()
                 }

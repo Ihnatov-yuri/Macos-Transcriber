@@ -50,7 +50,7 @@ struct SettingsScreen: View {
                     sectionBlock("E", "STYLE & VOCABULARY") {
                         StyleSettingsTab()
                             .scrollContentBackground(.hidden)
-                            .frame(minHeight: 560)
+                            .frame(minHeight: 900)
                     }
 
                     sectionBlock("F", "SNIPPETS") {
@@ -69,6 +69,12 @@ struct SettingsScreen: View {
                         APIKeysSettingsTab()
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 480)
+                    }
+
+                    sectionBlock("I", "DICTATION") {
+                        DictationSettingsTab()
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 760)
                     }
                 }
                 .padding(.bottom, AppMetric.xl)

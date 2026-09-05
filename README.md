@@ -26,6 +26,28 @@ Companion to [Transcriber-Android](https://github.com/Ihnatov-yuri) — same sid
 
 Records your **microphone and system audio** (Zoom/Teams/Meet participants, tapped digitally via a CoreAudio process tap) on one drift-compensated clock. Saves the mix plus raw per-source tracks; transcription runs **split-track**: your voice is ground-truth "you" (named from Settings → Engines → My name), diarization only untangles the others, and an **offline NLMS echo canceller** subtracts the far side's room echo from your mic (measured: −11.8 dB on echo, −0.2 dB on speech). A capture gate keeps playback echo-free; sentence-level scrubs catch the rest.
 
+## Dictation
+
+Hold a modifier key in **any app**, talk, release — the text lands at the cursor. Parakeet decodes the whole passage in a fraction of a second on the Neural Engine, so there is no streaming lag and full-context accuracy. Everything the transcription path learned is reused:
+
+- **Hotkey** — Right ⌥ by default (Right ⌘ / ⌃ / ⇧ or fn selectable); hold-to-talk or tap-to-toggle. Toggle mode flushes a passage at every pause, so hands-free dictation appears paragraph by paragraph. Needs Accessibility access once (System Settings → Privacy & Security → Accessibility) for the global key and for the paste.
+- **Cleanup** — the same deterministic destutter pass as the presets (fillers, "the the", phrase echoes), spoken commands ("new paragraph", "comma", "question mark", "open quote"…), and your vocabulary's canonical spellings (exact, never fuzzy).
+- **Context-aware formatting** (Wispr-Flow style, on-device) — the app in front and the text before the cursor are read through Accessibility when a session starts. Per-app rules pick the mode: *verbatim* for terminals and code editors, *clean* (deterministic) by default, *smart* for chat and mail — a Gemma pass conditioned on the target app, its register (casual/formal), and the surrounding text. Self-corrections ("Monday, no, Tuesday") are applied deterministically; the language of the text in the field steers recognition; spacing and capitalization at the join follow the real context. Password fields are always verbatim and never read. Every smart result is guarded: if it isn't clearly the same passage, the deterministic text is used.
+- **Editing by voice** — "scratch that" (also Dutch, German, Ukrainian) removes the last passage, in the target app too.
+- **Live preview** while speaking: the audio so far is decoded every 2.5 s and shown as provisional text — no extra model.
+- **Names learned from your library** — recurring capitalized terms across your transcripts are harvested at launch and applied to dictation automatically; every new passage offers its unknown names as one-tap vocabulary additions (Settings → Style & Vocabulary → Learned).
+- **First-run setup** on the Dictate screen walks through Microphone, Accessibility and Input Monitoring with a live "last key event" readout, so a dead hotkey is never a mystery.
+- **Shortcuts actions** — Start / Stop / Toggle / Cancel Dictation, with Siri phrases; they don't activate the app, so the text lands where you are.
+- **Menu bar + floating status strip**; an in-app **Dictate** scratch pad; optional **history** — every passage saved with its audio as a normal recording in a "Dictation" folder (playable, re-transcribable, searchable via the KB CLI / MCP).
+- Insertion is pasteboard + ⌘V with the previous clipboard restored; without Accessibility access the text is copied instead.
+- Automation hook: `transcriberr://dictate/start`, `/stop`, `/toggle`, `/cancel`, `/pane` (Shortcuts, Raycast, Stream Deck). Use `open -g` to keep the current app in front so the text is pasted there; a plain `open` activates Transcriberr and the text lands in its scratch pad.
+
+## Permissions
+
+Dictation needs **Microphone** (first use) and **Accessibility** (global hotkey + pasting into other apps). macOS ties a grant to the app's *designated requirement*. Ad-hoc signatures used to default that to a per-build hash, so after every update the entries in System Settings looked ticked but no longer matched and the app reported "not granted". Since 3.1.1 `scripts/package.sh` signs ad-hoc builds with an explicit identifier-based requirement (`designated => identifier "nl.ihnatov.Transcriberr"`), which every build satisfies — grant once, keep it.
+
+Upgrading from an older build: remove Transcriberr from the Accessibility list (−) and add `/Applications/Transcriberr.app` again, once. A real code-signing identity (self-signed "Transcriberr Signing" made in Keychain Access, or a Developer ID) is still picked up automatically when present and is the better choice for distribution.
+
 ## Features
 
 - **Versioned transcripts** — every engine run is snapshotted; compare engines side-by-side and restore any version. Transcripts are never lost on re-runs (rescue snapshots + lazy wipe + launch healing).
@@ -39,10 +61,13 @@ Records your **microphone and system audio** (Zoom/Teams/Meet participants, tapp
 ## Tests
 
 ```bash
-xcodebuild test -scheme Transcriberr -destination "platform=macOS"
+xcodebuild test -project Transcriberr.xcodeproj -scheme Transcriberr -destination "platform=macOS" \
+    -derivedDataPath ~/Library/Caches/transcriberr-test-dd -clonedSourcePackagesDirPath .build/xcode/SourcePackages
 ```
 
-16 unit tests over the pure-logic core (destutter, echo scrub/trim, ROVER merge, chunk windowing, NLMS canceller with synthetic ground truth). **Every release must pass the suite first.**
+Unit tests over the pure-logic core (destutter, echo scrub/trim, ROVER merge, chunk windowing, NLMS canceller with synthetic ground truth, dictation text stages), the repository (merge/split/versions/folders/tags), the compressor, the KB layer and the player. **Every release must pass the suite first.**
+
+Keep the test derived-data path *outside* `~/Documents`: the test host is launched by launchd and would block in the dynamic loader on the "access your Documents folder" permission prompt (`The test runner hung before establishing connection`), which nobody is there to answer in a headless run.
 
 ## Build
 

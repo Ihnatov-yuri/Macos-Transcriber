@@ -192,6 +192,7 @@ final class DictationSettings: @unchecked Sendable {
         static let dismissedTerms    = "dictation.dismissedTerms"
         static let livePreview       = "dictation.livePreview"
         static let onboarded         = "dictation.onboarded"
+        static let voiceProcessing   = "dictation.voiceProcessing"
     }
 
     var hotkey: Hotkey { didSet { defaults.set(hotkey.rawValue, forKey: Key.hotkey) } }
@@ -256,6 +257,12 @@ final class DictationSettings: @unchecked Sendable {
     var livePreview: Bool { didSet { defaults.set(livePreview, forKey: Key.livePreview) } }
     /// First-run setup completed (or dismissed).
     var onboarded: Bool { didSet { defaults.set(onboarded, forKey: Key.onboarded) } }
+    /// Run the microphone through Apple's voice-processing unit (echo
+    /// cancellation, noise suppression, AGC) while dictating. Off by default:
+    /// bringing the unit up costs ~1 s at the start of every passage, and
+    /// macOS turns other apps down while it exists. Independent of the
+    /// recorder's noise-suppression setting.
+    var voiceProcessing: Bool { didSet { defaults.set(voiceProcessing, forKey: Key.voiceProcessing) } }
 
     /// Learned spellings that are still active.
     var activeLearnedSpellings: [String] {
@@ -311,6 +318,7 @@ final class DictationSettings: @unchecked Sendable {
         useLearnedTerms = (defaults.object(forKey: Key.useLearnedTerms) as? Bool) ?? true
         livePreview = (defaults.object(forKey: Key.livePreview) as? Bool) ?? true
         onboarded = defaults.bool(forKey: Key.onboarded)
+        voiceProcessing = defaults.bool(forKey: Key.voiceProcessing)
         let storedPause = defaults.double(forKey: Key.pauseFlushSeconds)
         pauseFlushSeconds = storedPause > 0 ? min(4, max(0.8, storedPause)) : 1.5
         playSounds = (defaults.object(forKey: Key.playSounds) as? Bool) ?? true

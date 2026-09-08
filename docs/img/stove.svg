@@ -8,8 +8,8 @@
     </marker>
   </defs>
   <rect width="1200" height="440" fill="#F4EFE3"/>
-  <text x="40" y="52" font-size="15" letter-spacing="3" fill="#1A1918" font-weight="bold">ONE BURNER, AND A CHEF WHO FREEZES</text>
-  <text x="40" y="72" font-size="11" fill="#8a857c">the local llm serves one conversation at a time · when it hangs, the queue must not die with it</text>
+  <text x="40" y="52" font-size="15" letter-spacing="3" fill="#1A1918" font-weight="bold">THE LLM QUEUE, AND A CALL THAT NEVER RETURNS</text>
+  <text x="40" y="72" font-size="11" fill="#8a857c">one conversation at a time on the local llm · when a call hangs, the queue must survive it</text>
 
   <!-- callers -->
   <text x="40" y="112" font-size="10" letter-spacing="2" fill="#8a857c">WHO WANTS THE ENGINE</text>

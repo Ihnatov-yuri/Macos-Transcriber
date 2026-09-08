@@ -92,7 +92,7 @@ open .build/xcode/Build/Products/Release/Transcriberr.app
 
 ## CLI harness
 
-`transcriberrcli` exercises the same audio + ASR code headlessly (`record`, `decode`, `transcribe`, `whisper <file> [lang]`, `litert`, `qwen <file> [lang]`, `superdiar`). Run with `DYLD_LIBRARY_PATH=.build/xcode/Build/Products/Debug` for the LiteRT dylib.
+`transcriberrcli` exercises the same audio + ASR code headlessly (`record`, `decode`, `transcribe`, `whisper <file> [lang]`, `litert`, `superdiar`). Run with `DYLD_LIBRARY_PATH=.build/xcode/Build/Products/Debug` for the LiteRT dylib.
 
 ## Credits
 

@@ -481,33 +481,6 @@ func cmdAEC(base: String) async -> Int32 {
     }
 }
 
-/// Qwen3-ASR (2026, 52 languages incl. Ukrainian) via FluidAudio CoreML.
-@MainActor
-func cmdQwen(path: String, language: String?) async -> Int32 {
-    let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
-    let decoder = AudioDecoder()
-    guard let samples = try? await decoder.decodeAll(file: url) else {
-        print("[qwen] ❌ decode failed"); return 1
-    }
-    print("[qwen] \(String(format: "%.1f", Double(samples.count) / 16_000))s; loading Qwen3-ASR (first run downloads models)…")
-    do {
-        let models = try await Qwen3AsrModels.downloadAndLoad()
-        let manager = Qwen3AsrManager()
-        try await manager.loadModels(from: Qwen3AsrModels.defaultCacheDirectory())
-        _ = models
-        let t0 = Date()
-        let text = try await manager.transcribe(audioSamples: samples, language: language, maxNewTokens: 512)
-        print("[qwen] ✓ \(String(format: "%.1f", Date().timeIntervalSince(t0)))s compute")
-        print("──────────────────────────────────────────")
-        print(text)
-        print("──────────────────────────────────────────")
-        return text.isEmpty ? 2 : 0
-    } catch {
-        print("[qwen] ❌ \(error)")
-        return 1
-    }
-}
-
 @MainActor
 func main() async -> Int32 {
     switch command {
@@ -543,9 +516,6 @@ func main() async -> Int32 {
     case "aec":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdAEC(base: args[2])
-    case "qwen":
-        guard args.count > 2 else { usage(); return 64 }
-        return await cmdQwen(path: args[2], language: args.count > 3 ? args[3] : nil)
     case "litert":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdLitert(path: args[2])

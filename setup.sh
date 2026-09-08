@@ -17,6 +17,12 @@ fi
 
 xcodegen generate
 
+# Resolve packages, then nest the NemoTextProcessing headers so the FluidAudio
+# and LiteRT-LM xcframeworks stop colliding on include/module.modulemap
+# (see scripts/patch-artifacts.sh for the why).
+xcodebuild -resolvePackageDependencies -scheme Transcriberr -derivedDataPath .build/xcode >/dev/null
+scripts/patch-artifacts.sh
+
 if [[ "${1-}" != "--no-open" ]]; then
   open Transcriberr.xcodeproj
 fi

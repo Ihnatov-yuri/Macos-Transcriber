@@ -3,9 +3,16 @@ import Foundation
 import Observation
 
 /// Microphone capture for dictation: the same input chain as `WavRecorder`
-/// (voice processing, hand-rolled mono downmix, one continuous 16 kHz
-/// resampler) but everything stays in memory — an utterance is seconds, not
-/// hours, and it is transcribed the instant the key is released.
+/// (hand-rolled mono downmix, one continuous 16 kHz resampler, optional
+/// Apple voice processing) but everything stays in memory — an utterance is
+/// seconds, not hours, and it is transcribed the instant the key is released.
+///
+/// Voice processing is created at `start()` and torn down at `stop()`, never
+/// kept warm: the moment the voice-processing unit exists in the process,
+/// coreaudiod ducks every other app's output by 15 dB (measured:
+/// `_DuckClientVolumeScalar … to 0.177828`), and only disabling it lifts the
+/// duck — `engine.stop()` alone does not. Keeping it prewarmed made the Mac
+/// quieter for as long as the app was running.
 ///
 /// Also tracks voice activity so toggle mode can flush a passage at every
 /// pause. No actor isolation on the type (see `WavRecorder`).
@@ -28,9 +35,13 @@ final class UtteranceCapture: @unchecked Sendable {
     private var totalSamples: Int = 0
     private var startedAt: Date = .distantPast
     private var tick: Task<Void, Never>?
-    /// Voice-processing state the engine was last configured with; toggling
-    /// it costs seconds, so `start()` only touches it when the setting changed.
-    private var configuredVoiceProcessing: Bool?
+    /// Use Apple's voice-processing unit (echo cancellation, noise
+    /// suppression, AGC) for the next session. Set by the controller from the
+    /// dictation settings before `start()`. Costs ~1 s to bring up, so the
+    /// raw path stays the default for an instant start.
+    var voiceProcessing = false
+    /// Whether the voice-processing unit currently exists on the engine.
+    private var voiceProcessingActive = false
     private var configObserver: NSObjectProtocol?
     // Diagnostics (ioQueue): how much the tap actually delivered.
     private var tapCalls = 0
@@ -97,8 +108,8 @@ final class UtteranceCapture: @unchecked Sendable {
         }
     }
 
-    /// Grab the input node and apply the voice-processing preference (only
-    /// when it differs from what the engine already has).
+    /// Grab the input node (raw — voice processing is handled by
+    /// `setVoiceProcessing(_:)` at session boundaries only).
     @MainActor
     @discardableResult
     private func configureInput() throws -> AVAudioInputNode {
@@ -109,14 +120,6 @@ final class UtteranceCapture: @unchecked Sendable {
             throw CaptureError.noInput("Audio input unavailable: \(error.localizedDescription)")
         }
         guard let input = grabbedInput else { throw CaptureError.noInput("No audio input device.") }
-        let wantVP = RecorderSettings.shared.noiseSuppression
-        if configuredVoiceProcessing != wantVP {
-            let t0 = Date()
-            try? ExceptionTrap.run { try? input.setVoiceProcessingEnabled(wantVP) }
-            configuredVoiceProcessing = wantVP
-            AppLog.info("dictation", String(format: "voice processing %@ in %.2fs",
-                                            wantVP ? "enabled" : "disabled", Date().timeIntervalSince(t0)))
-        }
         if configObserver == nil {
             configObserver = NotificationCenter.default.addObserver(
                 forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
@@ -125,6 +128,36 @@ final class UtteranceCapture: @unchecked Sendable {
             }
         }
         return input
+    }
+
+    /// Create or destroy the voice-processing unit. The engine must be
+    /// uninitialized for the toggle to be accepted (a prepared engine answers
+    /// -10849), so the caller stops it first. Failures are logged, not
+    /// swallowed — a silent failure here is exactly how an unwanted unit
+    /// survives into idle time.
+    @MainActor
+    private func setVoiceProcessing(_ on: Bool, input: AVAudioInputNode) {
+        guard voiceProcessingActive != on else { return }
+        let t0 = Date()
+        var toggleError: Error?
+        try? ExceptionTrap.run {
+            do { try input.setVoiceProcessingEnabled(on) } catch { toggleError = error }
+        }
+        if let toggleError {
+            AppLog.warn("dictation", "voice processing \(on ? "enable" : "disable") failed: \(toggleError.localizedDescription)")
+            voiceProcessingActive = input.isVoiceProcessingEnabled
+            return
+        }
+        if on {
+            // Duck other apps as little as macOS allows while we capture
+            // (-4 dB instead of the default -15 dB).
+            input.voiceProcessingOtherAudioDuckingConfiguration = .init(
+                enableAdvancedDucking: false, duckingLevel: .min
+            )
+        }
+        voiceProcessingActive = on
+        AppLog.info("dictation", String(format: "voice processing %@ in %.2fs",
+                                        on ? "enabled" : "disabled", Date().timeIntervalSince(t0)))
     }
 
     /// The engine stops itself when the audio route changes (device
@@ -171,7 +204,13 @@ final class UtteranceCapture: @unchecked Sendable {
         elapsedSeconds = 0
 
         let input = try configureInput()
+        if voiceProcessing {
+            // Uninitialize the prewarmed graph so the toggle is accepted.
+            try? ExceptionTrap.run { self.engine.stop() }
+            setVoiceProcessing(true, input: input)
+        }
 
+        // Read the format AFTER the voice-processing decision: it changes.
         var nativeFormat: AVAudioFormat?
         do {
             try ExceptionTrap.run { nativeFormat = input.outputFormat(forBus: 0) }
@@ -253,7 +292,11 @@ final class UtteranceCapture: @unchecked Sendable {
         AppLog.info("dictation", String(format: "capture stopped: %.2fs (tap %d calls, %d frames, engine %@)",
                                         Double(out.count) / Self.sampleRate, calls, frames,
                                         wasRunning ? "running" : "stopped"))
-        // Keep the configured graph warm for the next passage.
+        // Tear the voice-processing unit down so other apps get their
+        // volume back, then keep the raw graph warm for the next passage.
+        if voiceProcessingActive, let input = try? configureInput() {
+            setVoiceProcessing(false, input: input)
+        }
         try? ExceptionTrap.run { self.engine.prepare() }
         return out
     }

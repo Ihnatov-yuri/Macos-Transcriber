@@ -300,7 +300,7 @@ struct RecorderSettingsTab: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Noise suppression while recording")
                         .font(AppFont.inter(13, weight: .medium))
-                    Text("Recommended. Applied on the input node before each chunk is written.")
+                    Text("Recommended. Applied on the input node before each chunk is written. macOS turns other apps down slightly while it runs; they come back when the recording stops.")
                         .font(AppFont.inter(11))
                         .foregroundStyle(AppColor.inkSoft)
                 }

@@ -457,6 +457,7 @@ final class DictationController: @unchecked Sendable {
             await previousTeardown?.value
             guard let self, self.sessionID == session, self.phase == .listening else { return }
             do {
+                self.capture.voiceProcessing = self.settings.voiceProcessing
                 try await self.capture.start()
             } catch {
                 AppLog.error("dictation", "capture failed: \(error.localizedDescription)")

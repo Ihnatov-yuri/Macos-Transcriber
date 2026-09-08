@@ -176,14 +176,28 @@ final class WavRecorder: @unchecked Sendable {
         // dramatically cleaner than raw mic. Must be enabled BEFORE the
         // engine starts; after enabling, the input format may change so we
         // read it again below. Also throws NSException on some configs.
+        //
+        // While the unit exists, coreaudiod ducks every other app's output
+        // (15 dB by default). It is disabled again in `stop()` — leaving it
+        // alive between recordings kept the whole Mac quiet — and capped at
+        // the mildest ducking level macOS offers (-4 dB) while recording.
         if RecorderSettings.shared.noiseSuppression {
+            let t0 = Date()
+            var toggleError: Error?
             do {
                 try ExceptionTrap.run {
-                    try? input.setVoiceProcessingEnabled(true)
+                    do { try input.setVoiceProcessingEnabled(true) } catch { toggleError = error }
                 }
-                AppLog.info("recorder", "voice processing enabled")
             } catch {
-                AppLog.warn("recorder", "voice processing rejected: \(error.localizedDescription)")
+                toggleError = error
+            }
+            if let toggleError {
+                AppLog.warn("recorder", "voice processing rejected: \(toggleError.localizedDescription)")
+            } else {
+                input.voiceProcessingOtherAudioDuckingConfiguration = .init(
+                    enableAdvancedDucking: false, duckingLevel: .min
+                )
+                AppLog.info("recorder", String(format: "voice processing enabled in %.2fs", Date().timeIntervalSince(t0)))
             }
         } else {
             try? ExceptionTrap.run {
@@ -379,9 +393,32 @@ final class WavRecorder: @unchecked Sendable {
         }
         let duration = Double(written) / Self.sampleRate
         chunkContinuation?.finish()
+        releaseVoiceProcessing()
         AppLog.info("recorder", "stopped: \(written) samples (\(String(format: "%.2f", duration))s) → \(url?.path ?? "(no url)")")
         if let url { state = .saved(file: url, durationSeconds: duration) }
         return url
+    }
+
+    /// Destroy the voice-processing unit once capture is over so coreaudiod
+    /// lifts its duck on other apps. `engine.stop()` alone does not — only
+    /// the toggle does (measured: `unducking device` follows the disable).
+    /// The engine is stopped (uninitialized) by then, so the toggle is
+    /// accepted; it is re-enabled by the next `start()`.
+    private func releaseVoiceProcessing() {
+        var wasOn = false
+        var toggleError: Error?
+        try? ExceptionTrap.run {
+            let input = self.engine.inputNode
+            guard input.isVoiceProcessingEnabled else { return }
+            wasOn = true
+            do { try input.setVoiceProcessingEnabled(false) } catch { toggleError = error }
+        }
+        guard wasOn else { return }
+        if let toggleError {
+            AppLog.warn("recorder", "voice processing release failed: \(toggleError.localizedDescription)")
+        } else {
+            AppLog.info("recorder", "voice processing released")
+        }
     }
 
     // MARK: - Tap-thread ingestion

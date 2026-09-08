@@ -202,6 +202,10 @@ struct DictationView: View {
                        hint: "spoken language") { cycleLanguage(s) }
                 option("ENGINE", s.engine.displayName.uppercased(), active: false,
                        hint: "speech engine for\nsingle passages") { cycleEngine(s) }
+                option("MIC", s.voiceProcessing ? "FILTERED" : "RAW", active: s.voiceProcessing,
+                       hint: s.voiceProcessing ? "Apple echo/noise filter ·\n~1 s slower start" : "instant start · filter\nturns other apps down") {
+                    s.voiceProcessing.toggle()
+                }
                 Spacer()
             }
         }

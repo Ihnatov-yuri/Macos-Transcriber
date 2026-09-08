@@ -20,10 +20,13 @@ settings:
 
 # Gemma4Swift transitively brings mlx-swift, mlx-swift-lm, swift-transformers.
 # Sherpa-onnx for diarization (pending diarization-research recommendation).
+# FluidAudio 0.15.5+ vendors NemoTextProcessing.xcframework whose top-level
+# module.modulemap collides with LiteRT-LM's in Xcode's shared include/ dir.
+# Run scripts/patch-artifacts.sh after every package resolve (setup.sh does).
 packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    exactVersion: 0.14.6
+    exactVersion: 0.15.6
   WhisperKit:
     url: https://github.com/argmaxinc/WhisperKit
     from: 0.9.0
@@ -97,6 +100,9 @@ targets:
       - path: Transcriberr/ASR
       - path: Transcriberr/Data
       - path: Transcriberr/Utility
+      # AudioDecoder applies the mic-boost gain via UtteranceCapture.applyGain;
+      # the rest of Dictation/ is GUI-only.
+      - path: Transcriberr/Dictation/UtteranceCapture.swift
     dependencies:
       - package: FluidAudio
         product: FluidAudio

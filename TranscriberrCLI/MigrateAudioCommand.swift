@@ -11,6 +11,7 @@ import AVFoundation
 
 @MainActor
 func cmdMigrateAudio(dryRun: Bool) async -> Int32 {
+    if refuseIfAppRunning("migrate") { return 1 }
     let storeURL = KBService.defaultStoreURL()
     guard FileManager.default.fileExists(atPath: storeURL.path) else {
         print("[migrate] ❌ no store at \(storeURL.path)")

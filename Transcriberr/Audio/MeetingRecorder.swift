@@ -101,6 +101,11 @@ final class MeetingRecorder: @unchecked Sendable {
     nonisolated(unsafe) private var sysFile: AVAudioFile?
     nonisolated(unsafe) private var paused = false
     nonisolated(unsafe) private var framesSeen: Int64 = 0
+    /// Channel count the system tap was created with — chosen per session
+    /// so it never equals the microphone's (see `tapChannelCount`). The IO
+    /// callback tells the two sources apart by it.
+    nonisolated(unsafe) private var tapChannels = 2
+    nonisolated(unsafe) private var warnedPositionalFallback = false
     private var nativeRate: Double = 48_000
     private var fileURL: URL?
     /// Exposed read-only so dictation can refuse to open a second input
@@ -110,11 +115,30 @@ final class MeetingRecorder: @unchecked Sendable {
 
     // MARK: - Public surface (mirrors WavRecorder)
 
+    /// Nonisolated on purpose — tap and aggregate creation block — so the
+    /// observable flags (`isStarting`, `isRunning`, `elapsedMs`, the chunk
+    /// stream) are claimed and released on the main actor rather than
+    /// written from the pool underneath SwiftUI and `publishStats`.
     func start() async throws {
-        guard !isStarting, !isRunning else { return }
-        isStarting = true
-        defer { isStarting = false }
+        let claimed = await MainActor.run { () -> Bool in
+            guard !isStarting, !isRunning else { return false }
+            isStarting = true
+            return true
+        }
+        guard claimed else { return }
+        do {
+            try await startCapture()
+            await MainActor.run {
+                isRunning = true
+                isStarting = false
+            }
+        } catch {
+            await MainActor.run { isStarting = false }
+            throw error
+        }
+    }
 
+    private func startCapture() async throws {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: break
         case .notDetermined:
@@ -123,7 +147,7 @@ final class MeetingRecorder: @unchecked Sendable {
         }
 
         do {
-            try setupCapture()
+            try await setupCapture()
         } catch {
             // Full cleanup: a partial setup may have opened the output file
             // already — leaving it set would let a later stray stop() return
@@ -149,14 +173,17 @@ final class MeetingRecorder: @unchecked Sendable {
             fileURL = nil
             throw error
         }
-        isRunning = true
     }
 
     func stop() async throws -> URL? {
         // A second stop must NOT hand back the old URL — the caller would
         // create a duplicate Recording row for the same WAV.
-        guard isRunning else { return nil }
-        isRunning = false
+        let wasRunning = await MainActor.run { () -> Bool in
+            guard isRunning else { return false }
+            isRunning = false
+            return true
+        }
+        guard wasRunning else { return nil }
         teardownCoreAudio()
         // Drain any in-flight IO callback, then flush the converter tail.
         var finalMs: Int64 = 0
@@ -183,9 +210,12 @@ final class MeetingRecorder: @unchecked Sendable {
             self.audioFile = nil
             self.converter = nil
         }
-        if finalMs > 0 { elapsedMs = finalMs }
-        chunkContinuation?.finish()
-        AppLog.info("meeting", "stopped after \(elapsedMs / 1000)s → \(fileURL?.lastPathComponent ?? "?")")
+        let elapsed = await MainActor.run { () -> Int64 in
+            if finalMs > 0 { elapsedMs = finalMs }
+            chunkContinuation?.finish()
+            return elapsedMs
+        }
+        AppLog.info("meeting", "stopped after \(elapsed / 1000)s → \(fileURL?.lastPathComponent ?? "?")")
         return fileURL
     }
 
@@ -194,17 +224,30 @@ final class MeetingRecorder: @unchecked Sendable {
 
     // MARK: - Capture graph
 
-    private func setupCapture() throws {
-        // 1. System-audio process tap (all processes, stereo mixdown).
-        let desc = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+    private func setupCapture() async throws {
+        // 1. System-audio process tap (all processes, mixed down). Its
+        //    channel count is picked so it can never equal the microphone's:
+        //    `handleIO` tells the two apart by channel count, and with the
+        //    old always-stereo tap a stereo microphone left it guessing by
+        //    position — the guess that produced v3.2.2's reversed split,
+        //    where the mic gate muted everyone else in the meeting instead of
+        //    the room. Next to a stereo mic the tap is mono; the downmix
+        //    treats both the same.
+        let mic = selectedInputDevice()
+        let micStreams = mic.map { AudioInputDevices.inputStreamChannelCounts($0.id) } ?? []
+        tapChannels = Self.tapChannelCount(forMicStreams: micStreams)
+        let desc = tapChannels == 1
+            ? CATapDescription(monoGlobalTapButExcludeProcesses: [])
+            : CATapDescription(stereoGlobalTapButExcludeProcesses: [])
         desc.name = "Transcriberr System Tap"
         desc.isPrivate = true
         desc.muteBehavior = .unmuted
         try check(AudioHardwareCreateProcessTap(desc, &tapID), "System-audio tap")
         tapDesc = desc
+        warnedPositionalFallback = false
 
         // 2. Aggregate device: the chosen mic + the tap, one clock.
-        let micUID = try selectedInputUID()
+        let micUID = try mic?.uid ?? defaultInputUID()
         let aggDict: [String: Any] = [
             kAudioAggregateDeviceNameKey as String: "Transcriberr Meeting",
             kAudioAggregateDeviceUIDKey as String: "nl.ihnatov.Transcriberr.meeting.\(UUID().uuidString)",
@@ -222,6 +265,9 @@ final class MeetingRecorder: @unchecked Sendable {
         try check(AudioHardwareCreateAggregateDevice(aggDict as CFDictionary, &aggID), "Aggregate device")
 
         nativeRate = deviceSampleRate(aggID) ?? 48_000
+        let layout = AudioInputDevices.inputStreamChannelCounts(aggID)
+        let tapIndex = Self.tapBufferIndex(channelCounts: layout, tapChannels: tapChannels)
+        AppLog.info("meeting", "aggregate input streams \(layout) (mic \(micStreams), tap \(tapChannels)ch) → tap buffer \(tapIndex.map(String.init) ?? "by position")")
 
         // 3. Converter + output file: 16 kHz mono Float32, identical to WavRecorder.
         guard
@@ -262,7 +308,6 @@ final class MeetingRecorder: @unchecked Sendable {
             forWriting: dir.appendingPathComponent(base + ".sys.wav"),
             settings: target.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
 
-        makeChunkStream()
         ioQueue.sync {
             self.converter = conv
             self.audioFile = file
@@ -278,7 +323,10 @@ final class MeetingRecorder: @unchecked Sendable {
             self.meOpenAt = nil
             self.micGain = 1
         }
-        elapsedMs = 0
+        await MainActor.run {
+            makeChunkStream()
+            elapsedMs = 0
+        }
 
         // 4. IO callback on our serial queue.
         var pid: AudioDeviceIOProcID?
@@ -321,25 +369,30 @@ final class MeetingRecorder: @unchecked Sendable {
         guard frames > 0 else { return }
 
         // Downmix every source buffer (mic channels + tap channels) to mono.
-        // The tap is a guaranteed stereo mixdown (built with
-        // `stereoGlobalTapButExcludeProcesses`), so when the two buffers'
-        // channel counts differ, whichever one has 2 channels is
-        // unambiguously the tap. Trust that over assuming the aggregate
-        // always orders sub-devices before taps: get the split backwards and
-        // the mic-only gate below mutes the far side — everyone else in the
-        // meeting — instead of the user, which is what silences the waveform
-        // (and the saved mix) whenever someone other than the user is
-        // talking. Position is still the fallback when channel counts can't
-        // disambiguate (e.g. a stereo mic, or more than 2 buffers).
+        // The tap was built with a channel count the mic doesn't use (see
+        // `setupCapture`), so the one buffer carrying `tapChannels` is the
+        // tap. Trust that over assuming the aggregate always orders
+        // sub-devices before taps: get the split backwards and the mic-only
+        // gate below mutes the far side — everyone else in the meeting —
+        // instead of the user, which is what silences the waveform (and the
+        // saved mix) whenever someone other than the user is talking.
+        // Position (tap last, after the sub-devices) is the fallback only
+        // when the count is ambiguous — a mic exposing both a mono and a
+        // stereo stream — and it is logged once so a bad split is traceable.
         var micMono = [Float](repeating: 0, count: frames)
         var sysMono = [Float](repeating: 0, count: frames)
-        let tapByChannelCount = list.count == 2 && list[0].mNumberChannels != list[1].mNumberChannels
+        let tapIndex = Self.tapBufferIndex(channelCounts: list.map { Int($0.mNumberChannels) },
+                                           tapChannels: tapChannels)
+        if tapIndex == nil, !warnedPositionalFallback {
+            warnedPositionalFallback = true
+            AppLog.warn("meeting", "cannot tell tap from mic by channel count \(list.map(\.mNumberChannels)) — assuming the tap is the last buffer")
+        }
         for (bi, b) in list.enumerated() {
             guard let raw = b.mData else { continue }
             let ch = max(1, Int(b.mNumberChannels))
             let n = min(frames, Int(b.mDataByteSize) / (4 * ch))
             let p = raw.assumingMemoryBound(to: Float.self)
-            let isTap = tapByChannelCount ? (ch == 2) : (bi != 0)
+            let isTap = tapIndex.map { bi == $0 } ?? (bi == list.count - 1)
             for f in 0..<n {
                 var s: Float = 0
                 for c in 0..<ch { s += p[f * ch + c] }
@@ -533,6 +586,24 @@ final class MeetingRecorder: @unchecked Sendable {
         }
     }
 
+    /// Channel count for the system tap: whichever of mono/stereo the
+    /// microphone's streams don't use, so `tapBufferIndex` can always tell
+    /// the two apart. Stereo by default (a mono mic is the common case),
+    /// mono next to a stereo mic. A mic exposing both a mono and a stereo
+    /// stream can't be separated by count at all — position then decides.
+    static func tapChannelCount(forMicStreams micStreams: [Int]) -> Int {
+        if micStreams.contains(2) && !micStreams.contains(1) { return 1 }
+        return 2
+    }
+
+    /// Index of the tap's buffer in the aggregate's buffer list when exactly
+    /// one buffer carries the tap's channel count; nil when that is
+    /// ambiguous (the caller falls back to position).
+    static func tapBufferIndex(channelCounts: [Int], tapChannels: Int) -> Int? {
+        let matches = channelCounts.indices.filter { channelCounts[$0] == tapChannels }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
     /// Pure gate math, extracted for unit tests: full-open on user speech
     /// (relative dominance OR clear absolute energy), full-close while only
     /// the far side plays, asymmetric smoothing (fast open, gentle close).
@@ -551,13 +622,12 @@ final class MeetingRecorder: @unchecked Sendable {
         }
     }
 
-    /// UID of the microphone to record: the one picked in Settings → Audio
-    /// Input when it is still connected, otherwise the system default.
-    private func selectedInputUID() throws -> String {
-        if let chosen = AudioInputDevices.resolve(uid: RecorderSettings.shared.inputDeviceUID) {
-            return chosen.uid
-        }
-        return try defaultInputUID()
+    /// The microphone to record: the one picked in Settings → Audio Input
+    /// when it is still connected, otherwise the system default. Nil only
+    /// when CoreAudio reports no default input; `defaultInputUID` then
+    /// produces the error.
+    private func selectedInputDevice() -> AudioInputDevices.Device? {
+        AudioInputDevices.effective(uid: RecorderSettings.shared.inputDeviceUID)
     }
 
     private func defaultInputUID() throws -> String {

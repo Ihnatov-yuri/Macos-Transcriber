@@ -13,6 +13,7 @@ import AVFoundation
 
 @MainActor
 func cmdMigrateEcho(dryRun: Bool) async -> Int32 {
+    if refuseIfAppRunning("migrate-echo") { return 1 }
     let storeURL = KBService.defaultStoreURL()
     guard FileManager.default.fileExists(atPath: storeURL.path) else {
         print("[migrate-echo] ❌ no store at \(storeURL.path)")

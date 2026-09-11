@@ -1,5 +1,20 @@
+import AppKit
 import Foundation
 import SwiftData
+
+/// The writable commands (`restore-backups`, `migrate-audio`,
+/// `migrate-echo`) must not share the SwiftData store with a running app.
+/// There is no coordination between the two writers: the app keeps its own
+/// in-memory graph and would overwrite, or simply never see, what the CLI
+/// changed — and `migrate-audio` deletes WAVs the app may be playing or
+/// transcribing at that moment. The read-only `kb`/`mcp` path is unaffected.
+func refuseIfAppRunning(_ tag: String) -> Bool {
+    let running = NSRunningApplication.runningApplications(withBundleIdentifier: "nl.ihnatov.Transcriberr")
+    guard !running.isEmpty else { return false }
+    let pids = running.map { String($0.processIdentifier) }.joined(separator: ", ")
+    print("[\(tag)] ❌ Transcriberr.app is running (pid \(pids)) — quit it first; this command writes to the store the app has open")
+    return true
+}
 
 // `transcriberrcli restore-backups [--dry-run]` — re-inject every backup
 // under BackupService.root into the live SwiftData store. Safe to re-run:
@@ -12,6 +27,7 @@ import SwiftData
 
 @MainActor
 func cmdRestoreBackups(dryRun: Bool) -> Int32 {
+    if refuseIfAppRunning("restore") { return 1 }
     let backups = BackupService.allRecordingBackups()
     guard !backups.isEmpty else {
         print("[restore] no backups found at \(BackupService.root.path)")

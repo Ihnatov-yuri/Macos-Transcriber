@@ -134,6 +134,17 @@ enum BackupService {
         ioQueue.sync {}
     }
 
+    /// Drop every backup file of a recording that never legitimately
+    /// existed (a merge rolled back after its row was saved). Queued behind
+    /// any pending write for the same id so the write can't land after the
+    /// removal and resurrect the row through `restore-backups`.
+    static func removeBackups(for recordingId: UUID) {
+        let dir = dir(for: recordingId)
+        ioQueue.sync {
+            try? FileManager.default.removeItem(at: dir)
+        }
+    }
+
     private static func write<T: Encodable>(_ value: T, to url: URL) {
         // Encoding a full transcript and writing it atomically is tens of
         // milliseconds of CPU plus a disk round-trip, and almost every

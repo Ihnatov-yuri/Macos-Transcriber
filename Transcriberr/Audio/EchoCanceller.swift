@@ -127,8 +127,18 @@ enum EchoCanceller {
         // ---- 2. NLMS ----
         var w = [Float](repeating: 0, count: taps)
         var out = mic
-        var refPad = [Float](repeating: 0, count: taps)
-        refPad.append(contentsOf: ref)
+        // The filter reads the `taps` reference samples ending at j, i.e.
+        // ref[j-taps ..< j]. For the first `taps` positions that window
+        // starts before the reference does, so a small zero-padded head
+        // (`taps` zeros then the first `taps` samples) serves those; every
+        // later position reads the reference in place. This used to be a
+        // full zero-padded COPY of the reference — one more whole-meeting
+        // buffer at the memory peak of a split-track run.
+        var head = [Float](repeating: 0, count: taps)
+        head.append(contentsOf: ref.prefix(taps))
+        if head.count < 2 * taps {
+            head.append(contentsOf: repeatElement(0, count: 2 * taps - head.count))
+        }
         let mu: Float = 0.5
         // The doubletalk test only applies once the filter has seen
         // `warmupSamples` of far-end audio. It compares the residual against
@@ -150,17 +160,19 @@ enum EchoCanceller {
         let frames = n / nlpFrame + 1
         var framePe = [Float](repeating: 0, count: frames)
         var framePy = [Float](repeating: 0, count: frames)
-        refPad.withUnsafeBufferPointer { rp in
+        head.withUnsafeBufferPointer { hp in
+        ref.withUnsafeBufferPointer { rp in
             w.withUnsafeMutableBufferPointer { wp in
                 for i in 0..<n {
                     let j = i - delay
                     guard j >= 0 else { continue }
+                    let win = j < taps ? hp.baseAddress! + j : rp.baseAddress! + (j - taps)
                     var yhat: Float = 0
-                    vDSP_dotpr(rp.baseAddress! + j, 1, wp.baseAddress!, 1, &yhat, vDSP_Length(taps))
+                    vDSP_dotpr(win, 1, wp.baseAddress!, 1, &yhat, vDSP_Length(taps))
                     let e = mic[i] - yhat
                     out[i] = e
                     var en: Float = 0
-                    vDSP_dotpr(rp.baseAddress! + j, 1, rp.baseAddress! + j, 1, &en, vDSP_Length(taps))
+                    vDSP_dotpr(win, 1, win, 1, &en, vDSP_Length(taps))
                     let farActive = en > 1e-4
                     if farActive { farActiveSamples += 1 }
                     // Residual ≫ predicted echo means the user is talking over
@@ -169,13 +181,14 @@ enum EchoCanceller {
                         && e * e > 4 * yhat * yhat
                     if farActive && !doubletalk {
                         var g = mu * e / (en + 1e-6)
-                        vDSP_vsma(rp.baseAddress! + j, 1, &g, wp.baseAddress!, 1, wp.baseAddress!, 1, vDSP_Length(taps))
+                        vDSP_vsma(win, 1, &g, wp.baseAddress!, 1, wp.baseAddress!, 1, vDSP_Length(taps))
                     }
                     let f = i / nlpFrame
                     framePe[f] += e * e
                     framePy[f] += yhat * yhat
                 }
             }
+        }
         }
         // ---- 3. Residual echo suppressor ----
         // The linear filter alone is not enough for ASR. Measured on a real

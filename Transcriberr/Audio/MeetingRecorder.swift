@@ -183,8 +183,8 @@ final class MeetingRecorder: @unchecked Sendable {
         try check(AudioHardwareCreateProcessTap(desc, &tapID), "System-audio tap")
         tapDesc = desc
 
-        // 2. Aggregate device: default mic + the tap, one clock.
-        let micUID = try defaultInputUID()
+        // 2. Aggregate device: the chosen mic + the tap, one clock.
+        let micUID = try selectedInputUID()
         let aggDict: [String: Any] = [
             kAudioAggregateDeviceNameKey as String: "Transcriberr Meeting",
             kAudioAggregateDeviceUIDKey as String: "nl.ihnatov.Transcriberr.meeting.\(UUID().uuidString)",
@@ -527,6 +527,15 @@ final class MeetingRecorder: @unchecked Sendable {
             AppLog.error("meeting", "\(what) failed: OSStatus \(status)")
             throw MeetingError.coreAudio(what, status)
         }
+    }
+
+    /// UID of the microphone to record: the one picked in Settings → Audio
+    /// Input when it is still connected, otherwise the system default.
+    private func selectedInputUID() throws -> String {
+        if let chosen = AudioInputDevices.resolve(uid: RecorderSettings.shared.inputDeviceUID) {
+            return chosen.uid
+        }
+        return try defaultInputUID()
     }
 
     private func defaultInputUID() throws -> String {

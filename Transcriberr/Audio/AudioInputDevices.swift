@@ -26,6 +26,13 @@ enum AudioInputDevices {
         /// marks them, because choosing one costs that device's playback
         /// quality for as long as capture is open.
         let isBluetooth: Bool
+        /// A loopback / virtual driver (BlackHole, a conferencing app's audio
+        /// device) rather than a microphone. These expose input channels, so
+        /// they turn up in any naive scan, but nobody means them when they
+        /// pick "which mic". Kept in the model — silently hiding a device
+        /// somebody deliberately installed, and then failing to resolve their
+        /// stored choice, is worse — but listed apart from real hardware.
+        let isVirtual: Bool
         /// Whether the device also has output channels. Decides which of the
         /// two routes in `apply` is available — and so whether selecting it
         /// can avoid opening the system default input at all.
@@ -49,6 +56,15 @@ enum AudioInputDevices {
                                          &addr, 0, nil, &size, &ids) == noErr else { return [] }
         return ids.compactMap { device(for: $0) }.filter { $0.inputChannels > 0 }.map(\.device)
     }
+
+    /// Real microphones: hardware that captures sound. What a "which mic"
+    /// picker should offer.
+    static func microphones() -> [Device] { available().filter { !$0.isVirtual } }
+
+    /// Loopback and virtual drivers with input channels. Selectable, but
+    /// listed separately — picking one records what the Mac is playing, not
+    /// a room.
+    static func loopbacks() -> [Device] { available().filter(\.isVirtual) }
 
     /// The device a stored UID refers to, or nil when it has been unplugged.
     static func resolve(uid: String?) -> Device? {
@@ -162,12 +178,17 @@ enum AudioInputDevices {
     private static func device(for id: AudioDeviceID) -> (device: Device, inputChannels: Int)? {
         guard let uid = string(id, kAudioDevicePropertyDeviceUID) else { return nil }
         let name = string(id, kAudioObjectPropertyName) ?? uid
-        return (Device(id: id, uid: uid, name: name, isBluetooth: isBluetooth(id),
+        let transport = transportType(id)
+        return (Device(id: id, uid: uid, name: name,
+                       isBluetooth: transport == kAudioDeviceTransportTypeBluetooth
+                                 || transport == kAudioDeviceTransportTypeBluetoothLE,
+                       isVirtual: transport == kAudioDeviceTransportTypeVirtual
+                               || transport == kAudioDeviceTransportTypeAggregate,
                        hasOutput: channels(id, scope: kAudioDevicePropertyScopeOutput) > 0),
                 channels(id, scope: kAudioDevicePropertyScopeInput))
     }
 
-    static func isBluetooth(_ id: AudioDeviceID) -> Bool {
+    private static func transportType(_ id: AudioDeviceID) -> UInt32 {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -175,9 +196,8 @@ enum AudioInputDevices {
         var transport: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &transport) == noErr
-        else { return false }
-        return transport == kAudioDeviceTransportTypeBluetooth
-            || transport == kAudioDeviceTransportTypeBluetoothLE
+        else { return 0 }
+        return transport
     }
 
     private static func channels(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> Int {

@@ -43,6 +43,7 @@ struct DictationMenu: View {
             ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
         }
         Toggle("Keep history in Library", isOn: Binding(get: { s.keepHistory }, set: { s.keepHistory = $0 }))
+        MicrophonePicker()
         Divider()
         if !c.accessibilityTrusted {
             Button("Enable Global Hotkey (Accessibility)…") { c.requestAccessibility() }
@@ -67,6 +68,36 @@ struct DictationMenu: View {
             return c.hotkeyArmed
                 ? "\(c.settings.mode == .hold ? "Hold" : "Tap") \(c.settings.hotkey.label) to dictate"
                 : "Hotkey needs Accessibility access"
+        }
+    }
+}
+
+/// Microphone choice in the menu bar, so switching headsets mid-day doesn't
+/// mean opening Settings. The device list is read when the menu is built —
+/// menus are rebuilt every time they open, so a headset that just connected
+/// is there without any watching.
+struct MicrophonePicker: View {
+    @State private var settings = RecorderSettings.shared
+
+    var body: some View {
+        let mics = AudioInputDevices.microphones()
+        let chosen = settings.inputDeviceUID
+        // A stored choice that isn't a microphone (someone picked a loopback
+        // device in Settings) still has to appear, or the menu would silently
+        // show the wrong thing selected.
+        let extra = AudioInputDevices.resolve(uid: chosen).flatMap { $0.isVirtual ? $0 : nil }
+        Picker("Microphone", selection: Binding(
+            get: { chosen ?? "" },
+            set: { settings.inputDeviceUID = $0.isEmpty ? nil : $0 }
+        )) {
+            Text(AudioInputDevices.systemDefault().map { "System default — \($0.name)" } ?? "System default")
+                .tag("")
+            ForEach(mics) { mic in
+                Text(mic.isBluetooth ? "\(mic.name) (Bluetooth)" : mic.name).tag(mic.uid)
+            }
+            if let extra {
+                Text("\(extra.name) (loopback)").tag(extra.uid)
+            }
         }
     }
 }

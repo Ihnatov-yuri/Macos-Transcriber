@@ -286,6 +286,7 @@ private struct ModelRow: View {
 struct RecorderSettingsTab: View {
     @State private var settings = RecorderSettings.shared
     @State private var devices: [AudioInputDevices.Device] = []
+    @State private var loopbacks: [AudioInputDevices.Device] = []
     @State private var systemDefault: AudioInputDevices.Device?
     @State private var watcher = AudioInputDevices.Watcher()
 
@@ -308,6 +309,19 @@ struct RecorderSettingsTab: View {
                     ForEach(devices) { device in
                         Text(device.isBluetooth ? "\(device.name) (Bluetooth)" : device.name)
                             .tag(device.uid)
+                    }
+                    // Loopback drivers expose input channels, so they show up
+                    // in any device scan, but they capture what the Mac plays
+                    // rather than a room. Offered apart from real mics —
+                    // meeting mode already records system audio properly, via
+                    // a process tap.
+                    if !loopbacks.isEmpty {
+                        Divider()
+                        Section("Loopback (records system audio, not a room)") {
+                            ForEach(loopbacks) { device in
+                                Text(device.name).tag(device.uid)
+                            }
+                        }
                     }
                 }
                 .pickerStyle(.menu)
@@ -374,7 +388,8 @@ struct RecorderSettingsTab: View {
     }
 
     private func refreshDevices() {
-        devices = AudioInputDevices.available()
+        devices = AudioInputDevices.microphones()
+        loopbacks = AudioInputDevices.loopbacks()
         systemDefault = AudioInputDevices.systemDefault()
     }
 }

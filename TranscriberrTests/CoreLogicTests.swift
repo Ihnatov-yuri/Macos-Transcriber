@@ -209,6 +209,95 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertGreaterThan(userAfter, userBefore * 0.5, "user speech must survive")
     }
 
+    /// Regression: a call whose first minute is silence — nobody has joined
+    /// yet — used to poison the bulk-delay search, which only ever looked at
+    /// the first 60 s. The junk lag parked the 64 ms tap window far from the
+    /// real echo, ERLE went negative, the do-no-harm guard returned the raw
+    /// mic, and the far side reached the ASR labelled as the user.
+    func testEchoCancellerSurvivesSilentLeadIn() {
+        let sr = 16_000
+        var rng: UInt64 = 99
+        func rand() -> Float {
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3
+        }
+        let lead = sr * 70          // 70 s of nothing, longer than the search span
+        let n = lead + sr * 30
+        var sys = [Float](repeating: 0, count: n)
+        var mic = [Float](repeating: 0, count: n)
+        var sm: Float = 0
+        for i in lead..<n { sm = 0.7 * sm + 0.3 * rand(); sys[i] = sm }
+        let d = 400                 // 25 ms — the measured speaker→mic path
+        for i in 0..<(n - d) { mic[i + d] = 0.35 * sys[i] }
+        let cleaned = EchoCanceller.cancel(mic: mic, ref: sys)
+        let before = mic.reduce(0.0) { $0 + Double($1 * $1) }
+        let after = cleaned.reduce(0.0) { $0 + Double($1 * $1) }
+        XCTAssertLessThan(after, before * 0.25, "echo after a silent lead-in should still lose ≥6 dB")
+    }
+
+    /// The correlation peak on speech is broad and lands late; the taps only
+    /// reach forward from the estimate, so a short true delay must still fall
+    /// inside the window.
+    func testEchoCancellerHandlesShortDelay() {
+        let sr = 16_000
+        var rng: UInt64 = 11
+        func rand() -> Float {
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3
+        }
+        let n = sr * 10
+        var sys = [Float](repeating: 0, count: n)
+        var mic = [Float](repeating: 0, count: n)
+        var sm: Float = 0
+        for i in 0..<n { sm = 0.7 * sm + 0.3 * rand(); sys[i] = sm }
+        let d = 64                  // 4 ms — headphones bleed / near field
+        for i in 0..<(n - d) { mic[i + d] = 0.35 * sys[i] }
+        let cleaned = EchoCanceller.cancel(mic: mic, ref: sys)
+        let before = mic.reduce(0.0) { $0 + Double($1 * $1) }
+        let after = cleaned.reduce(0.0) { $0 + Double($1 * $1) }
+        XCTAssertLessThan(after, before * 0.25, "a 4 ms echo path should lose ≥6 dB")
+    }
+
+    /// The suppressor after the filter must silence echo-only stretches
+    /// without eating the user when both talk at once — attenuation alone was
+    /// not enough for ASR (Parakeet still transcribed the far side's whole
+    /// half of a real call from a track 21 dB down, just garbled).
+    ///
+    /// NOTE the local zero-mean noise rather than the `rand()` helper the
+    /// tests above use: that one returns [0, 0.3), so its "user" and "far
+    /// side" share a large DC component and are strongly correlated — the
+    /// filter can then genuinely predict the near end from the reference and
+    /// cancels it, which no real pair of microphone and system-audio tracks
+    /// ever does.
+    func testEchoCancellerSilencesEchoAndSurvivesDoubletalk() {
+        let sr = 16_000
+        var rng: UInt64 = 5
+        func noise() -> Float {          // zero-mean, ±0.15
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
+        }
+        let n = sr * 20
+        var sys = [Float](repeating: 0, count: n)
+        var mic = [Float](repeating: 0, count: n)
+        var sSm: Float = 0
+        for i in 0..<n { sSm = 0.7 * sSm + 0.3 * noise(); sys[i] = sSm }   // far side throughout
+        let d = 400
+        for i in 0..<(n - d) { mic[i + d] = 0.5 * sys[i] }                 // echo throughout
+        var uSm: Float = 0
+        for i in (sr * 15)..<n { uSm = 0.7 * uSm + 0.3 * noise(); mic[i] += uSm }  // user talks over it
+        let cleaned = EchoCanceller.cancel(mic: mic, ref: sys)
+        func energy(_ x: [Float], _ a: Int, _ b: Int) -> Double {
+            var e = 0.0
+            for i in (a * sr)..<(b * sr) { e += Double(x[i] * x[i]) }
+            return e
+        }
+        // Echo-only stretch, sampled after the filter has converged.
+        let echoBefore = energy(mic, 10, 15), echoAfter = energy(cleaned, 10, 15)
+        XCTAssertLessThan(echoAfter, echoBefore * 0.01, "echo-only should be gated to near silence")
+        let bothBefore = energy(mic, 15, 20), bothAfter = energy(cleaned, 15, 20)
+        XCTAssertGreaterThan(bothAfter, bothBefore * 0.1, "the user talking over the far side must survive")
+    }
+
     func testEchoCancellerDoesNoHarmWithoutEcho() {
         let sr = 16_000
         let n = sr * 5

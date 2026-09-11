@@ -29,6 +29,10 @@ final class RepositoryTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        // Backup writes are queued off the calling thread now — let them land
+        // before the root is removed, or one lands after and leaves the
+        // directory behind.
+        BackupService.flush()
         for f in tempFiles { try? FileManager.default.removeItem(at: f) }
         tempFiles = []
         unsetenv("TRANSCRIBERR_BACKUP_ROOT")
@@ -103,7 +107,38 @@ final class RepositoryTests: XCTestCase {
         XCTAssertNil(repo.storedSpeakerNames(rec)["SPEAKER_02"])
     }
 
+    /// The merge menu is offered in BOTH directions, so the named speaker is
+    /// just as likely to be the source as the target.
+    func testMergeSpeakersKeepsTheNameWhenTheTargetHasNone() throws {
+        let rec = try makeRecording(title: "t", seconds: 1, segs: [
+            (0, 1, "a", "SPEAKER_01", "Sarah"),
+            (1, 2, "b", "SPEAKER_02", nil),
+        ])
+        try repo.setSpeakerName("Sarah", for: "SPEAKER_01", in: rec)
+        // "Sarah → merge into the unnamed one": the name must survive.
+        try repo.mergeSpeakers("SPEAKER_01", into: "SPEAKER_02", in: rec)
+        XCTAssertTrue(rec.segments.allSatisfy { $0.speaker == "SPEAKER_02" })
+        XCTAssertTrue(rec.segments.allSatisfy { $0.speakerName == "Sarah" },
+                      "merging into an unnamed speaker must not erase the name")
+        XCTAssertEqual(repo.storedSpeakerNames(rec)["SPEAKER_02"], "Sarah")
+        XCTAssertNil(repo.storedSpeakerNames(rec)["SPEAKER_01"])
+    }
+
     // MARK: - Versions (snapshot / restore buttons)
+
+    /// Dedup is per RECORDING. Two recordings can legitimately hold the same
+    /// transcript (the same audio imported twice, the same short phrase
+    /// dictated twice) and each still needs its own version — that row is
+    /// what `healEmptyTranscripts` restores from after an interrupted run.
+    func testSnapshotDoesNotDedupAcrossRecordings() async throws {
+        let a = try makeRecording(title: "a", seconds: 1, segs: [(0, 1, "same words", nil, nil)])
+        let b = try makeRecording(title: "b", seconds: 1, segs: [(0, 1, "same words", nil, nil)])
+        try repo.snapshotVersion(of: a, engineId: "e1", engineLabel: "E1")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try repo.snapshotVersion(of: b, engineId: "e1", engineLabel: "E1")
+        XCTAssertEqual(a.versions.count, 1)
+        XCTAssertEqual(b.versions.count, 1, "another recording's identical transcript is not a duplicate")
+    }
 
     func testSnapshotDedupsAndRestores() async throws {
         let rec = try makeRecording(title: "t", seconds: 1,

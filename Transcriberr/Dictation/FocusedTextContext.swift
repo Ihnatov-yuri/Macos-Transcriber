@@ -15,11 +15,15 @@ enum FocusedTextContext {
     static func textBeforeCaret(maxChars: Int = 64) -> String? {
         guard HotkeyMonitor.isTrusted() else { return nil }
         let system = AXUIElementCreateSystemWide()
+        // Same cap as DictationContext: this also runs on the main actor, at
+        // insertion time, where a slow target app would stall the paste.
+        AXUIElementSetMessagingTimeout(system, DictationContext.axTimeout)
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
               let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
         else { return nil }
         let element = focusedRef as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, DictationContext.axTimeout)
 
         var rangeRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,

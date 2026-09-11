@@ -6,7 +6,17 @@ import Observation
 /// One job at a time (Gemma 4 engine is process-wide). Subsequent enqueues
 /// queue and drain in order. Failures stop the current job but don't drop
 /// the queue.
+/// `@MainActor` on the whole class, not just `runOne`: `statuses`, `queue`,
+/// `currentJob` and `currentRecordingId` were mutated from the nonisolated
+/// `enqueue`/`cancel` as well as from the main-actor run loop. Every current
+/// call site happens to be on the main actor already, so this codifies
+/// what's true rather than changing behaviour — but it closes a real hole in
+/// `drain()`, which assigns `currentJob` AFTER creating the task: an
+/// off-main caller whose job finished instantly would have its `defer`'s
+/// `currentJob = nil` overwritten by that assignment, wedging the queue at
+/// "Queued…" for the rest of the session.
 @Observable
+@MainActor
 final class TranscriptionJobManager: @unchecked Sendable {
     struct Status: Sendable, Identifiable {
         let id: UUID                 // recording.id
@@ -32,6 +42,21 @@ final class TranscriptionJobManager: @unchecked Sendable {
     /// Optional auto-titler. We keep it as a weak indirection so AppContainer
     /// can wire it up after construction without a retain cycle.
     var autoTitler: ((Recording, [Segment], TranscriptionRunner.Params) async -> Void)?
+
+    /// Called once the queue has been empty for `idleReleaseSeconds`.
+    /// AppContainer points this at `BackendFactory.releaseLiteRT`.
+    ///
+    /// Why the queue owns this: auto-titling a run loads the LiteRT text
+    /// engine, and LiteRT's mere presence latches `InferenceGate`, which
+    /// serializes inference for EVERY engine process-wide. Nothing ever
+    /// released it — `releaseLocalBackends` has no call site — so one
+    /// auto-titled run silently collapsed the three-chunks-in-flight
+    /// pipeline to one for the rest of the session, on later runs that never
+    /// touched Gemma at all. The delay is long enough that back-to-back runs
+    /// and a preset fired straight after a run keep the engine warm.
+    var onIdle: (() async -> Void)?
+    static let idleReleaseSeconds: UInt64 = 120
+    private var idleTask: Task<Void, Never>?
 
     init(runner: TranscriptionRunner, repository: RecordingRepository) {
         self.runner = runner
@@ -104,6 +129,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
             id: recording.id, stage: "Queued…", fraction: 0, failed: false, failureReason: nil
         )
         queue.append((recording, params, onSourceConsumed))
+        idleTask?.cancel()
+        idleTask = nil
         drain()
     }
 
@@ -122,7 +149,10 @@ final class TranscriptionJobManager: @unchecked Sendable {
     }
 
     private func drain() {
-        guard currentJob == nil, !queue.isEmpty else { return }
+        guard currentJob == nil, !queue.isEmpty else {
+            if currentJob == nil, queue.isEmpty { scheduleIdleRelease() }
+            return
+        }
         let (recording, params, onSourceConsumed) = queue.removeFirst()
         currentRecordingId = recording.id
         currentJob = Task { @MainActor [weak self] in
@@ -132,6 +162,17 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 self?.drain()
             }
             await self?.runOne(recording: recording, params: params, onSourceConsumed: onSourceConsumed)
+        }
+    }
+
+    private func scheduleIdleRelease() {
+        guard onIdle != nil else { return }
+        idleTask?.cancel()
+        idleTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.idleReleaseSeconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard let self, self.queue.isEmpty, self.currentJob == nil else { return }
+            await self.onIdle?()
         }
     }
 
@@ -247,6 +288,21 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         AppLog.warn("job", "replace failed: \(error.localizedDescription)")
                     }
                 case .done(let finalRaws):
+                    // A run that produced NOTHING is not a success. Without
+                    // this, an all-silence file (or a run whose every chunk
+                    // wedged twice and returned "") left the previous
+                    // transcript in place, stamped a version row with the
+                    // engine that produced zero output, and reported "Done."
+                    // — the user sees an unchanged transcript and a bogus
+                    // entry in VERSIONS.
+                    if finalRaws.isEmpty && allSegments.isEmpty {
+                        AppLog.warn("job", "run finished with no transcript at all — reporting failure")
+                        statuses[recording.id] = Status(
+                            id: recording.id, stage: "Failed: no speech transcribed",
+                            fraction: 1.0, failed: true, failureReason: "no speech transcribed"
+                        )
+                        return
+                    }
                     // The finalize step runs AFTER per-chunk segments were
                     // persisted: it assigns speakers, coalesces chunk slices
                     // into per-speaker turns, and infers speaker names. Its

@@ -14,17 +14,60 @@ import Foundation
 ///  4. Parse per-line speaker labels + assemble RawSegments
 ///
 /// Returns `AsyncThrowingStream<ASREvent>` (swap of Kotlin's `channelFlow`).
-/// One-shot claim used by the chunk-timeout race: whichever side (inference
-/// or deadline) takes it first gets to resume the continuation; the loser's
-/// attempt is dropped.
-private final class FirstWinsClaim: @unchecked Sendable {
+/// One-shot race between the three ways a chunk can end — inference
+/// finishing, the deadline expiring, and the whole job being cancelled.
+/// Whoever settles first delivers the result; every later attempt is
+/// dropped. Holding the continuation here (rather than in a bare
+/// first-wins flag) is what lets the cancellation handler, which never sees
+/// the continuation itself, unblock the caller.
+private final class ChunkRace<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var claimed = false
-    func take() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if claimed { return false }
-        claimed = true
-        return true
+    private var cont: CheckedContinuation<T, Error>?
+    private var work: Task<Void, Never>?
+    private var settled = false
+    /// A result that arrived before the continuation was installed — the
+    /// cancellation handler can fire that early.
+    private var pending: Result<T, Error>?
+
+    func attach(_ c: CheckedContinuation<T, Error>) {
+        lock.lock()
+        if let p = pending {
+            pending = nil
+            lock.unlock()
+            c.resume(with: p)
+            return
+        }
+        cont = c
+        lock.unlock()
+    }
+
+    func setWork(_ t: Task<Void, Never>) {
+        lock.lock()
+        let alreadyOver = settled
+        work = t
+        lock.unlock()
+        if alreadyOver { t.cancel() }
+    }
+
+    func settle(_ result: Result<T, Error>) {
+        lock.lock()
+        if settled { lock.unlock(); return }
+        settled = true
+        let c = cont
+        cont = nil
+        if c == nil { pending = result }
+        lock.unlock()
+        c?.resume(with: result)
+    }
+
+    /// Best-effort: a native inference call already inside MLX/LiteRT may
+    /// ignore this and run to completion — but it stops being something the
+    /// caller waits on.
+    func cancelWork() {
+        lock.lock()
+        let t = work
+        lock.unlock()
+        t?.cancel()
     }
 }
 
@@ -96,6 +139,29 @@ final class TranscriptionRunner: @unchecked Sendable {
         }
     }
 
+    /// Echo-cancel the mic track against the system track and chunk both,
+    /// OFF the main actor. `nonisolated` is load-bearing: `runImpl` is
+    /// `@MainActor`, so this work used to run inline on the main thread —
+    /// an NLMS filter with 1024 taps plus two full-file silence scans over
+    /// an entire meeting, which is seconds of straight-line CPU. The app
+    /// froze solid from the moment Run was pressed until the first chunk
+    /// went out, and the "Cancelling echo…" stage never even got a chance to
+    /// draw. Same work, same result, nothing blocked.
+    private nonisolated static func cancelEchoAndChunk(
+        mic: [Float], sys: [Float], decoder: AudioDecoder
+    ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double) {
+        let cleanedMic = EchoCanceller.cancel(mic: mic, ref: sys)
+        let (micChunks, micDur) = decoder.chunk(samples: cleanedMic)
+        let (sysChunks, sysDur) = decoder.chunk(samples: sys)
+        let tagged = (micChunks.map { ($0, true) } + sysChunks.map { ($0, false) })
+            .sorted { $0.0.startSeconds < $1.0.startSeconds }
+        return (
+            tagged.map(\.0),
+            Set(tagged.enumerated().compactMap { $1.1 ? $0 : nil }),
+            max(micDur, sysDur)
+        )
+    }
+
     @MainActor
     private func runImpl(
         _ params: Params,
@@ -120,22 +186,21 @@ final class TranscriptionRunner: @unchecked Sendable {
         var micChunkIndices: Set<Int> = []
         do {
             if splitTracks, let micURL, let sysURL {
-                var micSamples = try await decoder.decodeAll(file: micURL)
-                let sysSamples = try await decoder.decodeAll(file: sysURL)
+                async let micTask = decoder.decodeAll(file: micURL)
+                async let sysTask = decoder.decodeAll(file: sysURL)
+                let rawMic = try await micTask
+                let sysSamples = try await sysTask
                 // Offline AEC: subtract the far side's echo from the mic
                 // using the sys track as reference — the echo never reaches
                 // an engine, and the user's speech survives crosstalk.
                 continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
-                micSamples = EchoCanceller.cancel(mic: micSamples, ref: sysSamples)
-                let (micChunks, micDur) = decoder.chunk(samples: micSamples)
-                let (sysChunks, sysDur) = decoder.chunk(samples: sysSamples)
-                let tagged = (micChunks.map { ($0, true) } + sysChunks.map { ($0, false) })
-                    .sorted { $0.0.startSeconds < $1.0.startSeconds }
-                chunks = tagged.map(\.0)
-                micChunkIndices = Set(tagged.enumerated().compactMap { $1.1 ? $0 : nil })
+                let prepared = await Self.cancelEchoAndChunk(
+                    mic: rawMic, sys: sysSamples, decoder: decoder)
+                chunks = prepared.chunks
+                micChunkIndices = prepared.micChunkIndices
                 samples = sysSamples          // diarization sees only the others
-                duration = max(micDur, sysDur)
-                AppLog.info("runner", "split-track meeting: \(micChunks.count) mic + \(sysChunks.count) sys chunks")
+                duration = prepared.duration
+                AppLog.info("runner", "split-track meeting: \(prepared.micChunkIndices.count) mic + \(chunks.count - prepared.micChunkIndices.count) sys chunks")
             } else {
                 (samples, chunks, duration) = try await decoder.decodeAndChunk(file: params.file)
             }
@@ -481,14 +546,31 @@ final class TranscriptionRunner: @unchecked Sendable {
 
         let myNameSetting = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
             .trimmingCharacters(in: .whitespaces)
-        allSegments = finalizeSegments(
-            allSegments,
+        // Off the main actor: the split-track echo scrub compares every ME
+        // segment against every sys segment and sentence-tokenizes both
+        // sides, which on a long meeting is millions of string comparisons —
+        // and it lands at the exact moment the user is watching the run
+        // finish. The function itself is pure, so this costs nothing but a
+        // hop. (`finalizeSegments` stays synchronous and directly callable,
+        // because the unit tests drive it with crafted inputs.)
+        let segmentsToFinalize = allSegments
+        let finalizeArgs = (
             diarize: params.diarize,
             splitTracks: splitTracks,
             expectedSpeakers: params.expectedSpeakers,
             diarSegments: diarSegments,
             myName: myNameSetting.isEmpty ? nil : myNameSetting
         )
+        allSegments = await Task.detached(priority: .userInitiated) { [self] in
+            finalizeSegments(
+                segmentsToFinalize,
+                diarize: finalizeArgs.diarize,
+                splitTracks: finalizeArgs.splitTracks,
+                expectedSpeakers: finalizeArgs.expectedSpeakers,
+                diarSegments: finalizeArgs.diarSegments,
+                myName: finalizeArgs.myName
+            )
+        }.value
         continuation.yield(.stage(text: "Done.", fraction: 1.0))
         continuation.yield(.done(segments: allSegments))
     }
@@ -994,23 +1076,34 @@ final class TranscriptionRunner: @unchecked Sendable {
         seconds: TimeInterval,
         _ op: @Sendable @escaping () async throws -> T
     ) async throws -> T {
-        let claim = FirstWinsClaim()
-        return try await withCheckedThrowingContinuation { cont in
-            let work = Task.detached(priority: .userInitiated) {
-                do {
-                    let value = try await op()
-                    if claim.take() { cont.resume(returning: value) }
-                } catch {
-                    if claim.take() { cont.resume(throwing: error) }
+        let race = ChunkRace<T>()
+        // A DETACHED task inherits nothing from its parent — cancellation
+        // included. Without this handler, Cancel resumed nobody: the consumer
+        // walked away, the job manager started the NEXT queued job, and up to
+        // three abandoned inference tasks kept the ANE/GPU busy for as long as
+        // the two-minute deadline while the new job sat at "Queued…" with no
+        // explanation. The same stall followed any thrown error in the
+        // pipeline group, which must await children it could not cancel.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+                race.attach(cont)
+                let work = Task.detached(priority: .userInitiated) {
+                    do {
+                        race.settle(.success(try await op()))
+                    } catch {
+                        race.settle(.failure(error))
+                    }
+                }
+                race.setWork(work)
+                Task.detached(priority: .utility) {
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    race.cancelWork()
+                    race.settle(.failure(ASRError.chunkTimeout))
                 }
             }
-            Task.detached(priority: .utility) {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                if claim.take() {
-                    work.cancel()          // best-effort; MLX may ignore
-                    cont.resume(throwing: ASRError.chunkTimeout)
-                }
-            }
+        } onCancel: {
+            race.cancelWork()
+            race.settle(.failure(CancellationError()))
         }
     }
 
@@ -1186,12 +1279,24 @@ final class TranscriptionRunner: @unchecked Sendable {
         return result
     }
 
+    /// Upper bound on what the loop guard is allowed to consider a repeat.
+    /// It exists for context-echo LINES — a model re-emitting the tail it was
+    /// prompted with, or looping one sentence. With `diarize == false`,
+    /// `parseSegments` returns ONE segment per chunk covering the whole 28 s
+    /// window, and an order-insensitive token overlap of 0.85 is easy to hit
+    /// across two chunks of a repetitive stretch (a standup round-robin, a
+    /// run of "yeah… right… okay"). That dropped 28 seconds of real
+    /// transcript on a log warning. A genuine echo is short; a whole chunk
+    /// is not.
+    static let nearDuplicateMaxTokens = 25
+
     static func nearDuplicate(_ a: String, _ b: String) -> Bool {
         func toks(_ s: String) -> [String] {
             s.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
         }
         let ta = toks(a), tb = toks(b)
         guard ta.count >= 3, tb.count >= 3 else { return false }
+        guard tb.count <= nearDuplicateMaxTokens else { return false }
         var counts: [String: Int] = [:]
         for t in ta { counts[t, default: 0] += 1 }
         var common = 0

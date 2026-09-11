@@ -101,6 +101,7 @@ enum BackupService {
                                createdAtMillis: Int64, segments: [RecordingRepository.VersionSegment]) {
         let url = dir(for: recordingId).appendingPathComponent("versions")
             .appendingPathComponent("\(id.uuidString).json")
+        flush()
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
         let dto = VersionDTO(
             schemaVersion: schemaVersion, id: id, recordingId: recordingId,
@@ -121,24 +122,45 @@ enum BackupService {
             .appendingPathComponent("\(doc.id.uuidString).json"))
     }
 
+    /// Serial so writes to the same file keep their call order, and so a
+    /// `flush()` before any read is enough to see everything queued.
+    private static let ioQueue = DispatchQueue(label: "BackupService.io")
+
+    /// Block until every queued write has landed. Called before each reader
+    /// (the restore CLI and the tests read straight after writing) and at
+    /// app termination, so moving the writes off the calling thread can
+    /// never lose or reorder anything a caller can observe.
+    static func flush() {
+        ioQueue.sync {}
+    }
+
     private static func write<T: Encodable>(_ value: T, to url: URL) {
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-            let data = try encoder.encode(value)
-            // Atomic: a crash mid-write must never leave a half-written,
-            // unparseable backup file behind.
-            try data.write(to: url, options: .atomic)
-        } catch {
-            AppLog.warn("backup", "write failed for \(url.lastPathComponent): \(error.localizedDescription)")
+        // Encoding a full transcript and writing it atomically is tens of
+        // milliseconds of CPU plus a disk round-trip, and almost every
+        // caller is on the main actor — `repository.save` alone runs on
+        // every flick of a Detail run-option toggle. The DTO is already a
+        // detached value copy by the time it gets here, so the whole thing
+        // can leave the caller's thread.
+        ioQueue.async {
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+                let data = try encoder.encode(value)
+                // Atomic: a crash mid-write must never leave a half-written,
+                // unparseable backup file behind.
+                try data.write(to: url, options: .atomic)
+            } catch {
+                AppLog.warn("backup", "write failed for \(url.lastPathComponent): \(error.localizedDescription)")
+            }
         }
     }
 
     // MARK: - Read (used by the restore CLI command)
 
     static func allRecordingBackups() -> [RecordingDTO] {
+        flush()
         guard let dirs = try? FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: nil) else { return [] }
         let decoder = JSONDecoder()
@@ -150,6 +172,7 @@ enum BackupService {
     }
 
     static func versionBackups(for recordingId: UUID) -> [VersionDTO] {
+        flush()
         let versionsDir = dir(for: recordingId).appendingPathComponent("versions")
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: versionsDir, includingPropertiesForKeys: nil) else { return [] }
@@ -158,6 +181,7 @@ enum BackupService {
     }
 
     static func outputBackups(for recordingId: UUID) -> [OutputDTO] {
+        flush()
         let outputsDir = dir(for: recordingId).appendingPathComponent("outputs")
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: outputsDir, includingPropertiesForKeys: nil) else { return [] }

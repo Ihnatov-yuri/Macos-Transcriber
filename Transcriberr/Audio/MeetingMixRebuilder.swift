@@ -69,18 +69,27 @@ enum MeetingMixRebuilder {
                 }
                 try f.write(from: buf)
             }
+            // Clean up the temp on any failure below — it is dot-prefixed,
+            // so a leaked one is invisible in Finder and never noticed.
+            defer { try? FileManager.default.removeItem(at: tmp) }
             try write(mix, to: tmp)
 
+            // NEVER delete-then-move: the old code removed `mainURL` first,
+            // and a failed move then left the recording's row pointing at a
+            // file that no longer existed — playback and re-transcription
+            // both dead, the audio surviving only in the sidecars. Replace
+            // atomically instead, exactly as AudioCompressor's header
+            // demands ("never delete then fail").
+            //
             // outputURL == mainURL for a fresh recording (still a .wav,
             // rebuild runs before AudioCompressor) — swap in place. For an
             // already-compressed older recording (mainURL is a .m4a),
             // outputURL is a new sibling .wav; only remove the stale .m4a
             // AFTER the rebuilt file is safely on disk at its own path.
             if outputURL == mainURL {
-                try FileManager.default.removeItem(at: mainURL)
-            }
-            try FileManager.default.moveItem(at: tmp, to: outputURL)
-            if outputURL != mainURL {
+                _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: tmp)
+            } else {
+                try FileManager.default.moveItem(at: tmp, to: outputURL)
                 try? FileManager.default.removeItem(at: mainURL)
             }
             AppLog.info("aec", "rebuilt meeting mix from cancelled mic + sys (\(n) samples)")

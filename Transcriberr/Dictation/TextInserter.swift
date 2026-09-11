@@ -41,12 +41,23 @@ enum TextInserter {
     /// Only one restore may be pending; a second insert before the first
     /// restore fires must not put the FIRST dictation back on the clipboard.
     private static var pendingRestore: Task<Void, Never>?
+    /// The user's own clipboard, held across back-to-back insertions.
+    ///
+    /// Cancelling the pending restore and snapshotting again captured the
+    /// PREVIOUS DICTATION — at that moment the pasteboard is still holding
+    /// what we just pasted, not what the user had copied. Two insertions
+    /// less than 0.8 s apart (exactly what a toggle-mode pause flush
+    /// produces) therefore "restored" dictation #1 over the user's clipboard
+    /// and lost it for good. Carry the original snapshot forward instead.
+    private static var pendingSnapshot: Snapshot?
 
     static func insert(_ text: String, restoreClipboard: Bool) -> Outcome {
         let pb = NSPasteboard.general
+        let carried = pendingRestore != nil ? pendingSnapshot : nil
         pendingRestore?.cancel()
         pendingRestore = nil
-        let snapshot = restoreClipboard ? Snapshot(pb) : nil
+        let snapshot = restoreClipboard ? (carried ?? Snapshot(pb)) : nil
+        pendingSnapshot = snapshot
 
         pb.clearContents()
         pb.setString(text, forType: .string)
@@ -66,6 +77,8 @@ enum TextInserter {
                 if pb.string(forType: .string) == text {
                     snapshot.restore(to: pb)
                 }
+                pendingRestore = nil
+                pendingSnapshot = nil
             }
         }
         return .pasted
@@ -92,6 +105,7 @@ enum TextInserter {
     static func copyOnly(_ text: String) {
         pendingRestore?.cancel()
         pendingRestore = nil
+        pendingSnapshot = nil
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)

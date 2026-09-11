@@ -32,7 +32,14 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// containing one (the HF snapshot dir). nil → resolve the default
     /// cached bundle so the ensemble can self-load this backend.
     func load(modelPath: URL?) async throws {
-        if isReady, engine != nil { return }
+        if isReady, engine != nil {
+            // Re-arm the cross-engine gate: the engine may have been loaded
+            // before an idle release lifted it, and an early return that
+            // skipped this would let Parakeet/Whisper run concurrently with
+            // a live LiteRT engine — the exact pairing that wedges.
+            await InferenceGate.shared.setLitertActive(true)
+            return
+        }
         guard let file = Self.resolveModelFile(from: modelPath) else {
             throw ASRError.modelMissing(backend: id)
         }

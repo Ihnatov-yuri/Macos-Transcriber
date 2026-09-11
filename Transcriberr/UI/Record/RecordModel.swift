@@ -72,8 +72,29 @@ final class RecordModel {
         uiState = .recording
     }
 
+    /// Set for the whole of `beginRecording`, including across its awaits.
+    /// `uiState` alone can't guard a double press: the first tap hops off
+    /// the main actor inside `recorder.start()`, so the second tap saw
+    /// `.idle`, called start again, hit the recorder's own "already
+    /// starting" guard — which returns SUCCESSFULLY — and set `.recording`
+    /// with no engine behind it. Pressing Stop then found the recorder still
+    /// idle and returned nil, leaving the first start to open the mic with
+    /// nothing on screen able to stop it.
+    private var isStarting = false
+
     private func beginRecording() async {
+        guard !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
         lastError = nil
+        // Dictation already refuses to start while a recording is running;
+        // without the mirror image, ⌘N (or the Record button) during a
+        // dictation session opened a second engine — and a second
+        // voice-processing unit — on the same input device.
+        if container.dictation.phase == .listening {
+            lastError = "DICTATION IS LISTENING · FINISH IT FIRST"
+            return
+        }
         do {
             activeMeeting = meetingMode
             if activeMeeting {
@@ -117,6 +138,16 @@ final class RecordModel {
                 url = try await container.recorder.stop()
             }
             guard let url else {
+                // Say something. A nil URL here means the recorder had
+                // already failed (or never started) and the session is gone —
+                // silently dropping back to idle looked like the Stop button
+                // simply discarding the recording.
+                if case .failed(let reason) = container.recorder.state {
+                    lastError = reason
+                } else if lastError == nil {
+                    lastError = "Recording could not be saved."
+                }
+                activeMeeting = false
                 uiState = .idle
                 return
             }
@@ -190,6 +221,7 @@ final class RecordModel {
             }
         } catch {
             lastError = error.localizedDescription
+            activeMeeting = false
             uiState = .idle
         }
     }

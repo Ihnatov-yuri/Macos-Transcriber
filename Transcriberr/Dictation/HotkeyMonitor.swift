@@ -119,6 +119,12 @@ final class HotkeyMonitor {
             // macOS disables a tap that stalls; we never stall, but re-arm.
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             AppLog.warn("dictation", "hotkey event tap was disabled by the system — re-enabled")
+            // And resync: the release almost certainly happened while we were
+            // deaf. Without this, `isDown` stayed true forever, so the next
+            // press was filtered out as "already down" and the hotkey looked
+            // dead for a whole press/release cycle — with any hold session in
+            // flight left hanging until the watchdog.
+            resyncModifierState()
         case .flagsChanged:
             let code = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
             guard let keyCode, code == keyCode else { return }
@@ -157,6 +163,17 @@ final class HotkeyMonitor {
 
     // MARK: - Shared
 
+    /// Recompute the hotkey's real state from the system and emit whatever
+    /// edge we missed.
+    func resyncModifierState() {
+        guard let keyCode else { return }
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        let down = Self.modifierIsDown(cgFlags: flags, keyCode: keyCode)
+        guard down != isDown else { return }
+        trace("resync → \(down ? "down" : "up")")
+        edge(down: down)
+    }
+
     private func edge(down: Bool) {
         guard down != isDown else { return }
         isDown = down
@@ -173,29 +190,50 @@ final class HotkeyMonitor {
     }
 
     /// `flagsChanged` carries the new modifier state; the key that changed is
-    /// `keyCode`. Left/right variants share a flag, so a press of the RIGHT
-    /// key while the LEFT is already held reads as "down" (flag set) and its
-    /// release as "still down" — the isDown edge filter above handles that.
-    nonisolated static func modifierIsDown(_ event: NSEvent, keyCode: UInt16) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    /// `keyCode`.
+    ///
+    /// The device-DEPENDENT bits are what makes a left/right pair separable.
+    /// Testing only the shared flag (`.maskCommand` and friends) meant the
+    /// twin masked the release: with the hotkey on Right ⌘, holding R⌘ to
+    /// talk and then pressing L⌘ before letting R⌘ go left the shared flag
+    /// set, so the release read as "still down", the edge filter swallowed
+    /// it, and no `.released` ever arrived — hold mode then ran to the
+    /// 180-second watchdog and inserted three minutes of speech, with
+    /// `isDown` stuck true so the next press was swallowed too.
+    ///
+    /// `(thisKey, itsTwin, sharedFlag)` bit masks, in the raw representation
+    /// shared by `NSEvent.modifierFlags` and `CGEventFlags`.
+    private nonisolated static func bits(for keyCode: UInt16) -> (own: UInt64, twin: UInt64, shared: UInt64)? {
         switch keyCode {
-        case 61, 58: return flags.contains(.option)
-        case 54, 55: return flags.contains(.command)
-        case 62, 59: return flags.contains(.control)
-        case 60, 56: return flags.contains(.shift)
-        case 63:     return flags.contains(.function)
-        default:     return false
+        case 55: return (0x08, 0x10, UInt64(NSEvent.ModifierFlags.command.rawValue))   // left ⌘
+        case 54: return (0x10, 0x08, UInt64(NSEvent.ModifierFlags.command.rawValue))   // right ⌘
+        case 58: return (0x20, 0x40, UInt64(NSEvent.ModifierFlags.option.rawValue))    // left ⌥
+        case 61: return (0x40, 0x20, UInt64(NSEvent.ModifierFlags.option.rawValue))    // right ⌥
+        case 56: return (0x02, 0x04, UInt64(NSEvent.ModifierFlags.shift.rawValue))     // left ⇧
+        case 60: return (0x04, 0x02, UInt64(NSEvent.ModifierFlags.shift.rawValue))     // right ⇧
+        case 59: return (0x01, 0x2000, UInt64(NSEvent.ModifierFlags.control.rawValue)) // left ⌃
+        case 62: return (0x2000, 0x01, UInt64(NSEvent.ModifierFlags.control.rawValue)) // right ⌃
+        case 63: return (0, 0, UInt64(NSEvent.ModifierFlags.function.rawValue))        // fn — no side bits
+        default: return nil
         }
     }
 
-    nonisolated static func modifierIsDown(cgFlags flags: CGEventFlags, keyCode: UInt16) -> Bool {
-        switch keyCode {
-        case 61, 58: return flags.contains(.maskAlternate)
-        case 54, 55: return flags.contains(.maskCommand)
-        case 62, 59: return flags.contains(.maskControl)
-        case 60, 56: return flags.contains(.maskShift)
-        case 63:     return flags.contains(.maskSecondaryFn)
-        default:     return false
+    nonisolated static func modifierIsDown(rawFlags: UInt64, keyCode: UInt16) -> Bool {
+        guard let b = bits(for: keyCode) else { return false }
+        // Not every keyboard reports the device-dependent bits (remappers and
+        // some external boards report only the shared flag). Trust the side
+        // bits when this keyboard is using them, otherwise fall back.
+        if b.own != 0, rawFlags & (b.own | b.twin) != 0 {
+            return rawFlags & b.own != 0
         }
+        return rawFlags & b.shared != 0
+    }
+
+    nonisolated static func modifierIsDown(_ event: NSEvent, keyCode: UInt16) -> Bool {
+        modifierIsDown(rawFlags: UInt64(event.modifierFlags.rawValue), keyCode: keyCode)
+    }
+
+    nonisolated static func modifierIsDown(cgFlags flags: CGEventFlags, keyCode: UInt16) -> Bool {
+        modifierIsDown(rawFlags: flags.rawValue, keyCode: keyCode)
     }
 }

@@ -174,8 +174,6 @@ enum EchoCanceller {
                     let f = i / nlpFrame
                     framePe[f] += e * e
                     framePy[f] += yhat * yhat
-                    num += Double(mic[i] * mic[i])
-                    den += Double(e * e)
                 }
             }
         }
@@ -210,8 +208,20 @@ enum EchoCanceller {
                 }
             }
         }
+        // Measure BOTH sides over the SAME span. The adaptation loop skips
+        // the first `delay` samples (no reference history yet, so `out`
+        // there is just the raw mic), but the energy sums used to cover
+        // different ranges — signal from `delay` onward, residual over all
+        // n. That biased ERLE down by up to about a dB on a short track with
+        // a long delay, which is enough to trip the do-no-harm guard below
+        // and hand back the uncancelled mic — putting the far side into the
+        // user's own transcript, the very thing this filter exists to stop.
+        num = 0
         den = 0
-        for i in 0..<n { den += Double(out[i] * out[i]) }
+        for i in delay..<n {
+            num += Double(mic[i] * mic[i])
+            den += Double(out[i] * out[i])
+        }
 
         let erle = 10 * log10(num / max(den, 1e-12))
         AppLog.info("aec", String(format: "NLMS done: n=%d, search window @%.0fs, corr %.3f, delay=%d smp (%.0f ms), ERLE %.1f dB",

@@ -79,6 +79,12 @@ extension ModelCatalog {
         guard let hfID = huggingFaceID else { return nil }
         var dir = durableModelsDirectory()
         for part in hfID.split(separator: "/") { dir = dir.appendingPathComponent(String(part)) }
-        return FileManager.default.fileExists(atPath: dir.path) ? dir : nil
+        // NON-EMPTY, not merely present. A cancelled or failed download
+        // leaves the directory behind, and an existence check then reported
+        // the model as cached: the run passed the "download it first" gate
+        // in Detail and failed minutes later with a bare modelMissing
+        // instead of the actionable "SETTINGS → MODELS" message.
+        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return contents.contains { !$0.hasPrefix(".") } ? dir : nil
     }
 }

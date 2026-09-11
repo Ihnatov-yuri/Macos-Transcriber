@@ -1,10 +1,12 @@
 import SwiftUI
+import SwiftData
 
 /// Editorial port of Android `recordings/RecordingDetailScreen.kt`.
 struct DetailView: View {
     let recording: Recording
     var onClose: () -> Void = {}
     @Environment(AppContainer.self) private var container
+    @Query(sort: \Folder.sortOrder) private var allFolders: [Folder]
 
     @State private var model: DetailModel?
     @State private var tab: Tab = .transcript
@@ -414,9 +416,12 @@ struct DetailView: View {
 
     @ViewBuilder
     private func folderMenu() -> some View {
-        let folders = (try? container.repository.folders()) ?? []
+        // `@Query`, not a fetch inside the body: the fetch ran on every
+        // evaluation of the detail header — which during a run is once per
+        // streamed chunk — and it is the same data SwiftData is already
+        // keeping up to date for the rest of the screen.
         Menu {
-            ForEach(folders.filter { $0.id != recording.folder?.id }, id: \.id) { folder in
+            ForEach(allFolders.filter { $0.id != recording.folder?.id }, id: \.id) { folder in
                 Button(folder.name) {
                     try? container.repository.move(recording, to: folder)
                 }
@@ -864,25 +869,20 @@ private struct VersionsPane: View {
 
                 HStack(spacing: AppMetric.l) {
                     TapButton {
-                        // Restore through the VIEW's context — the repository
-                        // context is a parallel world; mutating view-context
-                        // objects there is a silent no-op (same as the old
-                        // delete bug).
-                        let segs = model.container.repository.decodeVersion(v)
-                        let names = model.container.repository.storedSpeakerNames(model.recording)
-                        for old in model.recording.segments { context.delete(old) }
-                        model.recording.segments = []
-                        for raw in segs {
-                            let seg = Segment(
-                                startSeconds: raw.start, endSeconds: raw.end, text: raw.text,
-                                speaker: raw.speaker,
-                                speakerName: raw.speakerName ?? raw.speaker.flatMap { names[$0] }
-                            )
-                            seg.recording = model.recording
-                            context.insert(seg)
-                            model.recording.segments.append(seg)
+                        // Through the repository, which shares the VIEW's
+                        // context now (AppContainer hands it `mainContext`) —
+                        // the "parallel world" this button used to work
+                        // around is gone. Going around it meant the restore
+                        // never refreshed recording.json and never rewrote
+                        // the .txt/.srt sidecars, so a crash (or a
+                        // `restore-backups` run) resurrected the version the
+                        // user had just replaced.
+                        do {
+                            try model.container.repository.restoreVersion(v, to: model.recording)
+                            try? TranscriptExporter.export(recording: model.recording)
+                        } catch {
+                            AppLog.error("detail", "version restore failed: \(error.localizedDescription)")
                         }
-                        try? context.save()
                     } label: {
                         Text("RESTORE AS CURRENT")
                             .monoLabel(9, color: AppColor.accent)
@@ -929,12 +929,20 @@ struct TranscriptPane: View {
     var onEditSegment: (Segment) -> Void = { _ in }
     var speakerColor: (String) -> Color = { _ in AppColor.accent }
 
+    /// The transcript in playback order, sorted ONCE per body pass.
+    ///
+    /// `activeID`, `tailID` and the row list each sorted the whole
+    /// relationship independently, and `segmentRow` reads
+    /// `player.currentTime` — so every time-observer tick re-ran the body
+    /// and re-sorted a long diarized transcript three times over. That is
+    /// the stutter when scrolling during playback.
+    private var sortedSegments: [Segment] {
+        recording.segments.sorted { $0.startSeconds < $1.startSeconds }
+    }
+
     /// Last segment ID that contains the current playhead — used to auto-scroll.
-    private var activeID: UUID? {
-        recording.segments
-            .sorted { $0.startSeconds < $1.startSeconds }
-            .last { player.currentTime >= $0.startSeconds }?
-            .id
+    private func activeID(in segs: [Segment]) -> UUID? {
+        segs.last { player.currentTime >= $0.startSeconds }?.id
     }
 
     /// ID of the most recently transcribed segment — for live auto-scroll.
@@ -943,12 +951,7 @@ struct TranscriptPane: View {
     /// user is the "wobble".
     @State private var nearBottom = true
 
-    private var tailID: UUID? {
-        recording.segments
-            .sorted { $0.startSeconds < $1.startSeconds }
-            .last?
-            .id
-    }
+    private func tailID(in segs: [Segment]) -> UUID? { segs.last?.id }
 
     var body: some View {
         if recording.segments.isEmpty {
@@ -1001,10 +1004,10 @@ struct TranscriptPane: View {
                 .background(AppColor.paper)
                 HairlineSoft()
             }
+            let segs = sortedSegments
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        let segs = recording.segments.sorted { $0.startSeconds < $1.startSeconds }
                         ForEach(segs, id: \.id) { seg in
                             HairlineSoft()
                             segmentRow(seg).id(seg.id)
@@ -1021,7 +1024,7 @@ struct TranscriptPane: View {
                 } action: { _, isNear in
                     nearBottom = isNear
                 }
-                .onChange(of: tailID) { _, new in
+                .onChange(of: tailID(in: segs)) { _, new in
                     // New chunk arrived → follow, but ONLY if the user is
                     // already at the bottom, and without animation — an
                     // animated chase re-triggered every chunk reads as
@@ -1029,7 +1032,7 @@ struct TranscriptPane: View {
                     guard let new, nearBottom else { return }
                     proxy.scrollTo(new, anchor: .bottom)
                 }
-                .onChange(of: activeID) { _, new in
+                .onChange(of: activeID(in: segs)) { _, new in
                     // Playback advanced → follow the active segment.
                     guard let new else { return }
                     withAnimation(.easeOut(duration: 0.2)) {
@@ -1042,7 +1045,7 @@ struct TranscriptPane: View {
     }
 
     private var proseBody: String {
-        let segs = recording.segments.sorted { $0.startSeconds < $1.startSeconds }
+        let segs = sortedSegments
         var prev: String? = nil
         var lines: [String] = []
         for seg in segs {

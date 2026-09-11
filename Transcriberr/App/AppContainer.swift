@@ -113,10 +113,14 @@ final class AppContainer: @unchecked Sendable {
             presets: presetStore,
             snippets: snippetStore
         )
-        jobManager = TranscriptionJobManager(
-            runner: transcriptionRunner,
-            repository: repository
-        )
+        // Same `assumeIsolated` shape as the main ModelContext above: the
+        // job manager is `@MainActor` now, and this init only ever runs from
+        // the App's own init, which is already on the main actor.
+        let runnerForJobs = transcriptionRunner
+        let repoForJobs = repository
+        jobManager = MainActor.assumeIsolated {
+            TranscriptionJobManager(runner: runnerForJobs, repository: repoForJobs)
+        }
 
         dictationSettings = DictationSettings()
         dictation = DictationController(
@@ -137,9 +141,18 @@ final class AppContainer: @unchecked Sendable {
         }
 
         // Wire auto-titler after construction so we can capture `self`.
-        jobManager.autoTitler = { [weak self] recording, segments, params in
-            guard let self else { return }
-            await self.generateAutoTitle(for: recording, segments: segments, params: params)
+        let jobs = jobManager
+        MainActor.assumeIsolated {
+            jobs.autoTitler = { [weak self] recording, segments, params in
+                guard let self else { return }
+                await self.generateAutoTitle(for: recording, segments: segments, params: params)
+            }
+            // Hand the multi-gigabyte LiteRT engine back once the queue has
+            // been quiet for a while — it is the only thing holding the
+            // process-wide inference gate down.
+            jobs.onIdle = { [weak self] in
+                await self?.backendFactory.releaseLiteRT()
+            }
         }
 
         // Self-heal transcripts lost to interrupted runs (app updated or

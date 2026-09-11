@@ -102,6 +102,16 @@ struct SegmentEditSheet: View {
                         .font(AppFont.mono(11))
                     Spacer()
                     TapButton {
+                        // A run that reaches its first chunk (or finishes and
+                        // reconciles) wipes and re-inserts every segment, and
+                        // a version RESTORE does the same — the sheet can
+                        // easily be open across either. Writing into a
+                        // deleted SwiftData model crashes, so if this one is
+                        // already gone, close without pretending to save.
+                        guard !segment.isDeleted, segment.modelContext != nil else {
+                            dismiss()
+                            return
+                        }
                         segment.text = text
                         try? segment.modelContext?.save()
                         if let rec = segment.recording {

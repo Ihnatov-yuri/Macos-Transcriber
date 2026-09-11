@@ -70,9 +70,18 @@ final class MeetingRecorder: @unchecked Sendable {
     /// transcription silently stops working from the second meeting
     /// recording of the app session onward. Exact mirror of the identical
     /// WavRecorder fix (v2.5.4), which this class never got.
+
+    /// Live captions consume these 5-second chunks in real time; if the
+    /// consumer falls behind (a file job holding the inference gate, a slow
+    /// engine), an unbounded stream grew ~320 KB per chunk for the whole
+    /// session and the captions fell further and further behind the audio.
+    /// Dropping the oldest backlog keeps captions near the live edge — the
+    /// transcript of record comes from the file, not from this feed.
+    static let liveChunkBacklog = 8
+
     private func makeChunkStream() {
         var continuation: AsyncStream<WavRecorder.Chunk>.Continuation!
-        self.chunks = AsyncStream<WavRecorder.Chunk> { continuation = $0 }
+        self.chunks = AsyncStream<WavRecorder.Chunk>(bufferingPolicy: .bufferingNewest(Self.liveChunkBacklog)) { continuation = $0 }
         self.chunkContinuation = continuation
     }
 
@@ -125,6 +134,17 @@ final class MeetingRecorder: @unchecked Sendable {
                 self.audioFile = nil
                 self.micConverter = nil; self.micFile = nil
                 self.sysConverter = nil; self.sysFile = nil
+            }
+            // Delete the header-only files this attempt already created.
+            // They are real files in ~/Documents/Transcriberr/Recordings —
+            // three per failed start, invisible to the library (no row ever
+            // referenced them) and never cleaned up by anything.
+            if let partial = fileURL {
+                let base = partial.deletingPathExtension()
+                for suffix in ["wav", "mic.wav", "sys.wav"] {
+                    try? FileManager.default.removeItem(
+                        at: base.appendingPathExtension(suffix))
+                }
             }
             fileURL = nil
             throw error
@@ -222,6 +242,9 @@ final class MeetingRecorder: @unchecked Sendable {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let base = "meeting_\(Int(Date().timeIntervalSince1970 * 1000))_\(UUID().uuidString.prefix(8))"
         let url = dir.appendingPathComponent(base + ".wav")
+        // Recorded BEFORE the files are opened, so a throw part-way through
+        // this sequence still tells `start()`'s catch which files to remove.
+        fileURL = url
         let file = try AVAudioFile(forWriting: url, settings: target.settings,
                                    commonFormat: .pcmFormatFloat32, interleaved: false)
         guard let mConv = AVAudioConverter(from: nativeMono, to: target),
@@ -255,7 +278,6 @@ final class MeetingRecorder: @unchecked Sendable {
             self.meOpenAt = nil
             self.micGain = 1
         }
-        fileURL = url
         elapsedMs = 0
 
         // 4. IO callback on our serial queue.

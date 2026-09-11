@@ -194,12 +194,17 @@ final class RecordingRepository: @unchecked Sendable {
         // Fade across the join (see fadeEdge's doc comment) — a then b
         // meet at full amplitude on both sides otherwise.
         let mainFade = fadeFrameCount(sa.count, sb.count)
-        try writeWav([
-            sa[..<(sa.count - mainFade)],
-            fadeEdge(sa[(sa.count - mainFade)...], fadingIn: false)[...],
-            fadeEdge(sb[..<mainFade], fadingIn: true)[...],
-            sb[mainFade...],
-        ], to: url, format: fmt)
+        do {
+            try writeWav([
+                sa[..<(sa.count - mainFade)],
+                fadeEdge(sa[(sa.count - mainFade)...], fadingIn: false)[...],
+                fadeEdge(sb[..<mainFade], fadingIn: true)[...],
+                sb[mainFade...],
+            ], to: url, format: fmt)
+        } catch {
+            rollbackMerge(nil, at: url)
+            throw error
+        }
 
         // Carry the meeting machinery. If BOTH sources have split tracks,
         // the merged recording is itself a full meeting: concatenate the
@@ -258,7 +263,12 @@ final class RecordingRepository: @unchecked Sendable {
         // the result to the unfiled root (a is the recording the merge was
         // initiated from, so its folder wins when the two disagree).
         merged.folder = a.folder ?? b.folder
-        try save(merged)
+        do {
+            try save(merged)
+        } catch {
+            rollbackMerge(nil, at: url)
+            throw error
+        }
 
         // Reclaim disk space now that every WAV involved is fully written
         // AND the recording is safely persisted. Bracketed with the busy
@@ -323,10 +333,33 @@ final class RecordingRepository: @unchecked Sendable {
             merged.speakerNamesJSON = String(decoding: data, as: UTF8.self)
         }
         if !copies.isEmpty {
-            try appendSegments(copies, to: merged)
+            do {
+                try appendSegments(copies, to: merged)
+            } catch {
+                // The row is already saved and backed up by now: without
+                // this a failed append left a merged recording in the
+                // library with its audio and none of its transcript.
+                rollbackMerge(merged, at: url)
+                throw error
+            }
         }
         AppLog.info("repo", "merged '\(a.title)' + '\(b.title)' → \(finalURL.lastPathComponent) (\(copies.count) segments)")
         return merged
+    }
+
+    /// Undo a half-built merge: the row (segments cascade), its backup
+    /// files, and every audio file the merge wrote under `url`'s base name
+    /// — compressed or not, whichever stage it got to. Best effort; the
+    /// original error is what the caller sees.
+    private func rollbackMerge(_ merged: Recording?, at url: URL) {
+        if let merged {
+            try? delete(merged)
+            BackupService.removeBackups(for: merged.id)
+        }
+        for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
+            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension(ext))
+        }
+        AppLog.warn("repo", "merge rolled back: \(url.lastPathComponent)")
     }
 
     /// Split one recording into two NEW recordings at `atSeconds` (measured

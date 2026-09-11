@@ -104,8 +104,20 @@ final class WavRecorder: @unchecked Sendable {
 
     nonisolated(unsafe) private var isStarting = false
 
+    /// Nonisolated on purpose: voice-processing setup and `engine.start()`
+    /// block for up to seconds and must not sit on the main thread. The
+    /// price is that this body runs on the cooperative pool — so every
+    /// field SwiftUI observes (`state`, `level`, `peakHistory`) and every
+    /// field the main-actor ticker reads (`sessionStart`,
+    /// `pausedAccumulatedMs`) is written through a MainActor hop. Writing
+    /// them straight from the pool, as this used to, raced the meter and
+    /// ticker tasks that write the same fields on the main actor.
     func start() async throws {
-        if case .recording = state { return }
+        let alreadyRecording = await MainActor.run { () -> Bool in
+            if case .recording = state { return true }
+            return false
+        }
+        if alreadyRecording { return }
         guard !isStarting else { return }   // double-tap raced past the state check
         isStarting = true
         defer { isStarting = false }
@@ -129,12 +141,12 @@ final class WavRecorder: @unchecked Sendable {
         case .notDetermined:
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             if !granted {
-                state = .failed(reason: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone, then try again.")
+                await setState(.failed(reason: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone, then try again."))
                 AppLog.error("recorder", "microphone permission denied")
                 throw RecorderError.noInput
             }
         case .denied, .restricted:
-            state = .failed(reason: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone, then try again.")
+            await setState(.failed(reason: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone, then try again."))
             AppLog.error("recorder", "microphone permission denied/restricted")
             throw RecorderError.noInput
         @unknown default:
@@ -142,12 +154,14 @@ final class WavRecorder: @unchecked Sendable {
         }
 
         // Reset
-        sessionStart = Date()
-        pausedAccumulatedMs = 0
-        pauseBeganAt = nil
-        level = 0
-        peakHistory = Array(repeating: 0, count: 64)
-        makeChunkStream()
+        await MainActor.run {
+            sessionStart = Date()
+            pausedAccumulatedMs = 0
+            pauseBeganAt = nil
+            level = 0
+            peakHistory = Array(repeating: 0, count: 64)
+            makeChunkStream()
+        }
         ioQueue.sync {
             chunkBuffer.removeAll(keepingCapacity: true)
             pendingInputs.removeAll(keepingCapacity: true)
@@ -176,12 +190,12 @@ final class WavRecorder: @unchecked Sendable {
         do {
             try ExceptionTrap.run { grabbedInput = self.engine.inputNode }
         } catch {
-            state = .failed(reason: "Audio input unavailable: \(error.localizedDescription)")
+            await setState(.failed(reason: "Audio input unavailable: \(error.localizedDescription)"))
             AppLog.error("recorder", "engine.inputNode threw: \(error.localizedDescription)")
             throw RecorderError.noInput
         }
         guard let input = grabbedInput else {
-            state = .failed(reason: "No audio input device.")
+            await setState(.failed(reason: "No audio input device."))
             throw RecorderError.noInput
         }
 
@@ -237,16 +251,16 @@ final class WavRecorder: @unchecked Sendable {
                 nativeFormat = input.outputFormat(forBus: 0)
             }
         } catch {
-            state = .failed(reason: "Couldn't read input format: \(error.localizedDescription)")
+            await setState(.failed(reason: "Couldn't read input format: \(error.localizedDescription)"))
             AppLog.error("recorder", "outputFormat threw: \(error.localizedDescription)")
             throw RecorderError.noInput
         }
         guard let nativeFormat else {
-            state = .failed(reason: "Input format unavailable.")
+            await setState(.failed(reason: "Input format unavailable."))
             throw RecorderError.noInput
         }
         guard nativeFormat.channelCount > 0, nativeFormat.sampleRate > 0 else {
-            state = .failed(reason: "No microphone available (check System Settings → Privacy & Security → Microphone).")
+            await setState(.failed(reason: "No microphone available (check System Settings → Privacy & Security → Microphone)."))
             AppLog.error("recorder", "input has no channels: channelCount=\(nativeFormat.channelCount) sampleRate=\(nativeFormat.sampleRate)")
             throw RecorderError.noInput
         }
@@ -264,11 +278,11 @@ final class WavRecorder: @unchecked Sendable {
             channels: 1,
             interleaved: false
         ) else {
-            state = .failed(reason: "Cannot build mono input format.")
+            await setState(.failed(reason: "Cannot build mono input format."))
             throw RecorderError.noInput
         }
         guard let converter = AVAudioConverter(from: nativeMonoFormat, to: targetFormat) else {
-            state = .failed(reason: "Cannot build audio converter.")
+            await setState(.failed(reason: "Cannot build audio converter."))
             throw RecorderError.noInput
         }
         // Normal (not Mastering): Mastering is an offline algorithm with huge
@@ -285,7 +299,7 @@ final class WavRecorder: @unchecked Sendable {
                                    commonFormat: .pcmFormatFloat32, interleaved: false)
         } catch {
             let reason = "Cannot open output file (\(error.localizedDescription)). Try recording again."
-            state = .failed(reason: reason)
+            await setState(.failed(reason: reason))
             AppLog.error("recorder", "AVAudioFile.init failed: \(error.localizedDescription)")
             throw RecorderError.io(reason)
         }
@@ -305,7 +319,7 @@ final class WavRecorder: @unchecked Sendable {
                 }
             }
         } catch {
-            state = .failed(reason: "Couldn't install audio tap: \(error.localizedDescription)")
+            await setState(.failed(reason: "Couldn't install audio tap: \(error.localizedDescription)"))
             AppLog.error("recorder", "installTap threw: \(error.localizedDescription)")
             throw RecorderError.noInput
         }
@@ -322,7 +336,7 @@ final class WavRecorder: @unchecked Sendable {
                 self.audioFile = nil
                 self.converter = nil
             }
-            state = .failed(reason: "Audio engine failed to prepare: \(error.localizedDescription)")
+            await setState(.failed(reason: "Audio engine failed to prepare: \(error.localizedDescription)"))
             AppLog.error("recorder", "engine.prepare threw: \(error.localizedDescription)")
             throw RecorderError.noInput
         }
@@ -348,18 +362,26 @@ final class WavRecorder: @unchecked Sendable {
                 self.audioFile = nil
                 self.converter = nil
             }
-            state = .failed(reason: "AVAudioEngine.start failed: \(startError.localizedDescription)")
+            await setState(.failed(reason: "AVAudioEngine.start failed: \(startError.localizedDescription)"))
             AppLog.error("recorder", "engine.start failed: \(startError.localizedDescription)")
             throw startError
         }
 
         AppLog.info("recorder", "started → \(url.path)")
-        openFileURL = url
-        state = .recording(file: url)
         startedCleanly = true
-        startTickTask()
+        await MainActor.run {
+            openFileURL = url
+            state = .recording(file: url)
+            startTickTask()
+        }
     }
 
+    /// Observable writes from the nonisolated `start()`/`stop()` paths.
+    private func setState(_ new: State) async {
+        await MainActor.run { state = new }
+    }
+
+    @MainActor
     func pause() {
         guard case let .recording(file) = state else { return }
         // Wrapped: engine.pause() can raise an NSException (uncatchable by
@@ -369,6 +391,7 @@ final class WavRecorder: @unchecked Sendable {
         state = .paused(file: file)
     }
 
+    @MainActor
     func resume() {
         guard case let .paused(file) = state else { return }
         if let begin = pauseBeganAt {
@@ -398,22 +421,24 @@ final class WavRecorder: @unchecked Sendable {
 
     @discardableResult
     func stop() async throws -> URL? {
-        let url: URL?
-        switch state {
-        case .recording(let u), .paused(let u):
-            url = u
-        case .failed:
-            // A failed RESUME (mic unplugged while paused) left the UI still
-            // showing RECORDING, and Stop then returned here before the
-            // engine stop, the tap removal, the file close and the voice
-            // processing release — so the mic stayed open, the duck stayed
-            // on, and everything already recorded was silently thrown away.
-            guard let open = openFileURL else { return nil }
-            AppLog.warn("recorder", "stopping after a failed state — salvaging \(open.lastPathComponent)")
-            url = open
-        default:
-            return nil
+        let session: URL? = await MainActor.run {
+            switch state {
+            case .recording(let u), .paused(let u):
+                return u
+            case .failed:
+                // A failed RESUME (mic unplugged while paused) left the UI still
+                // showing RECORDING, and Stop then returned here before the
+                // engine stop, the tap removal, the file close and the voice
+                // processing release — so the mic stayed open, the duck stayed
+                // on, and everything already recorded was silently thrown away.
+                guard let open = openFileURL else { return nil }
+                AppLog.warn("recorder", "stopping after a failed state — salvaging \(open.lastPathComponent)")
+                return open
+            default:
+                return nil
+            }
         }
+        guard let url = session else { return nil }
 
         // Wrapped: engine.stop() and inputNode.removeTap can both raise
         // NSExceptions on macOS 26.5 — SIGABRT risk on every Stop press.
@@ -435,11 +460,13 @@ final class WavRecorder: @unchecked Sendable {
             }
         }
         let duration = Double(written) / Self.sampleRate
-        chunkContinuation?.finish()
         releaseVoiceProcessing()
-        AppLog.info("recorder", "stopped: \(written) samples (\(String(format: "%.2f", duration))s) → \(url?.path ?? "(no url)")")
-        openFileURL = nil
-        if let url { state = .saved(file: url, durationSeconds: duration) }
+        AppLog.info("recorder", "stopped: \(written) samples (\(String(format: "%.2f", duration))s) → \(url.path)")
+        await MainActor.run {
+            chunkContinuation?.finish()
+            openFileURL = nil
+            state = .saved(file: url, durationSeconds: duration)
+        }
         return url
     }
 
@@ -683,6 +710,7 @@ final class WavRecorder: @unchecked Sendable {
         return (sum / Float(samples.count)).squareRoot()
     }
 
+    @MainActor
     private func startTickTask() {
         // One ticker at a time: a pause→resume inside the 100 ms sleep would
         // otherwise leave the old loop alive next to the new one.

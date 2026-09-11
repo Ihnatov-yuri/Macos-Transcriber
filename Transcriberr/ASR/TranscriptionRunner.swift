@@ -147,11 +147,24 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// froze solid from the moment Run was pressed until the first chunk
     /// went out, and the "Cancelling echo…" stage never even got a chance to
     /// draw. Same work, same result, nothing blocked.
+    ///
+    /// `mic` is `inout` and comes back EMPTY: the raw track is dead once the
+    /// canceller has read it, and releasing it here rather than when the
+    /// caller's scope ends takes a whole-meeting buffer off the peak. A
+    /// split-track run used to hold five full copies of the audio at once
+    /// (raw mic, cleaned mic, sys, both chunk sets — over 2 GB for a
+    /// two-hour meeting); each copy now dies as soon as its successor
+    /// exists, and the peak is three.
     private nonisolated static func cancelEchoAndChunk(
-        mic: [Float], sys: [Float], decoder: AudioDecoder
+        mic: inout [Float], sys: [Float], decoder: AudioDecoder
     ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double) {
-        let cleanedMic = EchoCanceller.cancel(mic: mic, ref: sys)
-        let (micChunks, micDur) = decoder.chunk(samples: cleanedMic)
+        let micChunks: [AudioDecoder.Chunk]
+        let micDur: Double
+        do {
+            let cleanedMic = EchoCanceller.cancel(mic: mic, ref: sys)
+            mic = []
+            (micChunks, micDur) = decoder.chunk(samples: cleanedMic)
+        }
         let (sysChunks, sysDur) = decoder.chunk(samples: sys)
         let tagged = (micChunks.map { ($0, true) } + sysChunks.map { ($0, false) })
             .sorted { $0.0.startSeconds < $1.0.startSeconds }
@@ -188,14 +201,14 @@ final class TranscriptionRunner: @unchecked Sendable {
             if splitTracks, let micURL, let sysURL {
                 async let micTask = decoder.decodeAll(file: micURL)
                 async let sysTask = decoder.decodeAll(file: sysURL)
-                let rawMic = try await micTask
+                var rawMic = try await micTask
                 let sysSamples = try await sysTask
                 // Offline AEC: subtract the far side's echo from the mic
                 // using the sys track as reference — the echo never reaches
                 // an engine, and the user's speech survives crosstalk.
                 continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
                 let prepared = await Self.cancelEchoAndChunk(
-                    mic: rawMic, sys: sysSamples, decoder: decoder)
+                    mic: &rawMic, sys: sysSamples, decoder: decoder)
                 chunks = prepared.chunks
                 micChunkIndices = prepared.micChunkIndices
                 samples = sysSamples          // diarization sees only the others

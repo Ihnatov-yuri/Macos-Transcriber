@@ -110,6 +110,25 @@ final class FinalizeTests: XCTestCase {
         let g = MeetingRecorder.gateStep(micRMS: 0.0005, tapRMS: 0.0005, currentGain: 1)
         XCTAssertEqual(g, 1.0, accuracy: 0.001)
     }
+
+    // MARK: - Mic / tap disambiguation
+
+    func testTapChannelCountNeverMatchesTheMic() {
+        XCTAssertEqual(MeetingRecorder.tapChannelCount(forMicStreams: [1]), 2, "mono mic → stereo tap")
+        XCTAssertEqual(MeetingRecorder.tapChannelCount(forMicStreams: [2]), 1, "stereo mic → mono tap")
+        XCTAssertEqual(MeetingRecorder.tapChannelCount(forMicStreams: [9]), 2, "9-channel wide-range mic → stereo tap")
+        XCTAssertEqual(MeetingRecorder.tapChannelCount(forMicStreams: []), 2, "unknown mic → default stereo")
+        XCTAssertEqual(MeetingRecorder.tapChannelCount(forMicStreams: [1, 2]), 2, "both counts in use → default, position decides")
+    }
+
+    func testTapBufferIndexFollowsChannelCountNotPosition() {
+        XCTAssertEqual(MeetingRecorder.tapBufferIndex(channelCounts: [1, 2], tapChannels: 2), 1)
+        XCTAssertEqual(MeetingRecorder.tapBufferIndex(channelCounts: [2, 1], tapChannels: 2), 0, "tap first must not be mistaken for the mic")
+        XCTAssertEqual(MeetingRecorder.tapBufferIndex(channelCounts: [2, 1], tapChannels: 1), 1, "stereo mic + mono tap")
+        XCTAssertEqual(MeetingRecorder.tapBufferIndex(channelCounts: [1, 2, 1], tapChannels: 2), 1, "two mic streams around the tap")
+        XCTAssertNil(MeetingRecorder.tapBufferIndex(channelCounts: [2, 2], tapChannels: 2), "stereo mic + stereo tap is ambiguous")
+        XCTAssertNil(MeetingRecorder.tapBufferIndex(channelCounts: [1, 2, 2], tapChannels: 2), "mono+stereo mic + stereo tap is ambiguous")
+    }
 }
 
 extension FinalizeTests {

@@ -201,19 +201,31 @@ enum AudioInputDevices {
     }
 
     private static func channels(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> Int {
+        streamChannelCounts(id, scope: scope).reduce(0, +)
+    }
+
+    /// Channel count of every input stream of a device, in buffer-list
+    /// order — the layout an aggregate built on the device hands to its IO
+    /// callback, one buffer per stream. `MeetingRecorder` uses it to pick a
+    /// tap channel count the microphone doesn't use.
+    static func inputStreamChannelCounts(_ id: AudioDeviceID) -> [Int] {
+        streamChannelCounts(id, scope: kAudioDevicePropertyScopeInput)
+    }
+
+    private static func streamChannelCounts(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> [Int] {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,
             mScope: scope,
             mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0
-        else { return 0 }
+        else { return [] }
         let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 16)
         defer { raw.deallocate() }
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return 0 }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return [] }
         let lists = UnsafeMutableAudioBufferListPointer(
             raw.assumingMemoryBound(to: AudioBufferList.self))
-        return lists.reduce(0) { $0 + Int($1.mNumberChannels) }
+        return lists.map { Int($0.mNumberChannels) }
     }
 
     private static func string(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> String? {

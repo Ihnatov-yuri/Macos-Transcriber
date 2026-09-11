@@ -285,9 +285,60 @@ private struct ModelRow: View {
 
 struct RecorderSettingsTab: View {
     @State private var settings = RecorderSettings.shared
+    @State private var devices: [AudioInputDevices.Device] = []
+    @State private var systemDefault: AudioInputDevices.Device?
+    @State private var watcher = AudioInputDevices.Watcher()
+
+    /// The device that would actually be used right now, for the caption
+    /// under the picker and for the Bluetooth warning.
+    private var effective: AudioInputDevices.Device? {
+        AudioInputDevices.effective(uid: settings.inputDeviceUID)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppMetric.m) {
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Microphone", selection: Binding(
+                    get: { settings.inputDeviceUID ?? "" },
+                    set: { settings.inputDeviceUID = $0.isEmpty ? nil : $0 }
+                )) {
+                    Text(systemDefault.map { "System default — \($0.name)" } ?? "System default")
+                        .tag("")
+                    Divider()
+                    ForEach(devices) { device in
+                        Text(device.isBluetooth ? "\(device.name) (Bluetooth)" : device.name)
+                            .tag(device.uid)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 420, alignment: .leading)
+
+                if settings.inputDeviceUID != nil, AudioInputDevices.resolve(uid: settings.inputDeviceUID) == nil {
+                    Text("That microphone isn't connected — recording falls back to the system default until it comes back.")
+                        .font(AppFont.inter(11))
+                        .foregroundStyle(AppColor.inkSoft)
+                } else if effective?.isBluetooth == true {
+                    Text("Recording from a Bluetooth mic drops that link to hands-free — mono, 16 kHz, for its playback too — for as long as capture is open.")
+                        .font(AppFont.inter(11))
+                        .foregroundStyle(AppColor.inkSoft)
+                } else if AudioInputDevices.captureWouldDisturbBluetooth(uid: settings.inputDeviceUID) {
+                    Text("This mic has no output channels, so macOS still opens the system default input alongside it — and that default is Bluetooth, which drops to hands-free while recording. Nothing is opened when the app is just sitting there. Setting the system input to this mic too avoids it entirely.")
+                        .font(AppFont.inter(11))
+                        .foregroundStyle(AppColor.inkSoft)
+                } else {
+                    Text("Used for dictation, plain recordings and the meeting recorder.")
+                        .font(AppFont.inter(11))
+                        .foregroundStyle(AppColor.inkSoft)
+                }
+            }
+            .onAppear {
+                refreshDevices()
+                watcher.start { refreshDevices() }
+            }
+            .onDisappear { watcher.stop() }
+
+            Divider().frame(maxWidth: 520)
+
             Text("Apple's voice-processing audio unit cleans up the input the same way FaceTime / Voice Memos do — echo cancellation, spectral noise suppression, AGC. Free and very effective.")
                 .font(AppFont.inter(12))
                 .foregroundStyle(AppColor.inkSoft)
@@ -320,6 +371,11 @@ struct RecorderSettingsTab: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func refreshDevices() {
+        devices = AudioInputDevices.available()
+        systemDefault = AudioInputDevices.systemDefault()
     }
 }
 

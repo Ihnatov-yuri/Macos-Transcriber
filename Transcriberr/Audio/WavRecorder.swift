@@ -158,6 +158,11 @@ final class WavRecorder: @unchecked Sendable {
 
         // Some macOS versions throw on `engine.inputNode` itself when no
         // input device is available. Trap that too.
+        // Honour the microphone chosen in Settings → Audio Input. Must land
+        // BEFORE `engine.inputNode` — see `AudioInputDevices.apply`; touching
+        // the input node first opens the system default whatever we ask for
+        // afterwards.
+        AudioInputDevices.apply(uid: RecorderSettings.shared.inputDeviceUID, to: engine)
         var grabbedInput: AVAudioInputNode?
         do {
             try ExceptionTrap.run { grabbedInput = self.engine.inputNode }

@@ -25,7 +25,11 @@ final class UtteranceCapture: @unchecked Sendable {
     private(set) var peakHistory: [Float] = Array(repeating: 0, count: 48)
     private(set) var elapsedSeconds: Double = 0
 
-    private let engine = AVAudioEngine()
+    /// `var`, not `let`: an AVAudioEngine cannot let go of an input device
+    /// once its input node has been used — Apple's own answer to that is to
+    /// throw the engine away and build another. Which is the only way to hand
+    /// a Bluetooth headset back its stereo profile after a dictated sentence.
+    private var engine = AVAudioEngine()
     private let ioQueue = DispatchQueue(label: "UtteranceCapture.io", qos: .userInitiated)
     private var converter: AVAudioConverter?
     private var pendingInputs: [AVAudioPCMBuffer] = []
@@ -98,6 +102,17 @@ final class UtteranceCapture: @unchecked Sendable {
     @MainActor
     func prewarm() {
         guard !isRunning, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+        // Never hold a Bluetooth microphone open just to be ready. Opening
+        // it drops the link to the hands-free profile — mono, 16 kHz, for
+        // that device's PLAYBACK too — and it stays there as long as the
+        // input is open, which for a prewarm means the whole session. The
+        // user hears their soundbar go wrong and has no way to connect it to
+        // an app they only left running. Same mistake as keeping the
+        // voice-processing unit warm (v3.2.1), in a different costume.
+        guard Self.captureDisturbsBluetooth() == false else {
+            AppLog.info("dictation", "prewarm skipped — opening capture would drop a Bluetooth link to hands-free")
+            return
+        }
         let t0 = Date()
         do {
             try configureInput()
@@ -108,11 +123,21 @@ final class UtteranceCapture: @unchecked Sendable {
         }
     }
 
+    /// Whether starting capture would put a Bluetooth link into hands-free
+    /// mode — see `AudioInputDevices.captureWouldDisturbBluetooth`.
+    static func captureDisturbsBluetooth() -> Bool {
+        AudioInputDevices.captureWouldDisturbBluetooth(uid: RecorderSettings.shared.inputDeviceUID)
+    }
+
     /// Grab the input node (raw — voice processing is handled by
     /// `setVoiceProcessing(_:)` at session boundaries only).
     @MainActor
     @discardableResult
     private func configureInput() throws -> AVAudioInputNode {
+        // Chosen microphone FIRST — see `AudioInputDevices.apply`. Touching
+        // `inputNode` before this opens whatever macOS calls the default
+        // input, which is exactly what we are trying not to do.
+        AudioInputDevices.apply(uid: RecorderSettings.shared.inputDeviceUID, to: engine)
         var grabbedInput: AVAudioInputNode?
         do {
             try ExceptionTrap.run { grabbedInput = self.engine.inputNode }
@@ -293,12 +318,35 @@ final class UtteranceCapture: @unchecked Sendable {
                                         Double(out.count) / Self.sampleRate, calls, frames,
                                         wasRunning ? "running" : "stopped"))
         // Tear the voice-processing unit down so other apps get their
-        // volume back, then keep the raw graph warm for the next passage.
+        // volume back, then keep the raw graph warm for the next passage —
+        // except on Bluetooth, where staying warm means the link never climbs
+        // back out of hands-free mode after a single dictated sentence.
         if voiceProcessingActive, let input = try? configureInput() {
             setVoiceProcessing(false, input: input)
         }
-        try? ExceptionTrap.run { self.engine.prepare() }
+        if Self.captureDisturbsBluetooth() {
+            AppLog.info("dictation", "releasing the Bluetooth input — rebuilding the engine instead of keeping it warm")
+            releaseEngine()
+        } else {
+            try? ExceptionTrap.run { self.engine.prepare() }
+        }
         return out
+    }
+
+    /// Drop the engine and build a fresh one, which is the only way to make
+    /// the input device close: `stop()` leaves it open, `reset()` leaves it
+    /// open, and there is no API to disable an input node that has been used.
+    /// Costs the next session a cold start (~0.15 s for the raw graph), which
+    /// is the right trade against holding someone's headphones in hands-free
+    /// mode indefinitely.
+    @MainActor
+    private func releaseEngine() {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
+        try? ExceptionTrap.run { self.engine.stop() }
+        engine = AVAudioEngine()
     }
 
     /// Copy of the audio buffered so far (live preview) — nothing is consumed.

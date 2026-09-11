@@ -39,11 +39,24 @@ final class RecorderSettings: @unchecked Sendable {
         static let noiseSuppression = "recorder.noiseSuppression"
         static let preprocessImports = "recorder.preprocessImports"
         static let micSensitivity = "recorder.micSensitivity"
+        static let inputDeviceUID = "recorder.inputDeviceUID"
     }
 
     /// Input sensitivity for transcription. Default `.auto`.
     var micSensitivity: MicSensitivity {
         didSet { defaults.set(micSensitivity.rawValue, forKey: Key.micSensitivity) }
+    }
+
+    /// Which microphone to capture from — dictation, plain recordings and the
+    /// meeting aggregate all read this. `nil` means "whatever macOS calls the
+    /// default input", which is the old behaviour and stays the default.
+    /// Stored as a device UID, so it survives reboots and re-plugging, and
+    /// resolves back to nothing when the device is gone.
+    var inputDeviceUID: String? {
+        didSet {
+            if let inputDeviceUID { defaults.set(inputDeviceUID, forKey: Key.inputDeviceUID) }
+            else { defaults.removeObject(forKey: Key.inputDeviceUID) }
+        }
     }
 
     /// Apply Apple's voice-processing audio unit (echo cancel + noise
@@ -64,6 +77,7 @@ final class RecorderSettings: @unchecked Sendable {
         // config we care about. The setting is opt-in in Settings → Audio Input.
         noiseSuppression = (defaults.object(forKey: Key.noiseSuppression) as? Bool) ?? false
         preprocessImports = (defaults.object(forKey: Key.preprocessImports) as? Bool) ?? false
+        inputDeviceUID = defaults.string(forKey: Key.inputDeviceUID)
         micSensitivity = (defaults.string(forKey: Key.micSensitivity)
             .flatMap(MicSensitivity.init(rawValue:))) ?? .auto
     }

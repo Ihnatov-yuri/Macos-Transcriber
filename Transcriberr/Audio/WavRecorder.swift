@@ -85,9 +85,18 @@ final class WavRecorder: @unchecked Sendable {
     /// otherwise live transcription silently stops working from the second
     /// recording of the app session onward (yields into a finished
     /// continuation are just dropped, no error).
+
+    /// Live captions consume these 5-second chunks in real time; if the
+    /// consumer falls behind (a file job holding the inference gate, a slow
+    /// engine), an unbounded stream grew ~320 KB per chunk for the whole
+    /// session and the captions fell further and further behind the audio.
+    /// Dropping the oldest backlog keeps captions near the live edge — the
+    /// transcript of record comes from the file, not from this feed.
+    static let liveChunkBacklog = 8
+
     private func makeChunkStream() {
         var continuation: AsyncStream<Chunk>.Continuation!
-        self.chunks = AsyncStream<Chunk> { continuation = $0 }
+        self.chunks = AsyncStream<Chunk>(bufferingPolicy: .bufferingNewest(Self.liveChunkBacklog)) { continuation = $0 }
         self.chunkContinuation = continuation
     }
 
@@ -186,6 +195,18 @@ final class WavRecorder: @unchecked Sendable {
         // (15 dB by default). It is disabled again in `stop()` — leaving it
         // alive between recordings kept the whole Mac quiet — and capped at
         // the mildest ducking level macOS offers (-4 dB) while recording.
+        // Every `throw` below this point used to leave the voice-processing
+        // unit alive on the input node — and `stop()` is the only other place
+        // that disables it, which a failed start never reaches. That left
+        // every other app on the Mac ducked by 15 dB for the rest of the
+        // session, with no way back short of quitting: the exact v3.2.1
+        // landmine, reachable through any start failure (device busy, mic
+        // unplugged between resolve and start, bad format).
+        var startedCleanly = false
+        defer {
+            if !startedCleanly { releaseVoiceProcessing() }
+        }
+
         if RecorderSettings.shared.noiseSuppression {
             let t0 = Date()
             var toggleError: Error?
@@ -333,7 +354,9 @@ final class WavRecorder: @unchecked Sendable {
         }
 
         AppLog.info("recorder", "started → \(url.path)")
+        openFileURL = url
         state = .recording(file: url)
+        startedCleanly = true
         startTickTask()
     }
 
@@ -369,12 +392,27 @@ final class WavRecorder: @unchecked Sendable {
         }
     }
 
+    /// The file the current session is writing, kept outside `state` so a
+    /// `.failed` transition can't lose track of audio already on disk.
+    private var openFileURL: URL?
+
     @discardableResult
     func stop() async throws -> URL? {
         let url: URL?
         switch state {
-        case .recording(let u), .paused(let u): url = u
-        default: return nil
+        case .recording(let u), .paused(let u):
+            url = u
+        case .failed:
+            // A failed RESUME (mic unplugged while paused) left the UI still
+            // showing RECORDING, and Stop then returned here before the
+            // engine stop, the tap removal, the file close and the voice
+            // processing release — so the mic stayed open, the duck stayed
+            // on, and everything already recorded was silently thrown away.
+            guard let open = openFileURL else { return nil }
+            AppLog.warn("recorder", "stopping after a failed state — salvaging \(open.lastPathComponent)")
+            url = open
+        default:
+            return nil
         }
 
         // Wrapped: engine.stop() and inputNode.removeTap can both raise
@@ -400,6 +438,7 @@ final class WavRecorder: @unchecked Sendable {
         chunkContinuation?.finish()
         releaseVoiceProcessing()
         AppLog.info("recorder", "stopped: \(written) samples (\(String(format: "%.2f", duration))s) → \(url?.path ?? "(no url)")")
+        openFileURL = nil
         if let url { state = .saved(file: url, durationSeconds: duration) }
         return url
     }

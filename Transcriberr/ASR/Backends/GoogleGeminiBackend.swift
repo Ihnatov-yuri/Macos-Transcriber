@@ -80,7 +80,15 @@ actor GoogleGeminiBackend: ASRBackend {
         let (data, resp) = try await URLSession.shared.data(for: req)
         try ensureOK(resp, data: data)
 
-        return parseFirstText(from: data) ?? ""
+        // A 200 with no text part is a REFUSAL, not an empty chunk —
+        // finishReason SAFETY or MAX_TOKENS returns exactly this. Swallowing
+        // it as "" made the runner record a chunk that produced no text and
+        // the run still report success, so the audio vanished silently.
+        guard let text = parseFirstText(from: data) else {
+            throw ASRError.backendUnavailable(
+                reason: "Gemini returned no text for this chunk (blocked or truncated response).")
+        }
+        return text
     }
 
     func generateText(

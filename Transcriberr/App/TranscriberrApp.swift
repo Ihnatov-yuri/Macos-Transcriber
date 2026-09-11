@@ -10,6 +10,11 @@ struct TranscriberrApp: App {
         FontLoader.registerBundledFonts()
         AppLog.bootBanner()
         AppLog.info("app", "log file: \(AppLog.logFileURL.path)")
+        // Transcript backups are written off the caller's thread now; make
+        // sure a quit waits for whatever is still in that queue.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { _ in BackupService.flush() }
         _container = State(initialValue: AppContainer())
     }
 

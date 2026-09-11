@@ -191,13 +191,54 @@ final class UtteranceCapture: @unchecked Sendable {
     @MainActor
     private func handleConfigurationChange() {
         guard isRunning else { return }
-        AppLog.warn("dictation", "audio configuration changed mid-session — restarting engine")
+        AppLog.warn("dictation", "audio configuration changed mid-session — rebuilding tap and restarting")
+        // Restarting alone was not enough. The tap and the converter were
+        // both built from the PREVIOUS native format; after a device switch
+        // (headphones plugged in, mic changed, the voice-processing graph
+        // rebuilding itself) the restart either threw on the format mismatch
+        // — leaving the HUD saying LISTENING while nothing was captured, and
+        // the whole utterance lost to "Nothing heard" — or resampled at the
+        // wrong ratio and produced garbage. Re-read the format and rebuild
+        // both before starting.
+        let input = engine.inputNode
+        var nativeFormat: AVAudioFormat?
+        do {
+            try ExceptionTrap.run { nativeFormat = input.outputFormat(forBus: 0) }
+        } catch {
+            AppLog.error("dictation", "post-change format read failed: \(error.localizedDescription)")
+            return
+        }
+        guard let nativeFormat, nativeFormat.channelCount > 0, nativeFormat.sampleRate > 0,
+              let monoFormat = AVAudioFormat(
+                  commonFormat: .pcmFormatFloat32, sampleRate: nativeFormat.sampleRate,
+                  channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: monoFormat, to: targetFormat)
+        else {
+            AppLog.error("dictation", "no usable input format after configuration change")
+            return
+        }
+        converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
+        converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
+        ioQueue.sync { self.converter = converter }
+        do {
+            try ExceptionTrap.run {
+                input.removeTap(onBus: 0)
+                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buf, _ in
+                    self?.ingest(buffer: buf)
+                }
+            }
+        } catch {
+            AppLog.error("dictation", "tap reinstall failed: \(error.localizedDescription)")
+            return
+        }
         var startError: Error?
         try? ExceptionTrap.run {
             do { try self.engine.start() } catch { startError = error }
         }
         if let startError {
             AppLog.error("dictation", "engine restart failed: \(startError.localizedDescription)")
+        } else {
+            AppLog.info("dictation", "capture resumed at \(Int(nativeFormat.sampleRate)) Hz, \(nativeFormat.channelCount) ch")
         }
     }
 
@@ -233,6 +274,21 @@ final class UtteranceCapture: @unchecked Sendable {
             // Uninitialize the prewarmed graph so the toggle is accepted.
             try? ExceptionTrap.run { self.engine.stop() }
             setVoiceProcessing(true, input: input)
+        }
+        // Every throw below used to leave the voice-processing unit alive.
+        // `stop()` is the only other place that takes it down and it
+        // early-returns on `guard isRunning` — which is set at the very end
+        // of this function — so a failed start (device yanked, input held by
+        // another app, unreadable format) left coreaudiod ducking every
+        // other app by 15 dB for the rest of the app's life, with the
+        // controller only showing a message. That is the v3.2.1 landmine.
+        var startedCleanly = false
+        defer {
+            if !startedCleanly {
+                try? ExceptionTrap.run { self.engine.stop() }
+                try? ExceptionTrap.run { input.removeTap(onBus: 0) }
+                setVoiceProcessing(false, input: input)
+            }
         }
 
         // Read the format AFTER the voice-processing decision: it changes.
@@ -280,6 +336,7 @@ final class UtteranceCapture: @unchecked Sendable {
 
         startedAt = Date()
         isRunning = true
+        startedCleanly = true
         tick = Task { @MainActor [weak self] in
             while let self, self.isRunning {
                 self.elapsedSeconds = Date().timeIntervalSince(self.startedAt)
@@ -347,6 +404,11 @@ final class UtteranceCapture: @unchecked Sendable {
         }
         try? ExceptionTrap.run { self.engine.stop() }
         engine = AVAudioEngine()
+        // The flag describes the OLD input node. A fresh engine's node has no
+        // voice-processing unit, so leaving it true made the `guard` in
+        // `setVoiceProcessing` swallow every later enable — "MIC · FILTERED"
+        // silently off for the rest of the session, with nothing in the log.
+        voiceProcessingActive = false
     }
 
     /// Copy of the audio buffered so far (live preview) — nothing is consumed.

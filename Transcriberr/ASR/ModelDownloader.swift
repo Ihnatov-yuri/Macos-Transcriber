@@ -62,40 +62,49 @@ final class ModelDownloader: @unchecked Sendable {
         let handle = try FileHandle(forWritingTo: temp)
         defer { try? handle.close() }
 
-        let (bytes, response) = try await URLSession.shared.bytes(from: remote)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw NSError(domain: "Transcriberr.ModelDownloader", code: -4,
-                          userInfo: [NSLocalizedDescriptionKey: "Download failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))"])
-        }
-        let total = http.expectedContentLength > 0 ? http.expectedContentLength : entry.sizeBytes
-        var buffer = Data(capacity: 4 << 20)
-        var written: Int64 = 0
-        var lastReport: Int64 = 0
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            buffer.append(byte)
-            if buffer.count >= (4 << 20) {
-                try handle.write(contentsOf: buffer)
-                written += Int64(buffer.count)
-                buffer.removeAll(keepingCapacity: true)
-                if written - lastReport > (64 << 20) {
-                    lastReport = written
-                    let entryID = entry.id
-                    let w = written
-                    Task { @MainActor in
-                        self.progress[entryID] = ProgressInfo(bytesDownloaded: w, totalBytes: total, status: "Downloading…")
-                    }
+        // Delegate-driven, CHUNKED. `URLSession.bytes` hands back an
+        // AsyncSequence of individual UInt8 values: on a 4.9 GB bundle that
+        // is ~5 billion async-iteration steps (plus a `Task.checkCancellation`
+        // and a `Data.append` each), which made the download CPU-bound rather
+        // than network-bound. The delegate delivers whole Data chunks.
+        let entryID = entry.id
+        let fallbackTotal = entry.sizeBytes
+        let written: Int64
+        // One UI hop per 16 MB, not per network chunk.
+        let reported = ByteCounter()
+        do {
+            written = try await StreamingDownload(handle: handle) { [weak self] got, expected in
+                guard reported.shouldReport(got, every: 16 << 20) else { return }
+                let total = expected > 0 ? expected : fallbackTotal
+                Task { @MainActor in
+                    self?.progress[entryID] = ProgressInfo(
+                        bytesDownloaded: got, totalBytes: total, status: "Downloading…")
                 }
-            }
+            }.run(url: remote)
+        } catch {
+            // Every failure used to leave the Settings → Models row showing a
+            // frozen "Downloading…" bar forever: only `isDownloading` was
+            // cleaned up, never the status.
+            try? handle.close()
+            try? FileManager.default.removeItem(at: temp)
+            let cancelled = error is CancellationError || (error as NSError).code == NSURLErrorCancelled
+            progress[entry.id] = ProgressInfo(
+                bytesDownloaded: 0, totalBytes: entry.sizeBytes,
+                status: cancelled ? "Cancelled." : "Failed: \(error.localizedDescription)")
+            AppLog.error("models", "direct download failed for \(entry.id): \(error.localizedDescription)")
+            throw error
         }
-        if !buffer.isEmpty { try handle.write(contentsOf: buffer); written += Int64(buffer.count) }
         try handle.close()
         if Task.isCancelled {
             try? FileManager.default.removeItem(at: temp)
+            progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: "Cancelled.")
             throw CancellationError()
         }
         try FileManager.default.moveItem(at: temp, to: target)
-        progress[entry.id] = ProgressInfo(bytesDownloaded: written, totalBytes: total, status: "Downloaded.")
+        progress[entry.id] = ProgressInfo(
+            bytesDownloaded: written,
+            totalBytes: written > 0 ? written : entry.sizeBytes,
+            status: "Downloaded.")
         AppLog.info("models", "direct download done: \(target.lastPathComponent) (\(written) bytes)")
         return dir
     }
@@ -164,4 +173,114 @@ final class ModelDownloader: @unchecked Sendable {
     }
 
     // MARK: - Internals
+}
+
+/// One streaming HTTP download into an open file handle, with progress.
+/// A `URLSessionDataDelegate` rather than `URLSession.bytes` because the
+/// latter iterates one byte at a time (see the call site), and a download
+/// task rather than an in-memory `data(from:)` because these bundles are
+/// multi-gigabyte.
+private final class StreamingDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let handle: FileHandle
+    private let onProgress: @Sendable (Int64, Int64) -> Void
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<Int64, Error>?
+    private var settled = false
+    private var pending: Result<Int64, Error>?
+    private var session: URLSession?
+    private var task: URLSessionDataTask?
+    private var written: Int64 = 0
+    private var expected: Int64 = 0
+
+    init(handle: FileHandle, onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.handle = handle
+        self.onProgress = onProgress
+    }
+
+    func run(url: URL) async throws -> Int64 {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Int64, Error>) in
+                lock.lock()
+                if let p = pending {
+                    pending = nil
+                    lock.unlock()
+                    c.resume(with: p)
+                    return
+                }
+                cont = c
+                let s = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+                session = s
+                let t = s.dataTask(with: url)
+                task = t
+                lock.unlock()
+                t.resume()
+            }
+        } onCancel: {
+            lock.lock()
+            let t = task
+            lock.unlock()
+            t?.cancel()
+        }
+    }
+
+    private func settle(_ result: Result<Int64, Error>) {
+        lock.lock()
+        if settled { lock.unlock(); return }
+        settled = true
+        let c = cont
+        cont = nil
+        if c == nil { pending = result }
+        let s = session
+        lock.unlock()
+        s?.finishTasksAndInvalidate()
+        c?.resume(with: result)
+    }
+
+    func urlSession(
+        _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else {
+            completionHandler(.cancel)
+            settle(.failure(NSError(
+                domain: "Transcriberr.ModelDownloader", code: -4,
+                userInfo: [NSLocalizedDescriptionKey: "Download failed (HTTP \(code))"])))
+            return
+        }
+        expected = response.expectedContentLength
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        do {
+            try handle.write(contentsOf: data)
+            written += Int64(data.count)
+            onProgress(written, expected)
+        } catch {
+            dataTask.cancel()
+            settle(.failure(error))
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            settle(.failure(error))
+        } else {
+            settle(.success(written))
+        }
+    }
+}
+
+/// Throttle for download progress reporting — the delegate fires per network
+/// chunk, which is far more often than a progress bar can use.
+private final class ByteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last: Int64 = 0
+    func shouldReport(_ current: Int64, every step: Int64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard current - last >= step else { return false }
+        last = current
+        return true
+    }
 }

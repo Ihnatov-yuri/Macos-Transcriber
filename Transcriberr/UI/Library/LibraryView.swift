@@ -19,6 +19,16 @@ struct LibraryView: View {
     @State private var importError: String?
     @State private var selectedFolderID: UUID?
     @State private var selectedTagID: UUID?
+    /// The debounced query, and the recordings whose TRANSCRIPT matches it.
+    ///
+    /// `filtered` used to walk `rec.segments` for every recording on every
+    /// body evaluation — faulting the entire segment relationship of the
+    /// entire library. Body re-runs on every keystroke AND on every `@Query`
+    /// invalidation, which during a transcription run is once per chunk, so
+    /// typing in FIND froze per character and got worse while a job streamed.
+    /// One `Segment` predicate fetch per settled query replaces all of it.
+    @State private var appliedQuery = ""
+    @State private var transcriptMatches: Set<UUID> = []
 
     private let listColumnWidth: CGFloat = 380
 
@@ -40,6 +50,23 @@ struct LibraryView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AppColor.paper)
+        }
+        .task(id: query) {
+            let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Settle first: no fetch while the user is still typing.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            guard !q.isEmpty else {
+                appliedQuery = ""
+                transcriptMatches = []
+                return
+            }
+            let descriptor = FetchDescriptor<Segment>(
+                predicate: #Predicate { $0.text.localizedStandardContains(q) }
+            )
+            let hits = (try? context.fetch(descriptor)) ?? []
+            transcriptMatches = Set(hits.compactMap { $0.recording?.id })
+            appliedQuery = q
         }
         .onChange(of: allFolders.map(\.id)) { _, ids in
             if let sel = selectedFolderID, !ids.contains(sel) { selectedFolderID = nil }
@@ -361,11 +388,10 @@ struct LibraryView: View {
         if let tagID = selectedTagID {
             rows = rows.filter { rec in rec.tags.contains { $0.id == tagID } }
         }
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let q = appliedQuery.lowercased()
         guard !q.isEmpty else { return rows }
         return rows.filter { rec in
-            rec.title.lowercased().contains(q)
-            || rec.segments.contains { $0.text.lowercased().contains(q) }
+            rec.title.lowercased().contains(q) || transcriptMatches.contains(rec.id)
         }
     }
 
@@ -416,9 +442,25 @@ struct LibraryView: View {
             }
         }
 
+        // Picking a file that already sits in Recordings (one "Reveal in
+        // Finder" away) used to add a SECOND row on the very same audio —
+        // and both rows then overwrote each other's .txt/.srt/.json sidecars
+        // through TranscriptExporter. Select the row that already owns the
+        // file instead of cloning it.
+        if src.path == dest.path, let existing = all.first(where: { $0.audioPath == dest.path }) {
+            selection = existing
+            return
+        }
+
         do {
             if src.path != dest.path {
-                try FileManager.default.copyItem(at: src, to: dest)
+                // Copying a long recording is hundreds of megabytes; this
+                // method is MainActor-isolated (it's a View method), so the
+                // copy ran on the main thread and froze the window until it
+                // finished.
+                try await Task.detached(priority: .userInitiated) {
+                    try FileManager.default.copyItem(at: src, to: dest)
+                }.value
             }
             let duration = await readDuration(of: dest)
             let title = src.deletingPathExtension().lastPathComponent

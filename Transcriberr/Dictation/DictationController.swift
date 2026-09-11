@@ -253,6 +253,22 @@ final class DictationController: @unchecked Sendable {
 
     @MainActor
     func armHotkey() {
+        // Re-arming mid-press must not strand a live session. Anything can
+        // trigger this while the user is holding the key down — the HOTKEY
+        // pill being cycled in settings, `refreshTrust` on app activation,
+        // either permission poller — and `uninstall()` only resets the
+        // MONITOR's state. The release then never reached `handleHotkey`, so
+        // the phase stayed `.listening` with the HUD up until the 180-second
+        // watchdog fired and dumped the whole recording into the target app.
+        if phase == .listening, settings.mode == .hold || holdSessionActive {
+            AppLog.warn("dictation", "hotkey re-armed during a hold session — cancelling it")
+            cancel(quiet: true)
+        }
+        pressedAt = nil
+        comboUsed = false
+        holdSessionActive = false
+        holdTimer?.cancel()
+        holdTimer = nil
         monitor?.uninstall()
         monitor = nil
         accessibilityTrusted = HotkeyMonitor.isTrusted()
@@ -600,24 +616,44 @@ final class DictationController: @unchecked Sendable {
 
     // MARK: - Pipeline
 
+    /// Everything about the session a passage belongs to, frozen when the
+    /// passage is queued.
+    ///
+    /// `target`, `context`, `activeMode` and `activeTone` are session-global
+    /// and `begin()` overwrites all four the instant a new session starts —
+    /// but a passage deliberately OUTLIVES its session (`canBegin` allows a
+    /// new one while the previous passage is still being recognized, which
+    /// is the normal tap-stop-tap-start rhythm). Reading them from `self`
+    /// later meant a passage dictated into Slack got formatted with the next
+    /// session's mode and tone, prompted with the next session's surrounding
+    /// text, and delivered to the next session's target — landing in the
+    /// scratch pad, or in whatever app the second session was aimed at.
+    private struct Passage {
+        let target: Target
+        let context: DictationContext
+        let mode: DictationSettings.FormatMode
+        let tone: DictationSettings.Tone
+    }
+
     /// Passes run strictly in order (one shared engine, and the text must
     /// arrive in the order it was spoken).
     @MainActor
     private func enqueue(_ samples: [Float], final: Bool) {
         let gen = generation
         let prior = pipelineTail
+        let passage = Passage(target: target, context: context, mode: activeMode, tone: activeTone)
         if !final { pendingPasses += 1 }
         pipelineTail = Task { @MainActor [weak self] in
             await prior?.value
             guard let self else { return }
             defer { if !final { self.pendingPasses = max(0, self.pendingPasses - 1) } }
             guard gen == self.generation else { return }
-            await self.processUtterance(samples, final: final, generation: gen)
+            await self.processUtterance(samples, final: final, generation: gen, passage: passage)
         }
     }
 
     @MainActor
-    private func processUtterance(_ raw: [Float], final: Bool, generation gen: Int) async {
+    private func processUtterance(_ raw: [Float], final: Bool, generation gen: Int, passage: Passage) async {
         let seconds = Double(raw.count) / UtteranceCapture.sampleRate
         let samples = UtteranceCapture.applyGain(raw, sensitivity: RecorderSettings.shared.micSensitivity)
 
@@ -638,7 +674,7 @@ final class DictationController: @unchecked Sendable {
             // Language: the explicit setting, else the language of the text
             // already in the field (a Dutch email keeps getting Dutch).
             var languages = settings.languages
-            if languages.isEmpty, settings.languageFromContext, let lang = context.contextLanguage {
+            if languages.isEmpty, settings.languageFromContext, let lang = passage.context.contextLanguage {
                 languages = [lang]
             }
             let recognized = try await Self.withTimeout(seconds: 60) {
@@ -654,12 +690,12 @@ final class DictationController: @unchecked Sendable {
             AppLog.info("dictation", String(
                 format: "recognized %.1fs → %d chars in %.2fs", seconds, recognized.count,
                 Date().timeIntervalSince(t0)))
-            if settings.spokenCommands, activeMode != .verbatim, DictationText.isScratchOnly(recognized) {
+            if settings.spokenCommands, passage.mode != .verbatim, DictationText.isScratchOnly(recognized) {
                 scratchLastInsertion(final: final)
                 return
             }
             var cleaned: String
-            switch activeMode {
+            switch passage.mode {
             case .verbatim:
                 // Terminals, editors, search boxes: nothing clever, and no
                 // spoken commands (a "new line" in a terminal would execute).
@@ -671,8 +707,8 @@ final class DictationController: @unchecked Sendable {
                     selfCorrections: settings.selfCorrections,
                     vocabulary: settings.applyVocabulary ? vocabularyTerms() : []
                 ))
-                if activeMode == .smart, !cleaned.isEmpty {
-                    cleaned = await polish(cleaned)
+                if passage.mode == .smart, !cleaned.isEmpty {
+                    cleaned = await polish(cleaned, passage: passage)
                 }
             }
             text = cleaned
@@ -691,7 +727,7 @@ final class DictationController: @unchecked Sendable {
         lastText = text
         previewText = ""
         sessionCount += 1
-        let outcome = deliver(text)
+        let outcome = deliver(text, passage: passage)
         suggestNames(from: text)
 
         if settings.keepHistory {
@@ -710,6 +746,8 @@ final class DictationController: @unchecked Sendable {
                 }
             case .copiedOnly:
                 finalMessage("Copied — press ⌘V. Grant Accessibility to auto-insert.")
+            case .appChanged:
+                finalMessage("You switched apps — kept it in the Dictate pad")
             }
         } else if outcome == .copiedOnly {
             // Keep listening, but tell the user once.
@@ -717,13 +755,13 @@ final class DictationController: @unchecked Sendable {
         }
     }
 
-    private enum DeliveryOutcome: Equatable { case pasted, paneAppended, copiedOnly }
+    private enum DeliveryOutcome: Equatable { case pasted, paneAppended, copiedOnly, appChanged }
 
     @MainActor
-    private func deliver(_ text: String) -> DeliveryOutcome {
+    private func deliver(_ text: String, passage: Passage) -> DeliveryOutcome {
         // The user may have come back to the pane mid-session; never paste
         // into our own window when the pane is what's showing.
-        let usePane = target == .pane || (NSApp.isActive && paneVisible)
+        let usePane = passage.target == .pane || (NSApp.isActive && paneVisible)
         if usePane {
             let before = paneText.count
             paneText = DictationText.join(existing: paneText, new: text)
@@ -734,6 +772,22 @@ final class DictationController: @unchecked Sendable {
         if phase == .transcribing {
             phase = .inserting
             updateHUD()
+        }
+        // The app that was in front when the hotkey went down is the app
+        // that gets the text — and nothing checked that until now.
+        // Recognition takes anywhere from a moment to the 45 s polish
+        // timeout, and a ⌘-Tab in between sent the ⌘V somewhere else
+        // entirely: a terminal (where a spoken "new paragraph" then EXECUTES
+        // the line), a password field, somebody else's chat window. The
+        // secure-field and mode decisions were all made for the old app too,
+        // so a passage cleared for a normal field could land in a secure one.
+        if let expected = passage.context.bundleId,
+           let current = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+           current != expected {
+            AppLog.warn("dictation", "target app changed mid-recognition (\(expected) → \(current)) — not pasting")
+            paneText = DictationText.join(existing: paneText, new: text)
+            lastInsertion = nil
+            return .appChanged
         }
         // Context-aware join: look at what's left of the caret when the
         // target app exposes it through Accessibility.
@@ -785,7 +839,7 @@ final class DictationController: @unchecked Sendable {
     // MARK: - Polish (optional Gemma pass)
 
     @MainActor
-    private func polish(_ text: String) async -> String {
+    private func polish(_ text: String, passage: Passage) async -> String {
         let kind = uiPrefs.textEngine.supportsTextGeneration ? uiPrefs.textEngine : .gemmaLiteRT
         if kind == .gemmaLiteRT,
            !ModelCatalog.entries.contains(where: {
@@ -800,13 +854,13 @@ final class DictationController: @unchecked Sendable {
         // Context-aware prompt (app, register, text before the cursor). The
         // user's own prompt text, when customized, is appended as extra
         // instructions so their tweaks still apply.
-        var system = DictationPrompt.system(tone: activeTone, singleLine: context.isSingleLine)
+        var system = DictationPrompt.system(tone: passage.tone, singleLine: passage.context.isSingleLine)
         let custom = settings.polishPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !custom.isEmpty, custom != DictationSettings.defaultPolishPrompt {
             system += "\nAdditional instructions from the user:\n" + custom
         }
         let systemPrompt = system
-        let userPrompt = DictationPrompt.user(passage: text, context: context, vocabulary: vocab)
+        let userPrompt = DictationPrompt.user(passage: text, context: passage.context, vocabulary: vocab)
         do {
             if await !backend.isReady {
                 try await Self.withTimeout(seconds: 120) { try await backend.load(modelPath: nil) }

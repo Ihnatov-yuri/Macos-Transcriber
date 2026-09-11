@@ -261,11 +261,17 @@ final class RecordingRepository: @unchecked Sendable {
         try save(merged)
 
         // Reclaim disk space now that every WAV involved is fully written
-        // AND the recording is safely persisted.
+        // AND the recording is safely persisted. Bracketed with the busy
+        // marker exactly as `split()` does: the compressor DELETES the WAV
+        // the row currently points at, and without the marker a Run pressed
+        // on the fresh merge saw `waitUntilIdle` return instantly and opened
+        // a file that was about to vanish mid-read.
+        await postProcessTracker.markBusy(merged.id)
         let finalURL = await AudioCompressor.compressRecordingFiles(mainURL: url, includeSidecars: true)
         if finalURL != url {
             try? updateAudioPath(finalURL, for: merged)
         }
+        await postProcessTracker.markIdle(merged.id)
 
         // Remap b's SPEAKER_NN keys past a's highest index.
         var maxIdx = -1
@@ -803,12 +809,32 @@ final class RecordingRepository: @unchecked Sendable {
         // Checked against both the relationship array and a store fetch
         // (tolerating a nil-hydrated inverse) — either view seeing the
         // duplicate is enough.
+        //
+        // SEGMENT COUNT FIRST, and pushed into the fetch predicate. This runs
+        // on the main actor at the START of every re-run, and the unfiltered
+        // fetch used to hydrate EVERY version row in the whole store and
+        // JSON-decode all of them — megabytes of decoding for a library of
+        // any size, which is exactly the "app freezes for a moment right
+        // after pressing Run" stall. A version with a different segment count
+        // can never be an identical version, so the count is a free,
+        // conclusive reject that leaves only a handful of rows to decode.
         let recID = recording.persistentModelID
-        let fetched = (try? context.fetch(FetchDescriptor<TranscriptVersion>())) ?? []
-        let dup = recording.versions.contains { decodeVersion($0) == payload }
+        let count = payload.count
+        let descriptor = FetchDescriptor<TranscriptVersion>(
+            predicate: #Predicate { $0.segmentCount == count }
+        )
+        let fetched = (try? context.fetch(descriptor)) ?? []
+        // Owner-scoped, both views. The store view used to also accept any
+        // row whose inverse hydrated as nil, which meant a DIFFERENT
+        // recording's identical transcript counted as "already snapshotted"
+        // — two imports of the same audio, or two runs of the same dictated
+        // phrase, and the second recording silently got no version at all,
+        // leaving healEmptyTranscripts nothing to restore after an
+        // interrupted run. A stray duplicate row is cheap; a missing version
+        // is the only copy of a transcript.
+        let dup = recording.versions.contains { $0.segmentCount == count && decodeVersion($0) == payload }
             || fetched.contains {
-                ($0.recording == nil || $0.recording?.persistentModelID == recID)
-                    && decodeVersion($0) == payload
+                $0.recording?.persistentModelID == recID && decodeVersion($0) == payload
             }
         if dup {
             AppLog.info("repo", "version snapshot skipped — identical version exists")
@@ -888,10 +914,26 @@ final class RecordingRepository: @unchecked Sendable {
     /// two-click cure for the clusterer's last stubborn split.
     func mergeSpeakers(_ from: String, into target: String, in recording: Recording) throws {
         guard from != target else { return }
-        let targetName = storedSpeakerNames(recording)[target]
-            ?? recording.segments.first(where: { $0.speaker == target && $0.speakerName?.isEmpty == false })?.speakerName
+        let stored = storedSpeakerNames(recording)
+        func namedInSegments(_ key: String) -> String? {
+            recording.segments.first {
+                $0.speaker == key && $0.speakerName?.isEmpty == false
+            }?.speakerName
+        }
+        // Fall back to the SOURCE speaker's name when the target has none.
+        // The merge menu is offered in both directions, so "Sarah → merge
+        // into SPEAKER_01" is one click away — and it used to overwrite every
+        // one of Sarah's segments with a nil name and then drop her from the
+        // stored map, erasing a hand-typed name with no way back.
+        let targetName = stored[target] ?? namedInSegments(target)
+            ?? stored[from] ?? namedInSegments(from)
         for seg in recording.segments where seg.speaker == from {
             seg.speaker = target
+        }
+        // Applied to the whole merged group, not just the relabelled half —
+        // otherwise a name rescued from the source speaker would show on her
+        // turns and nowhere else.
+        for seg in recording.segments where seg.speaker == target {
             seg.speakerName = targetName
         }
         var map = storedSpeakerNames(recording)

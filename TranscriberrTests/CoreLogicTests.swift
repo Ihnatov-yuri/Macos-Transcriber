@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import Transcriberr
 
 /// The ship gate: every release must pass this suite first. It covers the
@@ -85,6 +86,41 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertFalse(TranscriptionRunner.nearDuplicate(
             "the budget for next quarter",
             "we should hire two engineers"))
+    }
+
+    /// The guard is for context-echo LINES. With diarization off, a chunk is
+    /// ONE segment covering 28 seconds, and two chunks of a repetitive
+    /// stretch overlap easily enough to cross the threshold — which used to
+    /// delete half a minute of real transcript on a log warning.
+    func testNearDuplicateLeavesWholeChunksAlone() {
+        let words = (1...40).map { "item\($0)" }.joined(separator: " ")
+        XCTAssertFalse(
+            TranscriptionRunner.nearDuplicate(words, words),
+            "a whole-chunk-sized segment must never be dropped as a near-duplicate")
+    }
+
+    // MARK: - Hotkey modifier sides
+
+    /// Left/right twins share a device-independent flag, so the twin used to
+    /// mask the hotkey's release and hold mode ran to its watchdog.
+    func testModifierIsDownSeparatesLeftAndRightTwins() {
+        let leftCommandKey: UInt16 = 55
+        let rightCommandKey: UInt16 = 54
+        let leftBit: UInt64 = 0x08
+        let rightBit: UInt64 = 0x10
+        let shared = UInt64(NSEvent.ModifierFlags.command.rawValue)
+
+        // Right ⌘ released while left ⌘ is still held: shared flag still set.
+        let onlyLeft = shared | leftBit
+        XCTAssertFalse(HotkeyMonitor.modifierIsDown(rawFlags: onlyLeft, keyCode: rightCommandKey))
+        XCTAssertTrue(HotkeyMonitor.modifierIsDown(rawFlags: onlyLeft, keyCode: leftCommandKey))
+
+        let both = shared | leftBit | rightBit
+        XCTAssertTrue(HotkeyMonitor.modifierIsDown(rawFlags: both, keyCode: rightCommandKey))
+
+        // A keyboard that reports no side bits at all still works.
+        XCTAssertTrue(HotkeyMonitor.modifierIsDown(rawFlags: shared, keyCode: rightCommandKey))
+        XCTAssertFalse(HotkeyMonitor.modifierIsDown(rawFlags: 0, keyCode: rightCommandKey))
     }
 
     // MARK: - coalesceBySpeaker

@@ -59,6 +59,10 @@ struct DictationContext: Sendable {
 
     // MARK: - Capture
 
+    /// Per-call Accessibility timeout, in seconds. Long enough for a healthy
+    /// app, short enough that a wedged one can't hold the hotkey.
+    static let axTimeout: Float = 0.25
+
     @MainActor
     static func capture(readText: Bool) -> DictationContext {
         var ctx = DictationContext()
@@ -69,11 +73,19 @@ struct DictationContext: Sendable {
         guard HotkeyMonitor.isTrusted() else { return ctx }
 
         let system = AXUIElementCreateSystemWide()
+        // Cap how long an unresponsive app can hold up the hotkey. These
+        // calls are synchronous and main-actor, they run BEFORE the HUD and
+        // before capture starts, and the default per-call timeout is six
+        // seconds: dictating into a busy Electron app or a beachballing
+        // target froze Transcriberr and swallowed the opening words, because
+        // `capture.start()` was queued behind this on the same actor.
+        AXUIElementSetMessagingTimeout(system, Self.axTimeout)
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
               let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID()
         else { return ctx }
         let element = focusedRef as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, Self.axTimeout)
 
         var roleRef: CFTypeRef?
         if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success {

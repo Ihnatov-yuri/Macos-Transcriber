@@ -12,7 +12,14 @@ import Observation
 /// Streaming Gemma 4 over the recorder's 5-second chunk feed.
 /// Mirror of `asr/LiveTranscriber.kt`. Mutex (`actor`) serializes calls so
 /// a parallel file-transcribe job and the live worker can share one engine.
+/// `@MainActor`: `status` and `lines` are `@Observable` state SwiftUI reads
+/// on the main thread, and `start`/`stop` are nonisolated `async` methods —
+/// which, per SE-0338, run on the cooperative pool even when a view calls
+/// them. So `status` was being written off-main while `lines` was written
+/// on it. Every heavy step in here is an `await` into an actor or a task,
+/// so the isolation costs nothing.
 @Observable
+@MainActor
 final class LiveTranscriber: @unchecked Sendable {
     struct LiveLine: Sendable, Identifiable {
         let id = UUID()

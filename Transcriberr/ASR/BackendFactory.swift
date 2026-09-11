@@ -67,6 +67,15 @@ final class BackendFactory: @unchecked Sendable {
     private let prompts: PromptStore
     private let apiKeys: APIKeyStore
 
+    /// The engine cache is read from several executors at once — the main
+    /// actor (`TranscriptionRunner.runImpl`, `PostProcessor.perform`), the
+    /// cooperative pool (`LiveTranscriber.start`) and the ensemble actor
+    /// (`EnsembleBackend.load` resolving its sub-engines). Two of them
+    /// arriving on a cold cache both saw nil and both built and loaded the
+    /// same CoreML models — double the ANE memory, one instance orphaned —
+    /// and the concurrent writes to the class references were undefined
+    /// behaviour on top.
+    private let cacheLock = NSLock()
     private var sharedParakeet: ParakeetBackend?
     private var sharedParakeetV2: ParakeetBackend?
     private var sharedWhisper: WhisperBackend?
@@ -80,6 +89,15 @@ final class BackendFactory: @unchecked Sendable {
     }
 
     func backend(for kind: Kind) -> ASRBackend {
+        // Cloud backends are stateless per call — no cache, no lock.
+        switch kind {
+        case .openAI:    return OpenAIBackend()
+        case .anthropic: return AnthropicBackend()
+        case .gemini:    return GoogleGeminiBackend()
+        default: break
+        }
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
         switch kind {
         case .parakeet:
             if let b = sharedParakeet { return b }
@@ -106,22 +124,53 @@ final class BackendFactory: @unchecked Sendable {
             let b = EnsembleBackend(factory: self)
             sharedEnsemble = b
             return b
-        case .openAI:    return OpenAIBackend()
-        case .anthropic: return AnthropicBackend()
-        case .gemini:    return GoogleGeminiBackend()
+        case .openAI, .anthropic, .gemini:
+            fatalError("unreachable — cloud kinds returned above")
         }
     }
 
-    func releaseLocalBackends() async {
-        await sharedEnsemble?.release()
+    private func takeLocalBackends() -> (EnsembleBackend?, ParakeetBackend?, ParakeetBackend?, WhisperBackend?, GemmaLiteRTBackend?) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        let taken = (sharedEnsemble, sharedParakeet, sharedParakeetV2, sharedWhisper, sharedLiteRT)
         sharedEnsemble = nil
-        await sharedParakeet?.release()
         sharedParakeet = nil
-        await sharedParakeetV2?.release()
         sharedParakeetV2 = nil
-        await sharedWhisper?.release()
         sharedWhisper = nil
-        await sharedLiteRT?.release()
         sharedLiteRT = nil
+        return taken
+    }
+
+    func releaseLocalBackends() async {
+        let (ens, p3, p2, whisper, litert) = takeLocalBackends()
+        await ens?.release()
+        await p3?.release()
+        await p2?.release()
+        await whisper?.release()
+        await litert?.release()
+    }
+
+    /// Drop the LiteRT engine (and the ensemble that may hold a reference to
+    /// it) while leaving the cheap ANE engines loaded.
+    ///
+    /// Two reasons this has to happen when the queue goes idle. The bundle is
+    /// 3-5 GB of resident memory that nothing else was ever going to reclaim
+    /// — `releaseLocalBackends` has no call site at all. And LiteRT's
+    /// presence latches `InferenceGate.litertActive`, which serializes EVERY
+    /// engine's inference process-wide; leaving it latched turned the
+    /// documented three-chunks-in-flight pipeline into a single file for the
+    /// rest of the session, for Parakeet runs and live captions that never
+    /// touched Gemma at all.
+    func releaseLiteRT() async {
+        cacheLock.lock()
+        let ens = sharedEnsemble
+        let litert = sharedLiteRT
+        sharedEnsemble = nil
+        sharedLiteRT = nil
+        cacheLock.unlock()
+        guard litert != nil || ens != nil else { return }
+        await ens?.release()
+        await litert?.release()
+        AppLog.info("factory", "released LiteRT engine and lifted the inference gate")
     }
 }

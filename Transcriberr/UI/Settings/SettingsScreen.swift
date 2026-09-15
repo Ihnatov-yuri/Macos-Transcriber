@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// In-window settings (selected from the sidebar). Wraps the existing
-/// macOS-Settings-scene tabs in the editorial Sheet so the look stays
-/// consistent with the rest of the app.
+/// macOS-Settings-scene tabs in Sheet so the look stays consistent with
+/// the rest of the app.
 struct SettingsScreen: View {
     @Environment(AppContainer.self) private var container
 
@@ -11,7 +11,7 @@ struct SettingsScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     BrandStrip {
-                        Text("ON-DEVICE").monoLabel(9, color: AppColor.inkMuted)
+                        Text("On-device").uiLabel(9, color: AppColor.ink3)
                     }
                     .padding(.horizontal, AppMetric.sheetPadding)
                     .padding(.top, AppMetric.sheetVerticalPadding)
@@ -20,7 +20,7 @@ struct SettingsScreen: View {
                     InkRule()
                     Spacer().frame(height: AppMetric.l)
 
-                    SectionIndex(4, "SETTINGS",
+                    SectionIndex(4, "Settings",
                                  summary: "Per-recording overrides live in the Library detail Run sheet. Everything here is global defaults.")
                         .padding(.horizontal, AppMetric.sheetPadding)
 
@@ -28,50 +28,51 @@ struct SettingsScreen: View {
 
                     // Embedded Form/List tabs need explicit heights (they
                     // collapse inside a ScrollView) and hidden system
-                    // backgrounds (white grouped chrome clashes with paper).
-                    sectionBlock("A", "AUDIO INPUT") {
+                    // backgrounds (white grouped chrome clashes with the
+                    // surrounding base fill).
+                    sectionBlock("A", "Audio input") {
                         RecorderSettingsTab()
                     }
 
-                    sectionBlock("B", "ENGINES") {
+                    sectionBlock("B", "Engines") {
                         EnginesSettingsTab()
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 430)
                     }
 
-                    sectionBlock("C", "MODELS") {
+                    sectionBlock("C", "Models") {
                         ModelsSettingsTab()
                     }
 
-                    sectionBlock("D", "POST-PROCESSING PRESETS") {
+                    sectionBlock("D", "Post-processing presets") {
                         PresetsSettingsTab()
                     }
 
-                    sectionBlock("E", "STYLE & VOCABULARY") {
+                    sectionBlock("E", "Style & vocabulary") {
                         StyleSettingsTab()
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 900)
                     }
 
-                    sectionBlock("F", "SNIPPETS") {
+                    sectionBlock("F", "Snippets") {
                         SnippetsSettingsTab()
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 260)
                     }
 
-                    sectionBlock("G", "GEMMA PROMPTS") {
+                    sectionBlock("G", "Gemma prompts") {
                         PromptsSettingsTab()
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 480)
                     }
 
-                    sectionBlock("H", "API KEYS") {
+                    sectionBlock("H", "API keys") {
                         APIKeysSettingsTab()
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 480)
                     }
 
-                    sectionBlock("I", "DICTATION") {
+                    sectionBlock("I", "Dictation") {
                         DictationSettingsTab()
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 760)
@@ -93,9 +94,9 @@ struct SettingsScreen: View {
             InkRule()
             HStack(spacing: 0) {
                 Text("\(letter) · ")
-                    .monoLabel(11, color: AppColor.accent)
+                    .uiLabel(11, color: AppColor.accentOnLight)
                 Text(label)
-                    .monoLabel(11, color: AppColor.ink)
+                    .uiLabel(11)
                 Spacer()
             }
             .padding(.horizontal, AppMetric.sheetPadding)

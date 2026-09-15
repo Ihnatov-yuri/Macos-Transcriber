@@ -25,36 +25,29 @@ struct SpeakerRenameSheet: View {
         Sheet {
             VStack(alignment: .leading, spacing: AppMetric.l) {
                 HStack {
-                    Text("RENAME SPEAKER").monoLabel(11, color: AppColor.ink)
+                    Text("Rename speaker").uiLabel(11)
                     Spacer()
-                    Text(speakerKey.uppercased()).monoLabel(9, color: AppColor.inkSoft)
+                    Text(speakerKey).uiLabel(9, color: AppColor.ink2)
                 }
                 Hairline()
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("DISPLAY NAME").monoLabel(9, color: AppColor.inkSoft)
+                    Text("Display name").uiLabel(9, color: AppColor.ink2)
                     TextField("e.g. Sarah", text: $name)
                         .textFieldStyle(.plain)
-                        .font(AppFont.inter(15))
+                        .font(AppFont.text(15))
                         .foregroundStyle(AppColor.ink)
-                        .tint(AppColor.accent)
+                        .tint(AppColor.accentOnLight)
                     Hairline()
                 }
                 Spacer()
                 HStack {
-                    TapButton { onClose() } label: { Text("Cancel") }
-
-                        .foregroundStyle(AppColor.inkSoft)
-                        .font(AppFont.mono(11))
-                    Spacer()
-                    TapButton {
-                        save()
-                    } label: {
-                        Text("Save").monoLabel(11, color: AppColor.paper)
-                            .padding(.horizontal, AppMetric.l)
-                            .padding(.vertical, AppMetric.s)
-                            .background(AppColor.ink)
+                    TapButton { onClose() } label: {
+                        LitButtonChrome(.ghost) { Text("Cancel") }
                     }
-
+                    Spacer()
+                    TapButton { save() } label: {
+                        LitButtonChrome(.primary) { Text("Save") }
+                    }
                 }
             }
             .padding(AppMetric.l)
@@ -83,23 +76,22 @@ struct SegmentEditSheet: View {
         Sheet {
             VStack(alignment: .leading, spacing: AppMetric.l) {
                 HStack {
-                    Text("EDIT SEGMENT").monoLabel(11, color: AppColor.ink)
+                    Text("Edit segment").uiLabel(11)
                     Spacer()
-                    Text(timestamp(segment.startSeconds)).monoLabel(9, color: AppColor.inkSoft)
+                    Text(timestamp(segment.startSeconds)).uiLabel(9, color: AppColor.ink2)
                 }
                 Hairline()
                 TextEditor(text: $text)
-                    .font(AppFont.inter(15))
+                    .font(AppFont.text(15))
                     .foregroundStyle(AppColor.ink)
                     .frame(minHeight: 140)
                     .scrollContentBackground(.hidden)
-                    .background(AppColor.paperEdge)
+                    .background(AppColor.baseDeep)
                 Spacer()
                 HStack {
-                    TapButton { dismiss() } label: { Text("Cancel") }
-
-                        .foregroundStyle(AppColor.inkSoft)
-                        .font(AppFont.mono(11))
+                    TapButton { dismiss() } label: {
+                        LitButtonChrome(.ghost) { Text("Cancel") }
+                    }
                     Spacer()
                     TapButton {
                         // A run that reaches its first chunk (or finishes and
@@ -122,12 +114,8 @@ struct SegmentEditSheet: View {
                         }
                         dismiss()
                     } label: {
-                        Text("Save").monoLabel(11, color: AppColor.paper)
-                            .padding(.horizontal, AppMetric.l)
-                            .padding(.vertical, AppMetric.s)
-                            .background(AppColor.ink)
+                        LitButtonChrome(.primary) { Text("Save") }
                     }
-
                 }
             }
             .padding(AppMetric.l)
@@ -173,47 +161,44 @@ struct SplitRecordingSheet: View {
         Sheet {
             VStack(alignment: .leading, spacing: AppMetric.l) {
                 HStack {
-                    Text("SPLIT RECORDING").monoLabel(11, color: AppColor.ink)
+                    Text("Split recording").uiLabel(11)
                     Spacer()
-                    Text("LENGTH \(Self.format(recording.durationSeconds))").monoLabel(9, color: AppColor.inkSoft)
+                    Text("Length \(Self.format(recording.durationSeconds))").uiLabel(9, color: AppColor.ink2)
                 }
                 Hairline()
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("SPLIT AT (MM:SS)").monoLabel(9, color: AppColor.inkSoft)
+                    Text("Split at (mm:ss)").uiLabel(9, color: AppColor.ink2)
                     TextField("0:00", text: $timeText)
                         .textFieldStyle(.plain)
-                        .font(AppFont.inter(15))
+                        .font(AppFont.text(15))
                         .foregroundStyle(AppColor.ink)
-                        .tint(AppColor.accent)
+                        .tint(AppColor.accentOnLight)
                         .disabled(isWorking)
                     Hairline()
                 }
                 Text("Defaults to the player's current position. Produces two new recordings; the original is kept until you choose to delete it.")
-                    .font(AppFont.inter(12))
-                    .foregroundStyle(AppColor.inkMuted)
+                    .font(AppFont.text(12))
+                    .foregroundStyle(AppColor.ink3)
                 if let error {
-                    Text(error.uppercased()).monoLabel(9, color: AppColor.accent)
+                    Text(error).uiLabel(9, color: AppColor.statusError)
                 }
                 Spacer()
                 HStack {
-                    TapButton { onDone(false) } label: { Text("Cancel") }
-                        .foregroundStyle(AppColor.inkSoft)
-                        .font(AppFont.mono(11))
-                        // Once the split is running it can't actually be
-                        // stopped (the Task isn't cancellable mid-flight) —
-                        // disabling Cancel here avoids dismissing the sheet
-                        // while it keeps running unattended in the
-                        // background and then surprises the user with a
-                        // delete-confirmation alert for an action they
-                        // thought they'd called off.
-                        .allowsHitTesting(!isWorking)
-                        .opacity(isWorking ? 0.4 : 1)
+                    TapButton { onDone(false) } label: {
+                        LitButtonChrome(.ghost) { Text("Cancel") }
+                    }
+                    // Once the split is running it can't actually be
+                    // stopped (the Task isn't cancellable mid-flight) —
+                    // disabling Cancel here avoids dismissing the sheet
+                    // while it keeps running unattended in the
+                    // background and then surprises the user with a
+                    // delete-confirmation alert for an action they
+                    // thought they'd called off.
+                    .allowsHitTesting(!isWorking)
+                    .opacity(isWorking ? 0.4 : 1)
                     Spacer()
                     TapButton { split() } label: {
-                        Text(isWorking ? "SPLITTING…" : "SPLIT").monoLabel(11, color: AppColor.paper)
-                            .padding(.horizontal, AppMetric.l)
-                            .padding(.vertical, AppMetric.s)
-                            .background(AppColor.ink)
+                        LitButtonChrome(.primary) { Text(isWorking ? "Splitting…" : "Split") }
                     }
                     .allowsHitTesting(!isWorking)
                 }

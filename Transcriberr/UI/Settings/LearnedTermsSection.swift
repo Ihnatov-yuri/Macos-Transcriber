@@ -16,7 +16,7 @@ struct LearnedTermsSection: View {
                 Text(s.learnedAt == nil
                      ? "Scanning the library…"
                      : "Nothing new — every recurring name is already in your vocabulary.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             } else {
                 ForEach(terms.prefix(40)) { term in
                     HStack {
@@ -24,25 +24,29 @@ struct LearnedTermsSection: View {
                         Text("\(term.recordings) recordings · \(term.occurrences)×")
                             .font(.caption2).foregroundStyle(.secondary)
                         Spacer()
-                        Button("Add") { c.addToVocabulary(term.spelling) }
-                            .buttonStyle(.borderless)
-                        Button {
-                            c.dismissSuggestion(term.spelling)
-                        } label: { Image(systemName: "xmark.circle") }
-                            .buttonStyle(.borderless)
+                        TapButton { c.addToVocabulary(term.spelling) } label: {
+                            LitButtonChrome(.ghost, compact: true) { Text("Add") }
+                        }
+                        TapButton { c.dismissSuggestion(term.spelling) } label: {
+                            Image(systemName: "xmark.circle").foregroundStyle(AppColor.ink3)
+                        }
                     }
                 }
                 if terms.count > 40 {
                     Text("…and \(terms.count - 40) more, applied automatically while the toggle above is on.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 }
                 HStack {
-                    Button("Add all \(terms.count)") { for t in terms { c.addToVocabulary(t.spelling) } }
-                    Button("Rescan library") { c.refreshLearnedTerms() }
+                    TapButton { for t in terms { c.addToVocabulary(t.spelling) } } label: {
+                        LitButtonChrome(.ghost, compact: true) { Text("Add all \(terms.count)") }
+                    }
+                    TapButton { c.refreshLearnedTerms() } label: {
+                        LitButtonChrome(.ghost, compact: true) { Text("Rescan library") }
+                    }
                 }
             }
             Text("A capitalized word that recurs across recordings and never appears as an ordinary lowercase word is treated as a name. Learned names are applied to dictation (exact spelling, never fuzzy) and offered here; Add makes one permanent, × hides it for good.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
         }
     }
 }

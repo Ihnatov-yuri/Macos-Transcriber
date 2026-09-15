@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Editorial port of Android `record/RecordScreen.kt`.
+/// Port of Android `record/RecordScreen.kt`.
 struct RecordView: View {
     @Environment(AppContainer.self) private var container
     /// Owned by AppShell (app lifetime), NOT a view-scoped @State: this view
@@ -44,7 +44,7 @@ struct RecordView: View {
                     InkRule()
                     Spacer().frame(height: AppMetric.l)
 
-                    SectionIndex(2, "CAPTURE",
+                    SectionIndex(2, "Capture",
                                  summary: liveSummary(model))
                         .padding(.horizontal, AppMetric.sheetPadding)
 
@@ -74,12 +74,12 @@ struct RecordView: View {
 
             if let err = model.lastError {
                 HStack {
-                    Text(err.uppercased()).monoLabel(9, color: AppColor.accent)
+                    Text(err).uiLabel(9, color: AppColor.statusError)
                     Spacer()
                 }
                 .padding(.horizontal, AppMetric.sheetPadding)
                 .padding(.vertical, 6)
-                .background(AppColor.paperEdge)
+                .background(AppColor.baseDeep)
             }
             recordFooter(model)
         }
@@ -93,15 +93,15 @@ struct RecordView: View {
         case .recording:
             HStack(spacing: 8) {
                 PulseDot(diameter: 6)
-                Text("RECORDING").monoLabel(10, color: AppColor.accent)
+                Text("Recording").uiLabel(10, color: AppColor.accentOnLight)
             }
         case .paused:
             HStack(spacing: 8) {
-                Circle().fill(AppColor.inkSoft).frame(width: 6, height: 6)
-                Text("PAUSED").monoLabel(10, color: AppColor.inkSoft)
+                Circle().fill(AppColor.ink2).frame(width: 6, height: 6)
+                Text("Paused").uiLabel(10, color: AppColor.ink2)
             }
         default:
-            Text("LIBRARY →").monoLabel(10, color: AppColor.inkMuted)
+            Text("Library →").uiLabel(10, color: AppColor.ink3)
         }
     }
 
@@ -122,13 +122,13 @@ struct RecordView: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(String(format: "%.0f dB", max(-60, 20 * log10(max(0.0001, Double(m.level))))))
-                        .font(AppFont.saira(17, weight: .semibold))
-                        .tracking(0.6)
+                        .font(AppFont.display(17, weight: .semibold))
+                        .tracking(0.2)
                         .foregroundStyle(AppColor.ink)
-                    Text("LEVEL · \(m.level > 0.6 ? "HOT" : "CLEAN")")
-                        .monoLabel(9, color: AppColor.inkSoft)
-                    Text("16 KHZ · MONO")
-                        .monoLabel(9, color: AppColor.inkMuted)
+                    Text("Level · \(m.level > 0.6 ? "hot" : "clean")")
+                        .uiLabel(9, color: AppColor.ink2)
+                    Text("16 kHz · mono")
+                        .uiLabel(9, color: AppColor.ink3)
                 }
             }
             .padding(.horizontal, AppMetric.sheetPadding)
@@ -142,7 +142,7 @@ struct RecordView: View {
     @ViewBuilder
     private func waveform(_ m: RecordModel) -> some View {
         // 64-bar rolling history from WavRecorder.peakHistory. Newest bar at
-        // the right gets the accent; older bars fade into ink-soft. Mirrors
+        // the right gets the accent; older bars fade into a soft ink. Mirrors
         // the Android record-screen meter rhythm.
         GeometryReader { geo in
             let bars = m.meetingActive ? m.container.meetingRecorder.peakHistory
@@ -174,9 +174,9 @@ struct RecordView: View {
     @ViewBuilder
     private func waveformAxis(_ m: RecordModel) -> some View {
         HStack {
-            Text("−5 S").monoLabel(9, color: AppColor.inkSoft)
+            Text("−5 s").uiLabel(9, color: AppColor.ink2)
             Spacer()
-            Text("\(formatElapsed(m.elapsedMs)) ▸ NOW").monoLabel(9, color: AppColor.ink)
+            Text("\(formatElapsed(m.elapsedMs)) ▸ now").uiLabel(9)
         }
         .padding(.horizontal, AppMetric.sheetPadding)
     }
@@ -186,20 +186,20 @@ struct RecordView: View {
     @ViewBuilder
     private func lastHeardCard(_ m: RecordModel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("LAST HEARD\(statusSuffix(m.liveWorker.status))")
-                .monoLabel(10, color: AppColor.inkSoft)
+            Text("Last heard\(statusSuffix(m.liveWorker.status))")
+                .uiLabel(10, color: AppColor.ink2)
 
             let last = m.liveWorker.lines.last
             Text(last?.text ?? "Live captions will appear here while recording.")
-                .font(AppFont.fraunces(22, italic: last != nil))
+                .font(AppFont.text(22))
                 .lineSpacing(4)
-                .tracking(-0.3)
-                .foregroundStyle(last == nil ? AppColor.inkSoft : AppColor.ink)
+                .tracking(-0.2)
+                .foregroundStyle(last == nil ? AppColor.ink2 : AppColor.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let last {
-                Text("\(formatElapsed(Int64(last.startSeconds * 1000))) · LIVE")
-                    .monoLabel(9, color: AppColor.inkMuted)
+                Text("\(formatElapsed(Int64(last.startSeconds * 1000))) · live")
+                    .uiLabel(9, color: AppColor.ink3)
             }
         }
     }
@@ -207,10 +207,10 @@ struct RecordView: View {
     private func statusSuffix(_ s: LiveTranscriber.Status) -> String {
         switch s {
         case .idle:                return ""
-        case .loading:             return " · LOADING MODEL"
-        case .running:             return " · LIVE"
-        case .modelMissing(let b): return " · MODEL MISSING (\(b))"
-        case .failed(let r):       return " · FAILED \(r)"
+        case .loading:             return " · loading model"
+        case .running:             return " · live"
+        case .modelMissing(let b): return " · model missing (\(b))"
+        case .failed(let r):       return " · failed \(r)"
         }
     }
 
@@ -219,28 +219,28 @@ struct RecordView: View {
     @ViewBuilder
     private func optionsRow(_ m: RecordModel) -> some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("RECORDING OPTIONS · TAP A VALUE TO CHANGE")
-                .monoLabel(10, color: AppColor.inkSoft)
+            Text("Recording options · tap a value to change")
+                .uiLabel(10, color: AppColor.ink2)
             HStack(alignment: .top, spacing: AppMetric.l) {
-                option("AUTO-RUN", m.autoTranscribe ? "ON" : "OFF",
+                option("Auto-run", m.autoTranscribe ? "On" : "Off",
                        active: m.autoTranscribe,
                        hint: "transcribe as soon\nas you press stop") { m.autoTranscribe.toggle() }
-                option("LIVE", m.liveEnabled ? "ON" : "OFF",
+                option("Live", m.liveEnabled ? "On" : "Off",
                        active: m.liveEnabled,
                        hint: "rough live text\nwhile you record") { m.liveEnabled.toggle() }
-                option("MEETING", m.meetingMode ? "ON" : "OFF",
+                option("Meeting", m.meetingMode ? "On" : "Off",
                        active: m.meetingMode,
                        hint: "also record system\naudio (calls, zoom)") { m.meetingMode.toggle() }
-                option("MIC BOOST", RecorderSettings.shared.micSensitivity.label,
+                option("Mic boost", RecorderSettings.shared.micSensitivity.label,
                        active: RecorderSettings.shared.micSensitivity != .auto,
                        hint: "input volume · auto\nor fixed 2–6×") { cycleMicSensitivity() }
                 if m.liveEnabled {
-                    option("ENGINE", m.liveEngine.displayName.uppercased(),
+                    option("Engine", m.liveEngine.displayName,
                            active: false,
                            hint: "engine for the\nlive preview") { cycleEngine(m) }
-                    option("LANG", m.liveLanguages.isEmpty
-                               ? "AUTO"
-                               : m.liveLanguages.sorted().joined(separator: ",").uppercased(),
+                    option("Lang", m.liveLanguages.isEmpty
+                               ? "Auto"
+                               : m.liveLanguages.sorted().joined(separator: ", "),
                            active: !m.liveLanguages.isEmpty,
                            hint: "spoken language\nfor live preview") { cycleLanguage(m) }
                 }
@@ -259,7 +259,7 @@ struct RecordView: View {
         VStack(alignment: .leading, spacing: 4) {
             TagPair(label: label, value: value, active: active, action: action)
             Text(hint)
-                .monoLabel(8, color: AppColor.inkSoft.opacity(0.75))
+                .uiLabel(8, color: AppColor.ink2.opacity(0.75))
                 .lineSpacing(1)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -311,67 +311,56 @@ struct RecordView: View {
     // dispatch hits a regression in macOS 26.5 (crash in
     // `swift_task_isMainExecutorImpl` when the action captures a
     // @MainActor @Observable model). We avoid `Button` for the record /
-    // pause / stop controls and use `.onTapGesture` on plain shapes.
+    // pause / stop controls and use `.onTapGesture` on plain shapes /
+    // TapButton throughout.
 
     @ViewBuilder
     private func recordFooter(_ m: RecordModel) -> some View {
         switch m.uiState {
         case .idle, .finished:
-            HStack(alignment: .center, spacing: AppMetric.m) {
+            InverseFooter(
+                "Record",
+                subtitle: m.autoTranscribe ? "Auto-transcribe on stop" : "Manual run",
+                action: { triggerToggleRecord(m) }
+            ) {
                 PulseDot()
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Record")
-                        .font(AppFont.saira(17, weight: .semibold))
-                        .tracking(0.4)
-                        .textCase(.uppercase)
-                        .foregroundStyle(AppColor.paper)
-                    Text(m.autoTranscribe ? "AUTO-TRANSCRIBE ON STOP" : "MANUAL RUN")
-                        .monoLabel(9, color: AppColor.paper.opacity(0.55))
-                }
-                Spacer(minLength: AppMetric.s)
+            } right: {
                 Rectangle()
                     .fill(AppColor.accent)
                     .frame(width: 28, height: 28)
                     .overlay {
-                        Rectangle().fill(AppColor.paper).frame(width: 12, height: 12)
+                        // On an accent fill, per Lit Field's .btn-accent
+                        // recipe, the mark reads in ink — not onNight.
+                        Rectangle().fill(AppColor.ink).frame(width: 12, height: 12)
                     }
-            }
-            .padding(.horizontal, AppMetric.l)
-            .padding(.vertical, AppMetric.sheetVerticalPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppColor.ink)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                triggerToggleRecord(m)
             }
 
         case .recording, .paused:
             HStack(spacing: 0) {
-                Text(m.uiState == .recording ? "PAUSE" : "RESUME")
-                    .monoLabel(11, color: AppColor.ink)
+                Text(m.uiState == .recording ? "Pause" : "Resume")
+                    .uiLabel(11)
                     .padding(.horizontal, AppMetric.l)
                     .frame(maxHeight: .infinity)
-                    .background(AppColor.paper)
+                    .background(AppColor.base)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         triggerPauseToggle(m)
                     }
 
                 VStack(spacing: 2) {
-                    Text("Stop & Transcribe")
-                        .font(AppFont.saira(17, weight: .semibold))
-                        .tracking(0.4)
-                        .textCase(.uppercase)
-                        .foregroundStyle(AppColor.paper)
-                    Text(m.autoTranscribe ? "AUTO-RUN AFTER STOP" : "OPEN DETAIL TO RUN")
-                        .monoLabel(9, color: AppColor.paper.opacity(0.55))
+                    Text("Stop & transcribe")
+                        .font(AppFont.display(17, weight: .semibold))
+                        .tracking(0.1)
+                        .foregroundStyle(AppColor.onNight)
+                    Text(m.autoTranscribe ? "Auto-run after stop" : "Open detail to run")
+                        .uiLabel(9, color: AppColor.onNight2)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, AppMetric.sheetVerticalPadding)
                 .contentShape(Rectangle())
                 .onTapGesture { triggerToggleRecord(m) }
 
-                Rectangle().fill(AppColor.paper).frame(width: 12, height: 12)
+                Rectangle().fill(AppColor.ink).frame(width: 12, height: 12)
                     .padding(.horizontal, AppMetric.l)
                     .frame(maxHeight: .infinity)
                     .background(AppColor.accent)
@@ -381,7 +370,8 @@ struct RecordView: View {
                     }
             }
             .fixedSize(horizontal: false, vertical: true)
-            .background(AppColor.ink)
+            .background(AppColor.night, in: Rectangle())
+            .litLift(.one, in: Rectangle())
         }
     }
 

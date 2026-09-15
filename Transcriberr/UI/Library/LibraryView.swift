@@ -4,7 +4,7 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 
-/// Editorial port of Android `recordings/RecordingsListScreen.kt`.
+/// Port of Android `recordings/RecordingsListScreen.kt`.
 /// Two-column layout (list on the left, detail on the right) within the
 /// section detail pane — no nested split view, so margins line up cleanly.
 struct LibraryView: View {
@@ -36,9 +36,9 @@ struct LibraryView: View {
         HStack(spacing: 0) {
             listColumn
                 .frame(width: listColumnWidth)
-                .background(AppColor.paper)
+                .background(AppColor.base)
 
-            Rectangle().fill(AppColor.hairline).frame(width: 1)
+            Rectangle().fill(AppColor.hair).frame(width: 1)
 
             Group {
                 if let selection {
@@ -49,7 +49,7 @@ struct LibraryView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(AppColor.paper)
+            .background(AppColor.base)
         }
         .task(id: query) {
             let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -90,10 +90,10 @@ struct LibraryView: View {
         Sheet {
             VStack(alignment: .leading, spacing: 12) {
                 Spacer()
-                Text("NO RECORDING SELECTED").monoLabel(11, color: AppColor.inkMuted)
+                Text("No recording selected").uiLabel(11, color: AppColor.ink3)
                 Text("Pick a recording on the left, or tap + Import to bring one in.")
-                    .font(AppFont.fraunces(20, italic: true))
-                    .foregroundStyle(AppColor.inkSoft)
+                    .font(AppFont.text(20))
+                    .foregroundStyle(AppColor.ink2)
                     .frame(maxWidth: 420, alignment: .leading)
                 Spacer()
             }
@@ -110,7 +110,7 @@ struct LibraryView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         BrandStrip {
-                            Text(Bundle.versionBadge).monoLabel(9, color: AppColor.inkMuted)
+                            Text(Bundle.versionBadge).uiLabel(9, color: AppColor.ink3)
                         }
                         .padding(.horizontal, AppMetric.sheetPadding)
                         .padding(.top, AppMetric.sheetVerticalPadding)
@@ -119,7 +119,7 @@ struct LibraryView: View {
                         InkRule()
                         Spacer().frame(height: AppMetric.l)
 
-                        SectionIndex(1, "LIBRARY", summary: countSummary())
+                        SectionIndex(1, "Library", summary: countSummary())
                             .padding(.horizontal, AppMetric.sheetPadding)
 
                         Spacer().frame(height: AppMetric.l)
@@ -138,15 +138,14 @@ struct LibraryView: View {
 
                         Spacer().frame(height: AppMetric.sheetVerticalPadding)
 
-                        EyebrowRow("RECORDINGS") {
+                        EyebrowRow("Recordings") {
                             EmptyView()
                         } right: {
                             TapButton { importFile() } label: {
-                                Text("+ IMPORT").monoLabel(10, color: AppColor.ink)
-                                    .padding(.horizontal, 6).padding(.vertical, 4)
+                                LitButtonChrome(.ghost, compact: true) { Text("+ Import") }
                             }
 
-                            Text("NEWEST ↓").monoLabel(10, color: AppColor.inkSoft)
+                            Text("Newest ↓").uiLabel(10, color: AppColor.ink2)
                         }
                         .padding(.horizontal, AppMetric.sheetPadding)
 
@@ -166,12 +165,12 @@ struct LibraryView: View {
 
     private var metricStrip: some View {
         HStack(spacing: 0) {
-            metricCell(value: "\(all.count)", label: "RECS")
+            metricCell(value: "\(all.count)", label: "Recs")
             VRule().frame(height: 60)
-            metricCell(value: formatHM(all.reduce(0) { $0 + $1.durationSeconds }), label: "TOTAL")
+            metricCell(value: formatHM(all.reduce(0) { $0 + $1.durationSeconds }), label: "Total")
             VRule().frame(height: 60)
             let langs = Set(all.compactMap { $0.sourceLanguage }).count
-            metricCell(value: "\(langs)", label: "LANGS")
+            metricCell(value: "\(langs)", label: "Langs")
         }
         .frame(height: 72)
         .padding(.horizontal, AppMetric.sheetPadding)
@@ -180,7 +179,7 @@ struct LibraryView: View {
     private func metricCell(value: String, label: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             BigNumber(value, size: 30)
-            Text(label).monoLabel(9, color: AppColor.inkSoft)
+            Text(label).uiLabel(9, color: AppColor.ink2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
@@ -191,15 +190,15 @@ struct LibraryView: View {
     private var searchField: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text("FIND").monoLabel(9, color: AppColor.inkMuted)
+                Text("Find").uiLabel(9, color: AppColor.ink3)
                 TextField("title or transcript", text: $query)
                     .textFieldStyle(.plain)
-                    .font(AppFont.inter(13))
+                    .font(AppFont.text(13))
                     .foregroundStyle(AppColor.ink)
-                    .tint(AppColor.accent)
+                    .tint(AppColor.accentOnLight)
                 if !query.isEmpty {
                     TapButton { query = "" } label: {
-                        Text("✕").monoLabel(11, color: AppColor.inkMuted)
+                        Text("✕").uiLabel(11, color: AppColor.ink3)
                     }
 
                 }
@@ -219,9 +218,9 @@ struct LibraryView: View {
         return VStack(spacing: 0) {
             if rows.isEmpty {
                 Text(query.isEmpty
-                     ? "NO RECORDINGS YET · TAP + IMPORT"
-                     : "NO MATCHES FOR “\(query)”")
-                    .monoLabel(10, color: AppColor.inkMuted)
+                     ? "No recordings yet · tap + Import"
+                     : "No matches for “\(query)”")
+                    .uiLabel(10, color: AppColor.ink3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(AppMetric.l)
             }
@@ -300,38 +299,38 @@ struct LibraryView: View {
         return HStack(alignment: .top, spacing: AppMetric.m) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(timeOnly(createdDate))
-                    .font(AppFont.saira(14, weight: .semibold))
+                    .font(AppFont.display(14, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(AppColor.ink)
                 Text(dayOnly(createdDate))
-                    .monoLabel(9, color: AppColor.inkMuted)
+                    .uiLabel(9, color: AppColor.ink3)
             }
             .frame(width: 54, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(rec.title)
-                    .font(AppFont.inter(15))
+                    .font(AppFont.text(15))
                     .foregroundStyle(AppColor.ink)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                 HStack(spacing: 6) {
                     if let lang = rec.sourceLanguage, !lang.isEmpty {
-                        Text(lang.uppercased()).monoLabel(9, color: AppColor.inkSoft)
-                        Text("·").monoLabel(9, color: AppColor.inkMuted)
+                        Text(lang).uiLabel(9, color: AppColor.ink2)
+                        Text("·").uiLabel(9, color: AppColor.ink3)
                     }
                     if rec.translateToEnglish {
-                        Text("TRANSLATED").monoLabel(9, color: AppColor.inkSoft)
-                        Text("·").monoLabel(9, color: AppColor.inkMuted)
+                        Text("Translated").uiLabel(9, color: AppColor.ink2)
+                        Text("·").uiLabel(9, color: AppColor.ink3)
                     }
                     if isToday {
                         Rectangle().fill(AppColor.accent).frame(width: 5, height: 5)
-                        Text("TODAY").monoLabel(9, color: AppColor.accent)
+                        Text("Today").uiLabel(9, color: AppColor.accentOnLight)
                     }
                     if let folder = rec.folder {
-                        Text("▸ \(folder.name.uppercased())").monoLabel(9, color: AppColor.inkSoft)
+                        Text("▸ \(folder.name)").uiLabel(9, color: AppColor.ink2)
                     }
                     ForEach(rec.tags.sorted { $0.name < $1.name }, id: \.id) { tag in
-                        Text("#\(tag.name.uppercased())").monoLabel(9, color: AppColor.inkMuted)
+                        Text("#\(tag.name)").uiLabel(9, color: AppColor.ink3)
                     }
                     Spacer(minLength: 0)
                 }
@@ -340,7 +339,7 @@ struct LibraryView: View {
 
             VStack(alignment: .trailing, spacing: 3) {
                 Text(formatDuration(rec.durationSeconds))
-                    .font(AppFont.saira(16, weight: .semibold))
+                    .font(AppFont.display(16, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(AppColor.ink)
                 jobIndicator(for: rec)
@@ -364,12 +363,12 @@ struct LibraryView: View {
     private func jobIndicator(for rec: Recording) -> some View {
         if let status = container.jobManager.statuses[rec.id] {
             if status.failed {
-                Text("FAILED").monoLabel(8, color: .red)
+                Text("Failed").uiLabel(8, color: AppColor.statusError)
             } else if status.fraction < 1.0 {
                 HStack(spacing: 4) {
                     PulseDot(diameter: 5)
                     Text("\(Int((status.fraction * 100).rounded()))%")
-                        .monoLabel(8, color: AppColor.accent)
+                        .uiLabel(8, color: AppColor.accentOnLight)
                         .monospacedDigit()
                 }
             }
@@ -518,5 +517,5 @@ struct LibraryView: View {
         return f
     }()
     private func timeOnly(_ d: Date) -> String { Self.timeF.string(from: d) }
-    private func dayOnly(_ d: Date) -> String { Self.dayF.string(from: d).uppercased() }
+    private func dayOnly(_ d: Date) -> String { Self.dayF.string(from: d) }
 }

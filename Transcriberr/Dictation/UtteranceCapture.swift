@@ -24,6 +24,14 @@ final class UtteranceCapture: @unchecked Sendable {
     private(set) var level: Float = 0
     private(set) var peakHistory: [Float] = Array(repeating: 0, count: 48)
     private(set) var elapsedSeconds: Double = 0
+    /// True once the tap has delivered its first buffer this session. The
+    /// engine being started is not the same as audio flowing: a Bluetooth
+    /// mic takes a few hundred milliseconds more, and a session that ends
+    /// before this flips has nothing to recognize.
+    private(set) var audioArrived = false
+    /// Fired on the main actor when the first buffer of a session lands —
+    /// the honest "you can speak now" moment.
+    var onAudioArrived: (@MainActor () -> Void)?
 
     /// `var`, not `let`: an AVAudioEngine cannot let go of an input device
     /// once its input node has been used — Apple's own answer to that is to
@@ -268,6 +276,7 @@ final class UtteranceCapture: @unchecked Sendable {
         level = 0
         peakHistory = Array(repeating: 0, count: 48)
         elapsedSeconds = 0
+        audioArrived = false
 
         let input = try configureInput()
         if voiceProcessing {
@@ -354,6 +363,7 @@ final class UtteranceCapture: @unchecked Sendable {
     func stop() -> [Float] {
         guard isRunning else { return [] }
         isRunning = false
+        audioArrived = false
         tick?.cancel()
         tick = nil
         let wasRunning = engine.isRunning
@@ -436,6 +446,9 @@ final class UtteranceCapture: @unchecked Sendable {
     nonisolated private func enqueueAndDrain(_ input: AVAudioPCMBuffer) {
         tapCalls += 1
         tapFrames += Int(input.frameLength)
+        if tapCalls == 1 {
+            Task { @MainActor [weak self] in self?.markAudioArrived() }
+        }
         guard let converter else { return }
         pendingInputs.append(input)
         let ratio = targetFormat.sampleRate / input.format.sampleRate
@@ -457,6 +470,15 @@ final class UtteranceCapture: @unchecked Sendable {
             append(Array(UnsafeBufferPointer(start: ptr, count: n)))
             if pendingInputs.isEmpty && status == .inputRanDry { break }
         }
+    }
+
+    @MainActor
+    private func markAudioArrived() {
+        guard isRunning, !audioArrived else { return }
+        audioArrived = true
+        AppLog.info("dictation", String(format: "first audio %.2fs after engine start",
+                                        Date().timeIntervalSince(startedAt)))
+        onAudioArrived?()
     }
 
     nonisolated private func flushConverterTail() {

@@ -1,7 +1,6 @@
 import SwiftUI
 
-// Ported 1:1 from Android `ui/components/Primitives.kt`. Every screen is
-// composed from these blocks — keep them visually rigid.
+// Reusable Lit Field building blocks. Every screen composes from these.
 
 // MARK: - TapButton
 //
@@ -15,6 +14,9 @@ import SwiftUI
 //     Button { ... } label: { ... } .buttonStyle(.plain)
 // Inside Menu / ContextMenu / Alert, keep using SwiftUI.Button — those
 // hosts don't go through _ButtonGesture and don't crash.
+//
+// This is a behavioral workaround, not a visual concern — it stays exactly
+// as-is regardless of design system.
 
 struct TapButton<Label: View>: View {
     let action: () -> Void
@@ -48,38 +50,58 @@ extension TapButton where Label == Text {
 }
 
 // MARK: - Hairlines & rules
+//
+// Internal dividers and chip outlines ONLY — never a panel or section's
+// outer edge. Lit Field: "border: 0... stated explicitly" for any surface's
+// own frame; separation between surfaces comes from glass + lift shadow,
+// not a drawn line.
 
-/// 1.5dp full-width ink line. Top-level joints (header → content,
-/// section → section). NEVER for row-to-row separation.
+/// 1.5pt divider at `hairStrong` (22% ink — the strongest hairline Lit
+/// Field defines; it's still a light touch by design, not the old opaque
+/// rule). The harder of the two internal-divider strengths — sparing use,
+/// e.g. a list's single most important split.
 struct InkRule: View {
     var body: some View {
         Rectangle()
-            .fill(AppColor.ink)
-            .frame(height: AppMetric.inkRuleWidth)
+            .fill(AppColor.hairStrong)
+            .frame(height: 1.5)
     }
 }
 
-/// 1dp dim line at 16% ink. Interior row dividers.
+/// 1pt divider at `hair`. Interior row dividers.
 struct Hairline: View {
     var body: some View {
         Rectangle()
-            .fill(AppColor.hairline)
-            .frame(height: AppMetric.hairlineWidth)
+            .fill(AppColor.hair)
+            .frame(height: 1)
     }
 }
 
-/// 1dp very-dim line at 10% ink. Tightly-packed sub-rows.
+/// 1pt divider softer than `Hairline`. Tightly-packed sub-rows.
 struct HairlineSoft: View {
     var body: some View {
         Rectangle()
-            .fill(AppColor.hairlineSoft)
-            .frame(height: AppMetric.hairlineWidth)
+            .fill(AppColor.hair.opacity(0.7))
+            .frame(height: 1)
+    }
+}
+
+/// Vertical counterpart to `Hairline`.
+struct VRule: View {
+    var body: some View {
+        Rectangle()
+            .fill(AppColor.hair)
+            .frame(width: 1)
+            .frame(maxHeight: .infinity)
     }
 }
 
 // MARK: - Sheet
 
-/// Paper-colored full-page wrapper. Every screen lives inside one.
+/// Flat `base`-colored full-page wrapper. Every screen lives inside one.
+/// No animated atmosphere/gradient background — this app is 100% Operate
+/// mode (dense working UI), and Lit Field's own guidance is that a
+/// drifting light behind a form is a distraction, not atmosphere.
 struct Sheet<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
@@ -87,13 +109,13 @@ struct Sheet<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(AppColor.paper)
+        .background(AppColor.base)
     }
 }
 
 // MARK: - BrandStrip
 
-/// `transcriber● [meta?]` — the top wordmark + 7dp accent dot, optional
+/// `transcriberr● [meta?]` — the top wordmark + 7pt accent dot, optional
 /// right-aligned label.
 struct BrandStrip<RightSlot: View>: View {
     @ViewBuilder var right: RightSlot
@@ -105,8 +127,8 @@ struct BrandStrip<RightSlot: View>: View {
     var body: some View {
         HStack(alignment: .lastTextBaseline, spacing: 6) {
             Text("transcriberr")
-                .font(AppFont.saira(20, weight: .semibold))
-                .tracking(0.4)
+                .font(AppFont.display(20, weight: .semibold))
+                .tracking(0.1)
                 .foregroundStyle(AppColor.ink)
             Circle()
                 .fill(AppColor.accent)
@@ -121,7 +143,7 @@ struct BrandStrip<RightSlot: View>: View {
 
 // MARK: - SectionIndex
 
-/// `01 / LIBRARY [summary]` block. Anchors the main content section.
+/// `01 / Library [summary]` block. Anchors the main content section.
 struct SectionIndex: View {
     let number: Int
     let label: String
@@ -137,16 +159,16 @@ struct SectionIndex: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 0) {
                 Text(String(format: "%02d", number))
-                    .monoLabel(11, tracking: 1.0, color: AppColor.accent)
+                    .uiLabel(11, color: AppColor.accentOnLight)
                 Text(" / ")
-                    .monoLabel(11, tracking: 1.0, color: AppColor.ink.opacity(0.45))
+                    .uiLabel(11, color: AppColor.ink3)
                 Text(label)
-                    .monoLabel(11, tracking: 1.2)
+                    .uiLabel(11)
             }
             if let summary {
                 Text(summary)
-                    .font(AppFont.inter(13))
-                    .foregroundStyle(AppColor.inkSoft)
+                    .font(AppFont.text(13))
+                    .foregroundStyle(AppColor.ink2)
                     .frame(maxWidth: 320, alignment: .leading)
             }
         }
@@ -156,7 +178,7 @@ struct SectionIndex: View {
 
 // MARK: - BigNumber
 
-/// Saira Condensed tabular numeral with optional Accent suffix.
+/// Archivo tabular numeral with optional accent suffix.
 struct BigNumber: View {
     let value: String
     let suffix: String?
@@ -171,13 +193,19 @@ struct BigNumber: View {
     var body: some View {
         HStack(alignment: .top, spacing: 5) {
             Text(value)
-                .font(AppFont.saira(size, weight: .semibold))
+                .font(AppFont.display(size, weight: .semibold))
                 .monospacedDigit()
                 .tracking(-size * 0.015)
                 .foregroundStyle(AppColor.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
             if let suffix {
+                // Fixed size, not proportional to `size`: this is a small
+                // qualifier mark (yr/%/×), not a scaled-down echo of the
+                // numeral — it should read the same regardless of how big
+                // the number next to it is.
                 Text(suffix)
-                    .monoLabel(10.5, color: AppColor.accent)
+                    .uiLabel(11, color: AppColor.accentOnLight)
                     .padding(.top, size * 0.18)
             }
         }
@@ -186,8 +214,8 @@ struct BigNumber: View {
 
 // MARK: - LedgerRow
 
-/// `[label]  [body]  [meta?]` — the workhorse row used in Settings, metadata
-/// strips, etc.
+/// `[label]  [body]  [meta?]` — the workhorse row used in Settings,
+/// metadata strips, etc.
 struct LedgerRow<Body: View, Meta: View>: View {
     let label: String
     @ViewBuilder var rowBody: Body
@@ -206,10 +234,10 @@ struct LedgerRow<Body: View, Meta: View>: View {
     var body: some View {
         HStack(alignment: .top, spacing: AppMetric.m) {
             Text(label)
-                .monoLabel(10, color: AppColor.inkSoft)
+                .uiLabel(10, color: AppColor.ink2)
                 .frame(width: 74, alignment: .leading)
             rowBody
-                .font(AppFont.inter(13.5))
+                .font(AppFont.text(13.5))
                 .foregroundStyle(AppColor.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
             meta
@@ -220,11 +248,13 @@ struct LedgerRow<Body: View, Meta: View>: View {
 
 // MARK: - PulseDot
 
-/// 8dp accent dot with a continuous expand-and-fade ring. The ONLY infinite
-/// animation in the app (matches the Android spec).
+/// 8pt accent dot with a continuous expand-and-fade ring. The ONLY
+/// infinite animation in the app; respects Reduce Motion (the ring stays
+/// static rather than looping).
 struct PulseDot: View {
     var diameter: CGFloat = 8
     @State private var phase: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -237,6 +267,7 @@ struct PulseDot: View {
         }
         .frame(width: diameter * 2.4, height: diameter * 2.4)
         .onAppear {
+            guard !reduceMotion else { return }
             withAnimation(.linear(duration: 1.8).repeatForever(autoreverses: false)) {
                 phase = 1
             }
@@ -246,8 +277,11 @@ struct PulseDot: View {
 
 // MARK: - InverseFooter
 
-/// Edge-to-edge dark CTA row. Replaces buttons for primary actions
-/// (RECORD, RUN TRANSCRIPTION, etc.).
+/// Edge-to-edge `night`-ground CTA row — Lit Field's `.btn-primary` recipe
+/// applied to a full-bleed bar rather than a pill, since this replaces
+/// buttons for primary actions (RECORD, RUN TRANSCRIPTION, etc.) at the
+/// bottom of a screen. The fixed component-level inversion idiom: the rest
+/// of the screen stays light, this one bar goes dark.
 struct InverseFooter<Left: View, Right: View>: View {
     let title: String
     let subtitle: String?
@@ -273,31 +307,40 @@ struct InverseFooter<Left: View, Right: View>: View {
         // Uses TapButton (not SwiftUI.Button) to avoid the macOS 26.5
         // _ButtonGesture crash when the action captures a @MainActor model.
         TapButton(action: action) {
-            HStack(alignment: .center, spacing: AppMetric.m) {
-                left
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(AppFont.saira(17, weight: .semibold))
-                        .tracking(0.4)
-                        .textCase(.uppercase)
-                        .foregroundStyle(AppColor.paper)
-                    if let subtitle {
-                        Text(subtitle)
-                            .monoLabel(9, color: AppColor.paper.opacity(0.55))
-                    }
-                }
-                Spacer(minLength: AppMetric.s)
-                right
-            }
-            .padding(.horizontal, AppMetric.l)
-            .padding(.vertical, AppMetric.sheetVerticalPadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppColor.ink)
+            content
         }
+    }
+
+    // Broken out of `body` so the chain type-checks independently of
+    // TapButton's generic Label inference — `.background(_:in:)` (not the
+    // bare-ShapeStyle overload, which is ambiguous when the style also
+    // conforms to View, as Color does) is what actually lets `.litLift`
+    // resolve here.
+    @ViewBuilder private var content: some View {
+        HStack(alignment: .center, spacing: AppMetric.m) {
+            left
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(AppFont.display(17, weight: .semibold))
+                    .tracking(0.1)
+                    .foregroundStyle(AppColor.onNight)
+                if let subtitle {
+                    Text(subtitle)
+                        .uiLabel(9.5, color: AppColor.onNight2)
+                }
+            }
+            Spacer(minLength: AppMetric.s)
+            right
+        }
+        .padding(.horizontal, AppMetric.l)
+        .padding(.vertical, AppMetric.sheetVerticalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.night, in: Rectangle())
+        .litLift(.one, in: Rectangle())
     }
 }
 
-// MARK: - TagPair (Wispr-style options)
+// MARK: - TagPair (options row)
 
 /// `LABEL  VALUE` underline pair used on the Record screen options row.
 struct TagPair: View {
@@ -310,25 +353,19 @@ struct TagPair: View {
         TapButton(action: action) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
-                    Text(label).monoLabel(10, color: AppColor.inkSoft)
-                    Text(value).monoLabel(10, color: AppColor.ink)
+                    Text(label).uiLabel(10, color: AppColor.ink2)
+                    Text(value).uiLabel(10)
                 }
+                // No fixed width: a VStack proposes its own resolved width
+                // (set by its widest child, the HStack above) to every
+                // child, so a Rectangle with only a height constraint
+                // stretches to match the text's actual width instead of a
+                // guessed constant that reads wrong on longer values.
                 Rectangle()
                     .fill(active ? AppColor.accent : Color.clear)
-                    .frame(width: 56, height: 1.5)
+                    .frame(height: 1.5)
             }
         }
-    }
-}
-
-// MARK: - Vertical hairline (for MetricStrip)
-
-struct VRule: View {
-    var body: some View {
-        Rectangle()
-            .fill(AppColor.hairline)
-            .frame(width: 1)
-            .frame(maxHeight: .infinity)
     }
 }
 
@@ -352,7 +389,7 @@ struct EyebrowRow<Middle: View, Right: View>: View {
 
     var body: some View {
         HStack(spacing: AppMetric.s) {
-            Text(label).monoLabel(10, color: AppColor.inkSoft)
+            Text(label).uiLabel(10, color: AppColor.ink2)
             Spacer(minLength: 0)
             middle
             right
@@ -360,23 +397,30 @@ struct EyebrowRow<Middle: View, Right: View>: View {
     }
 }
 
-// MARK: - Chip (re-skinned, no rounded corners)
+// MARK: - LitChip
 
-struct EditorialChip: View {
+/// Pill chip, direct port of `.chip`/`.chip-night`: translucent-white
+/// outlined pill at rest, solid `night` ground with Archivo when active.
+struct LitChip: View {
     let label: String
     var active: Bool = false
     var action: () -> Void = {}
 
     var body: some View {
         TapButton(action: action) {
-            VStack(spacing: 4) {
-                Text(label).monoLabel(10, color: active ? AppColor.ink : AppColor.inkSoft)
-                Rectangle()
-                    .fill(active ? AppColor.accent : Color.clear)
-                    .frame(height: 1.5)
-            }
-            .padding(.horizontal, AppMetric.s)
-            .padding(.vertical, 4)
+            Text(label)
+                .font(active ? AppFont.display(12.5, weight: .semibold) : AppFont.text(13.5))
+                .foregroundStyle(active ? AppColor.onNight : AppColor.ink2)
+                .padding(.horizontal, AppMetric.chipPaddingH)
+                .padding(.vertical, AppMetric.chipPaddingV)
+                .background {
+                    if active {
+                        Capsule().fill(AppColor.night)
+                    } else {
+                        Capsule().fill(Color.white.opacity(0.66))
+                            .overlay(Capsule().stroke(AppColor.hair))
+                    }
+                }
         }
     }
 }

@@ -2,7 +2,7 @@ name: Transcriberr
 options:
   bundleIdPrefix: nl.ihnatov
   deploymentTarget:
-    macOS: "15.0"
+    macOS: "26.0"
   createIntermediateGroups: true
   generateEmptyDirectories: true
   groupSortPosition: top
@@ -10,13 +10,13 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5"
-    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: "3.2.6"
+    MARKETING_VERSION: "3.3.0"
 
 # Gemma4Swift transitively brings mlx-swift, mlx-swift-lm, swift-transformers.
 # Sherpa-onnx for diarization (pending diarization-research recommendation).
@@ -63,7 +63,7 @@ targets:
       path: Transcriberr/Info.plist
       properties:
         CFBundleDisplayName: Transcriberr
-        LSMinimumSystemVersion: "15.0"
+        LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.productivity
         NSMicrophoneUsageDescription: Transcriberr records audio from your microphone to transcribe it locally on this Mac.
         NSAudioCaptureUsageDescription: Meeting mode records the audio other apps play (your meeting participants) so calls can be transcribed locally on this Mac.
@@ -125,6 +125,11 @@ targets:
       base:
         PRODUCT_NAME: transcriberrcli
         PRODUCT_BUNDLE_IDENTIFIER: nl.ihnatov.TranscriberrCLI
+        # Stays on the project's old floor: audio-pipeline-only (see the
+        # sources list above — no UI/Theme files), so it has no dependency
+        # on the macOS 26 Liquid Glass APIs that raised the Transcriberr
+        # app target's MACOSX_DEPLOYMENT_TARGET (set in settings.base above).
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
         SWIFT_STRICT_CONCURRENCY: minimal
         # Find libCLiteRTLM_mac.dylib next to the binary (build products
         # dir) or in an app bundle's Frameworks if the CLI ever ships

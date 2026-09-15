@@ -71,7 +71,7 @@ struct EnginesSettingsTab: View {
                     ForEach(liveEngines, id: \.rawValue) { Text($0.displayName).tag($0) }
                 }
                 Text("Speech models download automatically on first use: Parakeet v3/v2 (~1 GB each, Neural Engine) and Whisper large-v3 (~3 GB, CoreML).")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Super · dual-engine merge") {
                 Picker("Merge engine A", selection: Binding(
@@ -102,7 +102,7 @@ struct EnginesSettingsTab: View {
                     set: { container.uiPrefs.superMaxQuality = $0 }
                 ))
                 Text("Both engines transcribe every chunk in parallel; disagreements are settled word-by-word by recognizer confidence. With Max quality on, chunks where the engines disagree (agreement < 0.8) get a second pass: Gemma rules with transcript context from both sides and your vocabulary.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Speaker turns") {
                 Picker("Turn granularity (diarized transcripts)", selection: Binding(
@@ -114,7 +114,7 @@ struct EnginesSettingsTab: View {
                     Text("Fine — keep every interjection").tag(2.0)
                 }
                 Text("How aggressively adjacent same-speaker segments merge into one turn. Fine matches phone-recorder granularity; applies to the next run.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Languages by engine") {
                 LabeledContent("Parakeet v3", value: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk, ru… (no Arabic/Asian)")
@@ -122,7 +122,7 @@ struct EnginesSettingsTab: View {
                 LabeledContent("Whisper large-v3", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese")
                 LabeledContent("Gemma 4 LiteRT", value: "~140 languages incl. Gulf Arabic — strongest Arabic (as on Android)")
                 Text("Recommendations: English → Parakeet v3 (or v2). European languages → Parakeet v3. Arabic → Gemma LiteRT (Whisper as second opinion). Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Post-processing") {
                 Picker("Text engine (summaries · cleanup · translation · titles)", selection: Binding(
@@ -134,7 +134,7 @@ struct EnginesSettingsTab: View {
                     }
                 }
                 Text("Gemma 4 (Google LiteRT) generates much faster than the MLX build on Apple GPUs; cloud engines need an API key. Preset prompt templates are editable in the Presets tab; transcription prompts in Prompts.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
         }
         .formStyle(.grouped)
@@ -149,15 +149,15 @@ struct ModelsSettingsTab: View {
             // Speech models are managed automatically; this tab manages the
             // Gemma text model (downloaded explicitly — they're big).
             VStack(alignment: .leading, spacing: 4) {
-                Text("SPEECH-TO-TEXT — PARAKEET V3 / V2 · WHISPER LARGE-V3 (AUTOMATIC)")
-                    .monoLabel(10, color: AppColor.inkSoft)
+                Text("Speech-to-text — Parakeet v3/v2 · Whisper large-v3 (automatic)")
+                    .uiLabel(10, color: AppColor.ink2)
                 Text("Downloaded on first use (Parakeet ~1 GB each · Whisper ~3 GB) · cached in Application Support · engine choice in the Engines tab")
-                    .monoLabel(9, color: AppColor.inkMuted)
+                    .uiLabel(9, color: AppColor.ink3)
             }
             Hairline()
 
             HairlineSoft()
-            Text("CATALOG").monoLabel(10, color: AppColor.inkSoft)
+            Text("Catalog").uiLabel(10, color: AppColor.ink2)
 
             VStack(spacing: 0) {
                 ForEach(ModelCatalog.entries, id: \.id) { entry in
@@ -185,18 +185,18 @@ private struct ModelRow: View {
             HStack(alignment: .top, spacing: AppMetric.m) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.name)
-                        .font(AppFont.inter(14, weight: .medium))
+                        .font(AppFont.display(14, weight: .semibold))
                         .foregroundStyle(AppColor.ink)
                     Text(entry.purpose)
-                        .font(AppFont.inter(12))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(AppFont.text(12))
+                        .foregroundStyle(AppColor.ink2)
                     if let hf = entry.huggingFaceID {
-                        Text(hf).monoLabel(9, color: AppColor.inkMuted)
+                        Text(hf).uiLabel(9, color: AppColor.ink3)
                     }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 6) {
-                    Text(format(entry.sizeBytes)).monoLabel(10, color: AppColor.inkSoft)
+                    Text(format(entry.sizeBytes)).uiLabel(10, color: AppColor.ink2)
                     actionButton
                 }
                 .frame(minWidth: 130, alignment: .trailing)
@@ -204,7 +204,7 @@ private struct ModelRow: View {
             if let info = container.modelDownloader.progress[entry.id],
                container.modelDownloader.isDownloading.contains(entry.id) {
                 ProgressView(value: info.fractionComplete) {
-                    Text(info.status).monoLabel(9, color: AppColor.inkSoft)
+                    Text(info.status).uiLabel(9, color: AppColor.ink2)
                 }
                 .progressViewStyle(.linear)
                 .tint(AppColor.accent)
@@ -219,18 +219,12 @@ private struct ModelRow: View {
     private var actionButton: some View {
         if container.modelDownloader.isCached(entry) {
             VStack(alignment: .trailing, spacing: 4) {
-                Text("INSTALLED").monoLabel(10, color: AppColor.accent)
+                Text("Installed").uiLabel(10, color: AppColor.accentOnLight)
                 if let size = container.modelDownloader.diskSize(entry) {
-                    Text(formatGB(size)).monoLabel(9, color: AppColor.inkMuted)
+                    Text(formatGB(size)).uiLabel(9, color: AppColor.ink3)
                 }
-                TapButton {
-                    confirmingDelete = true
-                } label: {
-                    Text("DELETE")
-                        .monoLabel(9, color: AppColor.paper)
-                        .padding(.horizontal, AppMetric.s)
-                        .padding(.vertical, 4)
-                        .background(AppColor.inkSoft)
+                TapButton { confirmingDelete = true } label: {
+                    LitButtonChrome(.destructive, compact: true) { Text("Delete") }
                 }
             }
             .confirmationDialog(
@@ -246,27 +240,15 @@ private struct ModelRow: View {
                 Text("Removes the model from \(container.modelDownloader.localPath(entry)?.path ?? "disk").")
             }
         } else if container.modelDownloader.isDownloading.contains(entry.id) {
-            TapButton {
-                container.modelDownloader.cancel(entry.id)
-            } label: {
-                Text("CANCEL")
-                    .monoLabel(10, color: AppColor.paper)
-                    .padding(.horizontal, AppMetric.m)
-                    .padding(.vertical, 6)
-                    .background(AppColor.inkSoft)
+            TapButton { container.modelDownloader.cancel(entry.id) } label: {
+                LitButtonChrome(.secondary, compact: true) { Text("Cancel") }
             }
-
         } else {
             TapButton {
                 Task { try? await container.modelDownloader.download(entry) }
             } label: {
-                Text("DOWNLOAD")
-                    .monoLabel(10, color: AppColor.paper)
-                    .padding(.horizontal, AppMetric.m)
-                    .padding(.vertical, 6)
-                    .background(AppColor.ink)
+                LitButtonChrome(.primary, compact: true) { Text("Download") }
             }
-
         }
     }
 
@@ -329,20 +311,20 @@ struct RecorderSettingsTab: View {
 
                 if settings.inputDeviceUID != nil, AudioInputDevices.resolve(uid: settings.inputDeviceUID) == nil {
                     Text("That microphone isn't connected — recording falls back to the system default until it comes back.")
-                        .font(AppFont.inter(11))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.ink2)
                 } else if effective?.isBluetooth == true {
                     Text("Recording from a Bluetooth mic drops that link to hands-free — mono, 16 kHz, for its playback too — for as long as capture is open.")
-                        .font(AppFont.inter(11))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.ink2)
                 } else if AudioInputDevices.captureWouldDisturbBluetooth(uid: settings.inputDeviceUID) {
                     Text("This mic has no output channels, so macOS still opens the system default input alongside it — and that default is Bluetooth, which drops to hands-free while recording. Nothing is opened when the app is just sitting there. Setting the system input to this mic too avoids it entirely.")
-                        .font(AppFont.inter(11))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.ink2)
                 } else {
                     Text("Used for dictation, plain recordings and the meeting recorder.")
-                        .font(AppFont.inter(11))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.ink2)
                 }
             }
             .onAppear {
@@ -354,8 +336,8 @@ struct RecorderSettingsTab: View {
             Divider().frame(maxWidth: 520)
 
             Text("Apple's voice-processing audio unit cleans up the input the same way FaceTime / Voice Memos do — echo cancellation, spectral noise suppression, AGC. Free and very effective.")
-                .font(AppFont.inter(12))
-                .foregroundStyle(AppColor.inkSoft)
+                .font(AppFont.text(12))
+                .foregroundStyle(AppColor.ink2)
                 .frame(maxWidth: 520, alignment: .leading)
 
             Toggle(isOn: Binding(
@@ -364,10 +346,10 @@ struct RecorderSettingsTab: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Noise suppression while recording")
-                        .font(AppFont.inter(13, weight: .medium))
+                        .font(AppFont.text(13, weight: .bold))
                     Text("Recommended. Applied on the input node before each chunk is written. macOS turns other apps down slightly while it runs; they come back when the recording stops.")
-                        .font(AppFont.inter(11))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.ink2)
                 }
             }
 
@@ -377,10 +359,10 @@ struct RecorderSettingsTab: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Pre-process imported files")
-                        .font(AppFont.inter(13, weight: .medium))
+                        .font(AppFont.text(13, weight: .bold))
                     Text("Runs the same cleanup over MP3 / M4A / WAV files before Gemma sees them. Adds a few seconds to the decode step.")
-                        .font(AppFont.inter(11))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.ink2)
                 }
             }
         }
@@ -403,7 +385,10 @@ struct PromptsSettingsTab: View {
                     get: { container.promptStore.transcribePrompt },
                     set: { container.promptStore.transcribePrompt = $0 }
                 ))
-                .font(AppFont.mono(12))
+                // System monospace, not a design-voice choice: these hold
+                // {placeholder}-style template syntax where character
+                // alignment carries real information.
+                .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 100)
             }
             Section("Translate") {
@@ -411,7 +396,7 @@ struct PromptsSettingsTab: View {
                     get: { container.promptStore.translatePrompt },
                     set: { container.promptStore.translatePrompt = $0 }
                 ))
-                .font(AppFont.mono(12))
+                .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 100)
             }
         }
@@ -424,27 +409,27 @@ struct PresetsSettingsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppMetric.m) {
-            Text("EDITS SAVE AUTOMATICALLY · EXPAND A PRESET TO EDIT ITS PROMPTS")
-                .monoLabel(9, color: AppColor.inkSoft)
+            Text("Edits save automatically · expand a preset to edit its prompts")
+                .uiLabel(9, color: AppColor.ink2)
             ForEach(container.presetStore.presets) { preset in
                 DisclosureGroup(preset.name) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("SYSTEM").monoLabel(9, color: AppColor.inkSoft)
+                        Text("System").uiLabel(9, color: AppColor.ink2)
                         TextEditor(text: binding(for: preset.id, \.systemTemplate))
-                            .font(AppFont.mono(11))
+                            .font(.system(.body, design: .monospaced))
                             .frame(minHeight: 70)
-                        Text("USER TEMPLATE").monoLabel(9, color: AppColor.inkSoft)
+                        Text("User template").uiLabel(9, color: AppColor.ink2)
                         TextEditor(text: binding(for: preset.id, \.userTemplate))
-                            .font(AppFont.mono(11))
+                            .font(.system(.body, design: .monospaced))
                             .frame(minHeight: 110)
                     }
                     .padding(.vertical, 6)
                 }
-                .font(AppFont.inter(13))
+                .font(AppFont.text(13))
                 HairlineSoft()
             }
             TapButton { container.presetStore.resetToDefaults() } label: {
-                Text("RESET ALL PRESETS TO DEFAULTS").monoLabel(9, color: AppColor.accent)
+                LitButtonChrome(.ghost, compact: true) { Text("Reset all presets to defaults") }
             }
         }
     }
@@ -476,7 +461,7 @@ struct PresetEditor: View {
                         get: { container.presetStore.presets[idx].systemTemplate },
                         set: { container.presetStore.presets[idx].systemTemplate = $0 }
                     ))
-                    .font(AppFont.mono(12))
+                    .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 80)
                 }
                 Section("User") {
@@ -484,7 +469,7 @@ struct PresetEditor: View {
                         get: { container.presetStore.presets[idx].userTemplate },
                         set: { container.presetStore.presets[idx].userTemplate = $0 }
                     ))
-                    .font(AppFont.mono(12))
+                    .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 140)
                 }
             }
@@ -518,15 +503,15 @@ struct StyleSettingsTab: View {
                     get: { container.promptStore.vocabulary },
                     set: { container.promptStore.vocabulary = $0 }
                 ))
-                .font(AppFont.mono(12))
+                .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 90)
                 Text("Applied to every run. Names that work in any language (people, companies).")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Vocabulary — per language") {
                 VocabularyByLanguageEditor()
                 Text("Injected only when a run's LANG matches — keeps Ukrainian runs free of English terms and vice versa.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             LearnedTermsSection()
             Section("Domain packs") {
@@ -536,7 +521,7 @@ struct StyleSettingsTab: View {
                     TapButton {
                         DomainVocabulary.apply(pack: pack, to: container.promptStore, languages: container.uiPrefs.vocabLanguages)
                     } label: {
-                        Text(pack.displayName).foregroundStyle(AppColor.accent)
+                        LitButtonChrome(.ghost, compact: true) { Text(pack.displayName) }
                     }
                 }
             }
@@ -560,7 +545,7 @@ struct VocabularyByLanguageEditor: View {
                 get: { container.promptStore.vocabularyByLanguage[lang] ?? "" },
                 set: { container.promptStore.vocabularyByLanguage[lang] = $0 }
             ))
-            .font(AppFont.mono(12))
+            .font(.system(.body, design: .monospaced))
             .frame(minHeight: 90)
         }
     }
@@ -582,8 +567,8 @@ struct SnippetsSettingsTab: View {
                 preset say "Speakers may include: {snippet:team}" — update the team in \
                 one place, every preset follows.
                 """)
-                .font(AppFont.fraunces(13, italic: false))
-                .foregroundStyle(AppColor.inkSoft)
+                .font(AppFont.text(13))
+                .foregroundStyle(AppColor.ink2)
             }
             Section("Your snippets") {
                 ForEach(container.snippetStore.snippets.indices, id: \.self) { idx in
@@ -594,12 +579,12 @@ struct SnippetsSettingsTab: View {
                     s.append(Snippet(name: "name-me", body: ""))
                     container.snippetStore.snippets = s
                 } label: {
-                    Text("Add snippet").foregroundStyle(AppColor.accent)
+                    LitButtonChrome(.ghost, compact: true) { Text("Add snippet") }
                 }
                 if container.snippetStore.snippets.isEmpty {
                     Text("No snippets yet — most people never need one. This is a power tool for heavy preset users.")
-                        .font(AppFont.fraunces(12, italic: true))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(AppFont.text(12))
+                        .foregroundStyle(AppColor.ink2)
                 }
             }
         }
@@ -620,12 +605,14 @@ struct SnippetsSettingsTab: View {
                             container.snippetStore.snippets = s
                         }
                     ))
-                    .font(AppFont.mono(12, weight: .semibold))
+                    // Functional monospace: this name is literally the
+                    // {snippet:name} placeholder key, not a design voice.
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 170)
                     Text("use as {snippet:\(snippets[idx].name)}")
-                        .font(AppFont.mono(10, weight: .regular))
-                        .foregroundStyle(AppColor.inkSoft)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(AppColor.ink2)
                         .textSelection(.enabled)
                     Spacer()
                     TapButton {
@@ -634,8 +621,7 @@ struct SnippetsSettingsTab: View {
                         s.remove(at: idx)
                         container.snippetStore.snippets = s
                     } label: {
-                        Text("Delete").font(AppFont.mono(10, weight: .semibold))
-                            .foregroundStyle(AppColor.accent)
+                        LitButtonChrome(.destructive, compact: true) { Text("Delete") }
                     }
                 }
                 TextField("snippet text (what replaces the placeholder)", text: Binding(
@@ -648,7 +634,7 @@ struct SnippetsSettingsTab: View {
                     }
                 ), axis: .vertical)
                 .lineLimit(2...6)
-                .font(AppFont.fraunces(13, italic: false))
+                .font(AppFont.text(13))
             }
             .padding(.vertical, 4)
         }
@@ -680,18 +666,17 @@ struct APIKeysSettingsTab: View {
                                   !v.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                             container.apiKeys.set(v, for: provider)
                         } label: {
-                            Text("Save").foregroundStyle(AppColor.accent)
+                            LitButtonChrome(.secondary, compact: true) { Text("Save") }
                         }
                         TapButton {
                             container.apiKeys.set(nil, for: provider)
                             inputs[provider.rawValue] = ""
                         } label: {
-                            Text("Clear").foregroundStyle(.red)
+                            LitButtonChrome(.destructive, compact: true) { Text("Clear") }
                         }
                         if container.apiKeys.isSet(provider) {
                             Text("Stored in Keychain ✓")
-                                .font(AppFont.mono(10))
-                                .foregroundStyle(AppColor.inkSoft)
+                                .uiLabel(10, color: AppColor.ink2)
                         }
                     }
                 }

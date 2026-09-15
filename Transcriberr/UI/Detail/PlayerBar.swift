@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Editorial player bar. Plain (no rounded corners), mono time label,
-/// 1.5dp accent progress, tap-to-seek.
+/// Player bar: play/pause, waveform with tap-to-seek, time label.
 struct PlayerBar: View {
     let recording: Recording
     @Environment(AppContainer.self) private var container
@@ -49,12 +48,12 @@ struct PlayerBar: View {
             .frame(height: 28)
 
             Text("\(timeStamp(container.audioPlayer.currentTime)) / \(timeStamp(container.audioPlayer.duration))")
-                .monoLabel(10, color: AppColor.inkSoft)
+                .uiLabel(10, color: AppColor.ink2)
                 .monospacedDigit()
         }
         .padding(.horizontal, AppMetric.sheetPadding)
         .padding(.vertical, 10)
-        .background(AppColor.paperEdge)
+        .background(AppColor.baseDeep)
         .task(id: recording.id) {
             container.audioPlayer.load(url: URL(fileURLWithPath: recording.audioPath))
         }
@@ -70,7 +69,7 @@ struct PlayerBar: View {
             VStack {
                 Spacer(minLength: 0)
                 ZStack(alignment: .leading) {
-                    Rectangle().fill(AppColor.hairline)
+                    Rectangle().fill(AppColor.hair)
                     Rectangle().fill(AppColor.accent).frame(width: width * progress)
                 }
                 .frame(height: 2)
@@ -88,7 +87,7 @@ struct PlayerBar: View {
                 ForEach(Array(sampled.enumerated()), id: \.offset) { idx, peak in
                     let played = Double(idx) / Double(barCount) <= progress
                     Capsule()
-                        .fill(played ? AppColor.accent : AppColor.inkFaint)
+                        .fill(played ? AppColor.accent : AppColor.ink4)
                         .frame(width: max(1, (width - CGFloat(barCount - 1)) / CGFloat(barCount)),
                                height: max(2, CGFloat(peak) * 26))
                 }

@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-/// Editorial port of Android `recordings/RecordingDetailScreen.kt`.
+/// Port of Android `recordings/RecordingDetailScreen.kt`.
 struct DetailView: View {
     let recording: Recording
     var onClose: () -> Void = {}
@@ -23,13 +23,13 @@ struct DetailView: View {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .transcript: return "TRANSCRIPT"
-            case .summary:    return "SUMMARY"
-            case .minutes:    return "MINUTES"
-            case .clean:      return "CLEAN"
-            case .translate:  return "TRANSLATE"
-            case .context:    return "CONTEXT-REWRITE"
-            case .versions:   return "VERSIONS"
+            case .transcript: return "Transcript"
+            case .summary:    return "Summary"
+            case .minutes:    return "Minutes"
+            case .clean:      return "Clean"
+            case .translate:  return "Translate"
+            case .context:    return "Context-rewrite"
+            case .versions:   return "Versions"
             }
         }
         var presetId: String {
@@ -128,8 +128,8 @@ struct DetailView: View {
                                 Rectangle()
                                     .fill(speakerColor(for: entry.key))
                                     .frame(width: 7, height: 7)
-                                Text(entry.display.uppercased())
-                                    .monoLabel(9, color: AppColor.ink)
+                                Text(entry.display)
+                                    .uiLabel(9)
                             }
                         }
                         .contextMenu {
@@ -145,7 +145,7 @@ struct DetailView: View {
                         }
 
                     }
-                    Text("RENAME ↗").monoLabel(9, color: AppColor.inkMuted)
+                    Text("Rename ↗").uiLabel(9, color: AppColor.ink3)
                 }
                 .padding(.horizontal, AppMetric.sheetPadding)
                 .padding(.vertical, 8)
@@ -171,21 +171,12 @@ struct DetailView: View {
         recording.segments.first { $0.speaker == key }?.speakerName ?? key
     }
 
-    static let speakerPalette: [Color] = [
-        AppColor.accent,
-        Color(red: 0.45, green: 0.60, blue: 0.50),  // sage
-        Color(red: 0.40, green: 0.52, blue: 0.72),  // slate blue
-        Color(red: 0.65, green: 0.45, blue: 0.62),  // plum
-        Color(red: 0.78, green: 0.62, blue: 0.30),  // amber
-        Color(red: 0.55, green: 0.55, blue: 0.55),  // gray
-    ]
-
     /// First-appearance order, NOT hashValue (seed-randomized per launch).
     /// Callers that render many rows must precompute the order once — see
     /// tabContent — instead of calling this per row.
     private func speakerColor(for key: String) -> Color {
         let idx = uniqueSpeakers().firstIndex { $0.key == key } ?? 0
-        return Self.speakerPalette[idx % Self.speakerPalette.count]
+        return SpeakerPalette.colors[idx % SpeakerPalette.colors.count]
     }
 
     // MARK: - Copy / Share / Rename
@@ -217,7 +208,7 @@ struct DetailView: View {
         presentSharePicker(items: [body])
     }
 
-    /// Sidecar kinds for the SHARE ↗ menu.
+    /// Sidecar kinds for the Share ↗ menu.
     private enum SidecarKind { case txt, srt, json, audio }
 
     private func shareSidecar(_ kind: SidecarKind) {
@@ -280,20 +271,20 @@ struct DetailView: View {
     private func topRow() -> some View {
         HStack(spacing: AppMetric.m) {
             TapButton { onClose() } label: {
-                Text("← CLOSE")
-                    .monoLabel(11, color: AppColor.inkSoft)
+                Text("← Close")
+                    .uiLabel(11, color: AppColor.ink2)
             }
 
             Spacer()
 
             // Quick actions, always visible (no menu hunt).
             TapButton { copyTranscript() } label: {
-                Text("COPY")
-                    .monoLabel(10, color: hasTranscript ? AppColor.ink : AppColor.inkMuted)
+                Text("Copy")
+                    .uiLabel(10, color: hasTranscript ? AppColor.ink : AppColor.ink3)
                     .padding(.horizontal, AppMetric.s)
                     .padding(.vertical, 4)
                     .overlay(Rectangle().stroke(
-                        hasTranscript ? AppColor.hairline : AppColor.hairlineSoft,
+                        hasTranscript ? AppColor.hair : AppColor.hair.opacity(0.7),
                         lineWidth: 1
                     ))
             }
@@ -310,12 +301,12 @@ struct DetailView: View {
                 Divider()
                 Button("Share transcript as text…") { shareTranscript() }.disabled(!hasTranscript)
             } label: {
-                Text("SHARE ↗")
-                    .monoLabel(10, color: hasTranscript ? AppColor.accent : AppColor.inkMuted)
+                Text("Share ↗")
+                    .uiLabel(10, color: hasTranscript ? AppColor.accentOnLight : AppColor.ink3)
                     .padding(.horizontal, AppMetric.s)
                     .padding(.vertical, 4)
                     .overlay(Rectangle().stroke(
-                        hasTranscript ? AppColor.accent.opacity(0.6) : AppColor.hairlineSoft,
+                        hasTranscript ? AppColor.accent.opacity(0.6) : AppColor.hair.opacity(0.7),
                         lineWidth: 1
                     ))
             }
@@ -350,7 +341,7 @@ struct DetailView: View {
                     onClose()
                 }
             } label: {
-                Text("MORE ⋯").monoLabel(11, color: AppColor.inkSoft)
+                Text("More ⋯").uiLabel(11, color: AppColor.ink2)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -371,8 +362,8 @@ struct DetailView: View {
             Spacer().frame(height: AppMetric.l)
 
             HStack(spacing: 0) {
-                Text("03 / ").monoLabel(11, color: AppColor.accent)
-                Text("SESSION").monoLabel(11, color: AppColor.ink)
+                Text("03 / ").uiLabel(11, color: AppColor.accentOnLight)
+                Text("Session").uiLabel(11)
                 Spacer()
             }
             .padding(.horizontal, AppMetric.sheetPadding)
@@ -380,9 +371,9 @@ struct DetailView: View {
             Spacer().frame(height: AppMetric.s)
 
             Text(recording.title)
-                .font(AppFont.fraunces(26))
+                .font(AppFont.text(26))
                 .lineSpacing(4)
-                .tracking(-0.38)
+                .tracking(-0.2)
                 .foregroundStyle(AppColor.ink)
                 .padding(.horizontal, AppMetric.sheetPadding)
 
@@ -433,8 +424,8 @@ struct DetailView: View {
                 }
             }
         } label: {
-            Text("FOLDER: \(recording.folder?.name.uppercased() ?? "—") ▾")
-                .monoLabel(9, color: recording.folder == nil ? AppColor.inkSoft : AppColor.accent)
+            Text("Folder: \(recording.folder?.name ?? "—") ▾")
+                .uiLabel(9, color: recording.folder == nil ? AppColor.ink2 : AppColor.accentOnLight)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -449,22 +440,22 @@ struct DetailView: View {
                 ? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
                 : String(format: "%d:%02d", total / 60, total % 60))
             if let b = recording.transcribedWithBackend, !b.isEmpty {
-                out.append(b.uppercased())
+                out.append(b)
             }
             if let lang = recording.sourceLanguage, !lang.isEmpty {
-                out.append(lang.uppercased())
+                out.append(lang)
             }
             let speakers = Set(recording.segments.compactMap { $0.speaker }).count
-            if speakers > 0 { out.append("\(speakers) SPEAKERS") }
-            out.append("\(recording.segments.count) TURNS")
+            if speakers > 0 { out.append("\(speakers) speakers") }
+            out.append("\(recording.segments.count) turns")
             return out
         }()
         HStack(spacing: 6) {
             ForEach(Array(bits.enumerated()), id: \.offset) { (i, t) in
                 if i > 0 {
-                    Text("·").monoLabel(9, color: AppColor.inkMuted)
+                    Text("·").uiLabel(9, color: AppColor.ink3)
                 }
-                Text(t).monoLabel(9, color: AppColor.inkSoft)
+                Text(t).uiLabel(9, color: AppColor.ink2)
             }
             Spacer()
         }
@@ -479,8 +470,8 @@ struct DetailView: View {
                 runExpanded.toggle()
             } label: {
                 HStack(spacing: AppMetric.s) {
-                    Text(runExpanded ? "RUN ▾" : "RUN ▸").monoLabel(11, color: AppColor.ink)
-                    Text(runSummary(m)).monoLabel(10, color: AppColor.inkSoft)
+                    Text(runExpanded ? "Run ▾" : "Run ▸").uiLabel(11)
+                    Text(runSummary(m)).uiLabel(10, color: AppColor.ink2)
                         .lineLimit(1)
                     Spacer()
                 }
@@ -496,12 +487,12 @@ struct DetailView: View {
 
             if let err = m.lastError {
                 HStack {
-                    Text(err.uppercased()).monoLabel(9, color: AppColor.accent)
+                    Text(err).uiLabel(9, color: AppColor.statusError)
                     Spacer()
                 }
                 .padding(.horizontal, AppMetric.sheetPadding)
                 .padding(.vertical, 6)
-                .background(AppColor.paperEdge)
+                .background(AppColor.baseDeep)
             }
 
             runStatusBar(m)
@@ -511,10 +502,10 @@ struct DetailView: View {
     }
 
     private func runSummary(_ m: DetailModel) -> String {
-        var parts: [String] = [m.backend.displayName.uppercased()]
-        parts.append(m.languages.isEmpty ? "AUTO LANG" : m.languages.sorted().joined(separator: ",").uppercased())
-        if m.translateToEnglish { parts.append("→ ENGLISH") }
-        if m.diarize { parts.append(m.hybridDiarize ? "HYBRID DIAR" : "DIAR") }
+        var parts: [String] = [m.backend.displayName]
+        parts.append(m.languages.isEmpty ? "auto lang" : m.languages.sorted().joined(separator: ", "))
+        if m.translateToEnglish { parts.append("→ english") }
+        if m.diarize { parts.append(m.hybridDiarize ? "hybrid diar" : "diar") }
         return parts.joined(separator: " · ")
     }
 
@@ -522,7 +513,7 @@ struct DetailView: View {
     private func runOptionsBlock(_ m: DetailModel) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HairlineSoft()
-            LedgerRow("ENGINE") {
+            LedgerRow("Engine") {
                 Picker("", selection: Binding(
                     get: { m.backend }, set: { m.backend = $0 }
                 )) {
@@ -540,7 +531,7 @@ struct DetailView: View {
                 let mergeOptions = BackendFactory.Kind.allCases.filter {
                     $0.isLocal && $0.supportsAudio && $0 != .ensemble
                 }
-                LedgerRow("MERGE A") {
+                LedgerRow("Merge A") {
                     Picker("", selection: Binding(
                         get: { m.container.uiPrefs.ensembleEngineA },
                         set: { newValue in
@@ -559,7 +550,7 @@ struct DetailView: View {
                     .frame(maxWidth: 260)
                 }
                 HairlineSoft()
-                LedgerRow("MERGE B") {
+                LedgerRow("Merge B") {
                     Picker("", selection: Binding(
                         get: { m.container.uiPrefs.ensembleEngineB },
                         set: { newValue in
@@ -577,19 +568,19 @@ struct DetailView: View {
                     .frame(maxWidth: 260)
                 }
                 HairlineSoft()
-                Text("RUNS BOTH ENGINES PER CHUNK · WORD-LEVEL CONFIDENCE MERGE · GEMMA ARBITRATES HARD CONFLICTS · ALL LOCAL")
-                    .monoLabel(9, color: AppColor.inkSoft)
+                Text("Runs both engines per chunk · word-level confidence merge · Gemma arbitrates hard conflicts · all local")
+                    .uiLabel(9, color: AppColor.ink2)
                     .padding(.horizontal, AppMetric.sheetPadding)
                     .padding(.vertical, 6)
                 HairlineSoft()
             }
-            LedgerRow("LANG") {
+            LedgerRow("Lang") {
                 HStack(spacing: AppMetric.s) {
-                    languagePill("AUTO", isOn: m.languages.isEmpty) {
+                    languagePill("Auto", isOn: m.languages.isEmpty) {
                         m.languages.removeAll()
                     }
                     ForEach(supportedLanguages, id: \.self) { lang in
-                        languagePill(lang.uppercased(),
+                        languagePill(lang,
                                      isOn: m.languages.contains(lang)) {
                             if m.languages.contains(lang) {
                                 m.languages.remove(lang)
@@ -601,7 +592,7 @@ struct DetailView: View {
                 }
             }
             HairlineSoft()
-            LedgerRow("DIARIZE") {
+            LedgerRow("Diarize") {
                 Toggle("", isOn: Binding(
                     get: { m.diarize }, set: { m.diarize = $0 }
                 ))
@@ -609,7 +600,7 @@ struct DetailView: View {
             }
             HairlineSoft()
             if m.diarize {
-                LedgerRow("SPEAKERS") {
+                LedgerRow("Speakers") {
                     HStack(spacing: 12) {
                         Stepper(
                             m.expectedSpeakers == 0 ? "Auto-detect" : "\(m.expectedSpeakers)",
@@ -618,10 +609,10 @@ struct DetailView: View {
                         )
                         if m.expectedSpeakers > 0 {
                             TapButton { m.speakersExact.toggle() } label: {
-                                Text(m.speakersExact ? "EXACTLY \(m.expectedSpeakers)" : "UP TO \(m.expectedSpeakers)")
-                                    .monoLabel(9, color: m.speakersExact ? AppColor.accent : AppColor.inkSoft)
+                                Text(m.speakersExact ? "Exactly \(m.expectedSpeakers)" : "Up to \(m.expectedSpeakers)")
+                                    .uiLabel(9, color: m.speakersExact ? AppColor.accentOnLight : AppColor.ink2)
                             }
-                            .help("UP TO: the diarizer may find fewer. EXACTLY: it re-tries with a finer ear until it can tell this many voices apart (never invents phantoms).")
+                            .help("Up to: the diarizer may find fewer. Exactly: it re-tries with a finer ear until it can tell this many voices apart (never invents phantoms).")
                         }
                     }
                     .frame(maxWidth: 320, alignment: .leading)
@@ -629,7 +620,7 @@ struct DetailView: View {
                 HairlineSoft()
             }
             if m.diarize && !m.backend.needsDiarizerForSpeakers {
-                LedgerRow("HYBRID") {
+                LedgerRow("Hybrid") {
                     Toggle("", isOn: Binding(
                         get: { m.hybridDiarize }, set: { m.hybridDiarize = $0 }
                     ))
@@ -637,7 +628,7 @@ struct DetailView: View {
                 }
                 HairlineSoft()
             }
-            LedgerRow("TRANSLATE") {
+            LedgerRow("Translate") {
                 Toggle("", isOn: Binding(
                     get: { m.translateToEnglish }, set: { m.translateToEnglish = $0 }
                 ))
@@ -657,13 +648,13 @@ struct DetailView: View {
         // DetailModel (macOS 26.5 _ButtonGesture crash).
         TapButton(action: action) {
             Text(label)
-                .monoLabel(9, color: isOn ? AppColor.paper : AppColor.ink)
+                .uiLabel(9, color: isOn ? AppColor.onNight : AppColor.ink)
                 .padding(.horizontal, AppMetric.s)
                 .padding(.vertical, 4)
-                .background(isOn ? AppColor.ink : Color.clear)
+                .background(isOn ? AppColor.night : Color.clear)
                 .overlay(
                     Rectangle()
-                        .stroke(AppColor.hairline, lineWidth: isOn ? 0 : 1)
+                        .stroke(AppColor.hair, lineWidth: isOn ? 0 : 1)
                 )
         }
 
@@ -681,49 +672,44 @@ struct DetailView: View {
                     .progressViewStyle(.linear)
                     .tint(AppColor.accent)
                 HStack {
-                    Text(s.stage.uppercased())
-                        .monoLabel(9, color: AppColor.paper.opacity(0.75))
+                    Text(s.stage)
+                        .uiLabel(9, color: AppColor.onNight.opacity(0.75))
                     Spacer()
                     // TapButton, not Button — Button's _ButtonGesture
                     // crashes on macOS 26.5 when the action captures a
                     // @MainActor @Observable model (DetailModel here).
                     TapButton { m.cancel() } label: {
-                        Text("CANCEL")
-                            .foregroundStyle(AppColor.paper)
-                            .font(AppFont.mono(9))
+                        Text("Cancel")
+                            .font(AppFont.display(9, weight: .semibold))
+                            .foregroundStyle(AppColor.onNight)
                     }
                 }
             }
             .padding(.horizontal, AppMetric.sheetPadding)
             .padding(.vertical, 10)
-            .background(AppColor.ink)
+            .background(AppColor.night, in: Rectangle())
+            .litLift(.one, in: Rectangle())
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 if let s = m.status, s.failed {
-                    Text(s.stage.uppercased())
-                        .monoLabel(9, color: AppColor.accent)
+                    Text(s.stage)
+                        .uiLabel(9, color: AppColor.statusError)
                         .padding(.horizontal, AppMetric.sheetPadding)
                         .padding(.top, 8)
                 }
-                // TapButton, not Button — see note above (m.run() captures
-                // the @MainActor @Observable DetailModel → _ButtonGesture crash).
-                TapButton { m.run() } label: {
-                    HStack {
-                        PulseDot(diameter: 6)
-                        Text(m.status == nil ? "Run Transcription" : "Re-run Transcription")
-                            .font(AppFont.saira(15, weight: .semibold))
-                            .tracking(0.4)
-                            .textCase(.uppercase)
-                            .foregroundStyle(AppColor.paper)
-                        Spacer()
-                        Text("→").font(AppFont.saira(20, weight: .semibold))
-                            .foregroundStyle(AppColor.accent)
-                    }
-                    .padding(.horizontal, AppMetric.sheetPadding)
-                    .padding(.vertical, 10)
+                // Reuses InverseFooter — this IS its motivating example
+                // (RUN TRANSCRIPTION) — rather than a second hand-rolled
+                // night-ground bar with its own copy of the lift shadow.
+                InverseFooter(
+                    m.status == nil ? "Run transcription" : "Re-run transcription",
+                    action: { m.run() }
+                ) {
+                    PulseDot(diameter: 6)
+                } right: {
+                    Text("→").font(AppFont.display(20, weight: .semibold))
+                        .foregroundStyle(AppColor.accent)
                 }
             }
-            .background(AppColor.ink)
         }
     }
 
@@ -739,7 +725,7 @@ struct DetailView: View {
                         ForEach(Tab.allCases) { t in
                             TapButton { tab = t } label: {
                                 VStack(spacing: 4) {
-                                    Text(t.label).monoLabel(10, color: tab == t ? AppColor.ink : AppColor.inkSoft)
+                                    Text(t.label).uiLabel(10, color: tab == t ? AppColor.ink : AppColor.ink2)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 10)
                                     Rectangle()
@@ -756,17 +742,17 @@ struct DetailView: View {
                         proseMode.toggle()
                         container.uiPrefs.proseMode = proseMode
                     } label: {
-                        Text(proseMode ? "CARDS" : "PROSE").monoLabel(9, color: AppColor.inkSoft)
+                        Text(proseMode ? "Cards" : "Prose").uiLabel(9, color: AppColor.ink2)
                     }
                     TapButton {
                         showTimestamps.toggle()
                         container.uiPrefs.showTimestamps = showTimestamps
                     } label: {
-                        Text(showTimestamps ? "—TIMES" : "+TIMES").monoLabel(9, color: AppColor.inkSoft)
+                        Text(showTimestamps ? "−Times" : "+Times").uiLabel(9, color: AppColor.ink2)
                     }
                     TapButton { fullscreen.toggle() } label: {
-                        Text(fullscreen ? "EXIT ⤡" : "READ ⤢")
-                            .monoLabel(9, color: fullscreen ? AppColor.accent : AppColor.inkSoft)
+                        Text(fullscreen ? "Exit ⤡" : "Read ⤢")
+                            .uiLabel(9, color: fullscreen ? AppColor.accentOnLight : AppColor.ink2)
                     }
                 }
             }
@@ -791,7 +777,7 @@ struct DetailView: View {
                     // Precomputed ONCE per render — calling uniqueSpeakers()
                     // per row walked the SwiftData segments relationship
                     // hundreds of times mid-update and segfaulted SwiftData.
-                    Self.speakerPalette[(order.firstIndex(of: key) ?? 0) % Self.speakerPalette.count]
+                    SpeakerPalette.colors[(order.firstIndex(of: key) ?? 0) % SpeakerPalette.colors.count]
                 }
             )
         case .summary, .minutes, .clean, .translate, .context:
@@ -821,8 +807,8 @@ private struct VersionsPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if versions.isEmpty {
-                    Text("NO SAVED VERSIONS YET · EVERY COMPLETED RUN IS SNAPSHOTTED HERE")
-                        .monoLabel(10, color: AppColor.inkSoft)
+                    Text("No saved versions yet · every completed run is snapshotted here")
+                        .uiLabel(10, color: AppColor.ink2)
                         .padding(AppMetric.sheetPadding)
                 } else {
                     ForEach(versions, id: \.id) { v in
@@ -843,14 +829,14 @@ private struct VersionsPane: View {
             } label: {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(v.engineLabel.uppercased())
-                            .monoLabel(10, color: AppColor.ink)
-                        Text("\(Self.dateFormatter.string(from: Date(timeIntervalSince1970: Double(v.createdAtMillis) / 1000))) · \(v.segmentCount) SEGMENTS")
-                            .monoLabel(9, color: AppColor.inkSoft)
+                        Text(v.engineLabel)
+                            .uiLabel(10)
+                        Text("\(Self.dateFormatter.string(from: Date(timeIntervalSince1970: Double(v.createdAtMillis) / 1000))) · \(v.segmentCount) segments")
+                            .uiLabel(9, color: AppColor.ink2)
                     }
                     Spacer()
                     Text(isOpen ? "▾" : "▸")
-                        .monoLabel(10, color: AppColor.inkMuted)
+                        .uiLabel(10, color: AppColor.ink3)
                 }
                 .contentShape(Rectangle())
             }
@@ -861,7 +847,7 @@ private struct VersionsPane: View {
                     let name = seg.speakerName ?? seg.speaker
                     return name.map { "\($0): \(seg.text)" } ?? seg.text
                 }.joined(separator: "\n\n"))
-                    .font(AppFont.fraunces(15))
+                    .font(AppFont.text(15))
                     .lineSpacing(4)
                     .foregroundStyle(AppColor.ink)
                     .textSelection(.enabled)
@@ -884,8 +870,8 @@ private struct VersionsPane: View {
                             AppLog.error("detail", "version restore failed: \(error.localizedDescription)")
                         }
                     } label: {
-                        Text("RESTORE AS CURRENT")
-                            .monoLabel(9, color: AppColor.accent)
+                        Text("Restore as current")
+                            .uiLabel(9, color: AppColor.accentOnLight)
                             .padding(.horizontal, AppMetric.s)
                             .padding(.vertical, 4)
                             .overlay(Rectangle().stroke(AppColor.accent.opacity(0.6), lineWidth: 1))
@@ -896,11 +882,11 @@ private struct VersionsPane: View {
                         context.delete(v)
                         try? context.save()
                     } label: {
-                        Text("DELETE")
-                            .monoLabel(9, color: AppColor.inkSoft)
+                        Text("Delete")
+                            .uiLabel(9, color: AppColor.ink2)
                             .padding(.horizontal, AppMetric.s)
                             .padding(.vertical, 4)
-                            .overlay(Rectangle().stroke(AppColor.hairline, lineWidth: 1))
+                            .overlay(Rectangle().stroke(AppColor.hair, lineWidth: 1))
                     }
                     Spacer()
                 }
@@ -927,7 +913,7 @@ struct TranscriptPane: View {
     var isRunning: Bool = false
     var runStage: String? = nil
     var onEditSegment: (Segment) -> Void = { _ in }
-    var speakerColor: (String) -> Color = { _ in AppColor.accent }
+    var speakerColor: (String) -> Color = { _ in SpeakerPalette.colors[0] }
 
     /// The transcript in playback order, sorted ONCE per body pass.
     ///
@@ -959,17 +945,17 @@ struct TranscriptPane: View {
                 Spacer()
                 if isRunning {
                     PulseDot(diameter: 8)
-                    Text("TRANSCRIBING…")
-                        .monoLabel(11, color: AppColor.accent)
+                    Text("Transcribing…")
+                        .uiLabel(11, color: AppColor.accentOnLight)
                     if let stage = runStage {
                         Text(stage)
-                            .font(AppFont.fraunces(15, italic: true))
-                            .foregroundStyle(AppColor.inkSoft)
+                            .font(AppFont.text(15))
+                            .foregroundStyle(AppColor.ink2)
                             .multilineTextAlignment(.center)
                     }
                 } else {
-                    Text("NO TRANSCRIPT YET · PRESS RUN ABOVE")
-                        .monoLabel(11, color: AppColor.inkMuted)
+                    Text("No transcript yet · press Run above")
+                        .uiLabel(11, color: AppColor.ink3)
                 }
                 Spacer()
             }
@@ -978,7 +964,7 @@ struct TranscriptPane: View {
         } else if proseMode {
             ScrollView {
                 Text(proseBody)
-                    .font(AppFont.fraunces(16, italic: false))
+                    .font(AppFont.text(16))
                     .lineSpacing(6)
                     .foregroundStyle(AppColor.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -995,13 +981,13 @@ struct TranscriptPane: View {
                 // glance looks like a bug report.
                 HStack(spacing: 8) {
                     PulseDot(diameter: 5)
-                    Text("LIVE DRAFT — SPEAKERS, ECHO CLEANUP AND TURN MERGING APPLY WHEN THE RUN FINISHES")
-                        .monoLabel(9, color: AppColor.inkSoft)
+                    Text("Live draft — speakers, echo cleanup and turn merging apply when the run finishes")
+                        .uiLabel(9, color: AppColor.ink2)
                     Spacer()
                 }
                 .padding(.horizontal, AppMetric.sheetPadding)
                 .padding(.vertical, 6)
-                .background(AppColor.paper)
+                .background(AppColor.base)
                 HairlineSoft()
             }
             let segs = sortedSegments
@@ -1066,10 +1052,10 @@ struct TranscriptPane: View {
             VStack(alignment: .leading, spacing: 1) {
                 if showTimestamps {
                     Text(timestamp(seg.startSeconds))
-                        .monoLabel(9, color: AppColor.inkSoft)
+                        .uiLabel(9, color: AppColor.ink2)
                 }
                 if let lang = seg.language, !lang.isEmpty {
-                    Text(lang.uppercased()).monoLabel(8, color: AppColor.inkMuted)
+                    Text(lang).uiLabel(8, color: AppColor.ink3)
                 }
             }
             .frame(width: 46, alignment: .leading)
@@ -1078,11 +1064,11 @@ struct TranscriptPane: View {
                 if let name = seg.speakerName ?? seg.speaker {
                     HStack(spacing: 6) {
                         Rectangle().fill(speakerColor(seg.speaker ?? "")).frame(width: 5, height: 5)
-                        Text(name).monoLabel(9, color: AppColor.accent)
+                        Text(name).uiLabel(9, color: AppColor.accentOnLight)
                     }
                 }
                 Text(seg.text)
-                    .font(AppFont.inter(15))
+                    .font(AppFont.text(15))
                     .foregroundStyle(AppColor.ink)
                     .textSelection(.enabled)
             }
@@ -1129,18 +1115,18 @@ struct OutputPane: View {
                 switch runStatus {
                 case .queued:
                     PulseDot(diameter: 6)
-                    Text("QUEUED — WAITING FOR PREVIOUS GENERATION…")
-                        .monoLabel(10, color: AppColor.inkSoft)
+                    Text("Queued — waiting for previous generation…")
+                        .uiLabel(10, color: AppColor.ink2)
                 case .loading:
                     PulseDot(diameter: 6)
-                    Text("LOADING TEXT MODEL…").monoLabel(10, color: AppColor.inkSoft)
+                    Text("Loading text model…").uiLabel(10, color: AppColor.ink2)
                 case .running:
                     PulseDot(diameter: 6)
-                    Text("GENERATING… LONG TRANSCRIPTS TAKE MINUTES")
-                        .monoLabel(10, color: AppColor.inkSoft)
+                    Text("Generating… long transcripts take minutes")
+                        .uiLabel(10, color: AppColor.ink2)
                 case .failed(let reason):
-                    Text("FAILED: \(reason.uppercased())")
-                        .monoLabel(9, color: AppColor.accent)
+                    Text("Failed: \(reason)")
+                        .uiLabel(9, color: AppColor.statusError)
                         .lineLimit(2)
                 case .idle, .done:
                     EmptyView()
@@ -1166,8 +1152,8 @@ struct OutputPane: View {
                         )
                     }
                 } label: {
-                    Text(isBusy ? "WORKING…" : "GENERATE ↗")
-                        .monoLabel(10, color: isBusy ? AppColor.inkMuted : AppColor.accent)
+                    Text(isBusy ? "Working…" : "Generate ↗")
+                        .uiLabel(10, color: isBusy ? AppColor.ink3 : AppColor.accentOnLight)
                 }
             }
             .padding(.horizontal, AppMetric.sheetPadding)
@@ -1177,7 +1163,7 @@ struct OutputPane: View {
             if let doc {
                 ScrollView {
                     Text(LocalizedStringKey(doc.markdown))
-                        .font(AppFont.fraunces(16, italic: false))
+                        .font(AppFont.text(16))
                         .lineSpacing(6)
                         .foregroundStyle(AppColor.ink)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1187,8 +1173,8 @@ struct OutputPane: View {
             } else {
                 VStack(alignment: .leading) {
                     Spacer()
-                    Text("NOT GENERATED YET · PRESS GENERATE ↗ ABOVE")
-                        .monoLabel(11, color: AppColor.inkMuted)
+                    Text("Not generated yet · press Generate ↗ above")
+                        .uiLabel(11, color: AppColor.ink3)
                         .frame(maxWidth: .infinity, alignment: .center)
                     Spacer()
                 }

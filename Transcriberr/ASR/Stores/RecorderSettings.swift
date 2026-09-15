@@ -16,7 +16,7 @@ final class RecorderSettings: @unchecked Sendable {
 
         var label: String {
             switch self {
-            case .auto: return "AUTO"
+            case .auto: return "Auto"
             case .x2:   return "2×"
             case .x4:   return "4×"
             case .x6:   return "6×"

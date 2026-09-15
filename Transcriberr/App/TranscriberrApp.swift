@@ -25,7 +25,7 @@ struct TranscriberrApp: App {
                 .environment(container)
                 .modelContainer(container.modelContainer)
                 .frame(minWidth: 980, minHeight: 640)
-                .background(AppColor.paper.ignoresSafeArea())
+                .background(AppColor.base.ignoresSafeArea())
                 .preferredColorScheme(.light)
         }
         .windowStyle(.hiddenTitleBar)

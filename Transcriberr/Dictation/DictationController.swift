@@ -62,6 +62,12 @@ final class DictationController: @unchecked Sendable {
     private(set) var sessionCount = 0
     /// Provisional text while still speaking (periodic decode of the buffer).
     private(set) var previewText = ""
+    /// True once THIS session's first audio buffer has landed. Session-scoped
+    /// on purpose: the capture's own flag stays true from the previous
+    /// session until its (grace-delayed) stop runs, which is exactly the
+    /// window in which a quick restart's bounce check and "OPENING MIC"
+    /// label would read a stale value.
+    private(set) var micOpen = false
     /// Capitalized words from the last passage that aren't in the vocabulary
     /// yet — offered as one-click additions.
     private(set) var suggestedNames: [String] = []
@@ -115,6 +121,25 @@ final class DictationController: @unchecked Sendable {
     private var sessionID = 0
     private var pressedAt: Date?
     private var comboUsed = false
+    /// When the current session began (`begin()`); a stop tap in the first
+    /// second, before any audio has landed, is a bounce, not a stop.
+    private var sessionStartedAt = Date.distantPast
+    /// Sessions whose words already reached the target through a pause
+    /// flush. Their final pass may legitimately hold nothing but a silent
+    /// tail — that must end like a success, not as "Nothing heard".
+    private var deliveredSessions = Set<Int>()
+    /// Sessions that queued at least one pause flush. A flush may still be
+    /// in flight when the stop tap lands, so this — not `deliveredSessions`
+    /// — decides whether a tiny final tail must still go through the queue
+    /// (where it ends with the Tink once the flush has delivered).
+    private var flushedSessions = Set<Int>()
+    private static let stopBounceWindow: TimeInterval = 1.0
+    private static let minimumSessionSeconds = 0.45   // ~0.3 s of speech room plus the tail grace
+    private static let tailGraceNanoseconds: UInt64 = 150_000_000
+    /// Hands-free: a session nobody has spoken into for this long was
+    /// forgotten. It ends without a notice — everything said before was
+    /// flushed at the pauses, so nothing is lost.
+    private static let autoStopSilenceSeconds: TimeInterval = 60
     /// Toggle mode doubles as push-to-talk: a press held longer than this
     /// starts a session that ends on release (Wispr-style "tap or hold").
     private var holdTimer: Task<Void, Never>?
@@ -380,7 +405,17 @@ final class DictationController: @unchecked Sendable {
     @MainActor
     func toggle(target: Target) {
         switch phase {
-        case .listening:                          finish()
+        case .listening:
+            // A second tap before the mic has delivered anything is a
+            // bounce (seen in the log: tap, tap 0.28 s later, zero frames),
+            // not a stop. Bounded to the first second so a mic that never
+            // delivers can still be stopped.
+            let age = Date().timeIntervalSince(sessionStartedAt)
+            if !micOpen, age < Self.stopBounceWindow {
+                AppLog.info("dictation", String(format: "stop tap ignored — no audio yet, %.0f ms after start", age * 1000))
+                return
+            }
+            finish()
         case .idle, .message, .transcribing, .inserting: begin(target: target)
         }
     }
@@ -459,8 +494,18 @@ final class DictationController: @unchecked Sendable {
         AppLog.info("dictation", "target \(context.appName ?? "?") [\(context.bundleId ?? "-")] role=\(context.role ?? "-") mode=\(activeMode.rawValue) tone=\(activeTone.rawValue) context=\(context.preceding?.count ?? 0)ch")
         phase = .listening
         lastText = ""
+        sessionStartedAt = Date()
+        micOpen = false
         updateHUD()
-        playSound("Pop")
+        // The ready cue plays when the first buffer lands, not now: the
+        // engine takes 30–300 ms to open (more on Bluetooth), and a Pop
+        // before that invited the user to speak into a closed mic — the
+        // first word of a short utterance was routinely lost.
+        capture.onAudioArrived = { [weak self] in
+            guard let self, self.sessionID == session, self.phase == .listening else { return }
+            self.micOpen = true
+            self.playSound("Pop")
+        }
 
         // Warm the engine while the user is still talking.
         let backend = factory.backend(for: settings.engine)
@@ -533,15 +578,51 @@ final class DictationController: @unchecked Sendable {
         updateHUD()
         let start = startTask
         let gen = generation
+        let session = sessionID
         teardown = Task { @MainActor [weak self] in
             await start?.value
+            // Tail grace: the key goes down while the last syllable is still
+            // in the HAL's buffer. Let it land before the engine stops.
+            try? await Task.sleep(nanoseconds: Self.tailGraceNanoseconds)
             guard let self else { return }
             let samples = self.capture.stop()
             // Only a cancel drops the audio. A new session may already be
             // listening by now (fast double tap) — the passage still counts.
             guard gen == self.generation else { return }
-            self.enqueue(samples, final: true)
+            let seconds = Double(samples.count) / UtteranceCapture.sampleRate
+            if seconds < Self.minimumSessionSeconds, !self.flushedSessions.contains(session) {
+                // Too short to hold a word and nothing delivered earlier:
+                // back to idle without a notice.
+                AppLog.info("dictation", String(format: "session ended with %.2fs of audio — dropped quietly", seconds))
+                if self.phase == .transcribing {
+                    self.phase = .idle
+                    self.updateHUD()
+                }
+                return
+            }
+            self.enqueue(samples, final: true, session: session)
         }
+    }
+
+    /// End a listening session with nothing to recognize: capture stops,
+    /// nothing is queued, no notice. Unlike `cancel()` the generation is
+    /// left alone, so passes already flushed still land.
+    @MainActor
+    private func endQuietly(_ reason: String) {
+        guard phase == .listening else { return }
+        AppLog.info("dictation", reason)
+        flushLoop?.cancel()
+        flushLoop = nil
+        previewLoop?.cancel()
+        previewLoop = nil
+        previewText = ""
+        let start = startTask
+        teardown = Task { @MainActor [weak self] in
+            await start?.value
+            self?.capture.stop()
+        }
+        phase = .idle
+        updateHUD()
     }
 
     @MainActor
@@ -574,9 +655,16 @@ final class DictationController: @unchecked Sendable {
         flushLoop?.cancel()
         let session = sessionID
         flushLoop = Task { @MainActor [weak self] in
+            var lastVoiceAt = Date()
             while let self, !Task.isCancelled, session == self.sessionID, self.phase == .listening {
                 try? await Task.sleep(nanoseconds: 150_000_000)
                 guard self.capture.isRunning else { continue }
+                if self.capture.hasVoiceSinceDrain { lastVoiceAt = Date() }
+                let quietFor = Date().timeIntervalSince(lastVoiceAt)
+                if quietFor >= Self.autoStopSilenceSeconds {
+                    self.endQuietly(String(format: "no speech for %.0f s — ending the hands-free session", quietFor))
+                    return
+                }
                 let silence = self.capture.silenceSeconds
                 let buffered = self.capture.bufferedSeconds
                 let flushOnPause = self.capture.hasVoiceSinceDrain && silence >= self.settings.pauseFlushSeconds
@@ -586,7 +674,7 @@ final class DictationController: @unchecked Sendable {
                     && ((buffered >= 60 && silence >= 0.4) || buffered >= 90)
                 if flushOnPause || flushOnLength {
                     let samples = self.capture.drain()
-                    self.enqueue(samples, final: false)
+                    self.enqueue(samples, final: false, session: session)
                 }
                 if !self.capture.hasVoiceSinceDrain, buffered > 20 {
                     // Nothing but room tone: drop it so silence never
@@ -633,16 +721,17 @@ final class DictationController: @unchecked Sendable {
         let context: DictationContext
         let mode: DictationSettings.FormatMode
         let tone: DictationSettings.Tone
+        let session: Int
     }
 
     /// Passes run strictly in order (one shared engine, and the text must
     /// arrive in the order it was spoken).
     @MainActor
-    private func enqueue(_ samples: [Float], final: Bool) {
+    private func enqueue(_ samples: [Float], final: Bool, session: Int) {
         let gen = generation
         let prior = pipelineTail
-        let passage = Passage(target: target, context: context, mode: activeMode, tone: activeTone)
-        if !final { pendingPasses += 1 }
+        let passage = Passage(target: target, context: context, mode: activeMode, tone: activeTone, session: session)
+        if final { flushedSessions.remove(session) } else { pendingPasses += 1; flushedSessions.insert(session) }
         pipelineTail = Task { @MainActor [weak self] in
             await prior?.value
             guard let self else { return }
@@ -660,7 +749,7 @@ final class DictationController: @unchecked Sendable {
         // Empty / silent passes end quietly.
         guard samples.count >= 8_000, Self.hasSpeech(samples) else {
             AppLog.info("dictation", String(format: "skip %.2fs — no speech", seconds))
-            if final { finalMessage("Nothing heard") }
+            if final { endEmptyFinal(passage: passage) }
             return
         }
 
@@ -691,6 +780,7 @@ final class DictationController: @unchecked Sendable {
                 format: "recognized %.1fs → %d chars in %.2fs", seconds, recognized.count,
                 Date().timeIntervalSince(t0)))
             if settings.spokenCommands, passage.mode != .verbatim, DictationText.isScratchOnly(recognized) {
+                if !final { deliveredSessions.insert(passage.session) }
                 scratchLastInsertion(final: final)
                 return
             }
@@ -720,7 +810,7 @@ final class DictationController: @unchecked Sendable {
         }
         guard gen == generation else { return }
         guard !text.isEmpty else {
-            if final { finalMessage("Nothing heard") }
+            if final { endEmptyFinal(passage: passage) }
             return
         }
 
@@ -728,6 +818,7 @@ final class DictationController: @unchecked Sendable {
         previewText = ""
         sessionCount += 1
         let outcome = deliver(text, passage: passage)
+        if final { deliveredSessions.remove(passage.session) } else { deliveredSessions.insert(passage.session) }
         suggestNames(from: text)
 
         if settings.keepHistory {
@@ -1057,6 +1148,25 @@ final class DictationController: @unchecked Sendable {
         }
         let rms = (sumSq / Float(max(1, samples.count))).squareRoot()
         return UtteranceCapture.isVoiced(rms: rms, peak: peak)
+    }
+
+    /// A final pass with nothing to insert. When a pause flush already
+    /// delivered this session's words, the session ends the way a
+    /// successful one does — the Tink and the brief result strip. "Nothing
+    /// heard" after a 0.4 s silent tail, right after the words had visibly
+    /// landed, was the most common false alarm in the log.
+    @MainActor
+    private func endEmptyFinal(passage: Passage) {
+        guard deliveredSessions.remove(passage.session) != nil else {
+            finalMessage("Nothing heard")
+            return
+        }
+        AppLog.info("dictation", "silent tail after a delivered flush — ending as success")
+        playSound("Tink")
+        if phase == .transcribing || phase == .inserting {
+            phase = .idle
+            updateHUD(showResultBriefly: true)
+        }
     }
 
     /// Outcome notice for a FINAL pass. Skipped when a newer session is

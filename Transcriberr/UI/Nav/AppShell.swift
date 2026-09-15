@@ -10,10 +10,10 @@ struct AppShell: View {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .record:   return "RECORD"
-            case .library:  return "LIBRARY"
-            case .dictate:  return "DICTATE"
-            case .settings: return "SETTINGS"
+            case .record:   return "Record"
+            case .library:  return "Library"
+            case .dictate:  return "Dictate"
+            case .settings: return "Settings"
             }
         }
         var index: Int {
@@ -42,9 +42,9 @@ struct AppShell: View {
         HStack(spacing: 0) {
             sidebar
                 .frame(width: sidebarWidth)
-                .background(AppColor.paperEdge)
+                .background(AppColor.baseDeep)
 
-            Rectangle().fill(AppColor.hairline).frame(width: 1)
+            Rectangle().fill(AppColor.hair).frame(width: 1)
 
             Group {
                 switch section {
@@ -60,9 +60,9 @@ struct AppShell: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(AppColor.paper)
+            .background(AppColor.base)
         }
-        .background(AppColor.paper)
+        .background(AppColor.base)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // File → New Recording (⌘N): bring the Record section forward;
         // RecordView picks up the pending request and starts recording.
@@ -82,8 +82,8 @@ struct AppShell: View {
 
             HStack(alignment: .lastTextBaseline, spacing: 6) {
                 Text("transcriberr")
-                    .font(AppFont.saira(20, weight: .semibold))
-                    .tracking(0.4)
+                    .font(AppFont.display(20, weight: .semibold))
+                    .tracking(0.1)
                     .foregroundStyle(AppColor.ink)
                 Circle()
                     .fill(AppColor.accent)
@@ -105,7 +105,7 @@ struct AppShell: View {
 
             HairlineSoft()
             HStack {
-                Text(Bundle.versionBadge).monoLabel(9, color: AppColor.inkMuted)
+                Text(Bundle.versionBadge).uiLabel(9, color: AppColor.ink3)
                 Spacer()
             }
             .padding(.horizontal, AppMetric.l)
@@ -120,9 +120,9 @@ struct AppShell: View {
         } label: {
             HStack(alignment: .center, spacing: AppMetric.s) {
                 Text(String(format: "%02d", s.index))
-                    .monoLabel(11, color: section == s ? AppColor.accent : AppColor.inkMuted)
+                    .uiLabel(11, color: section == s ? AppColor.accentOnLight : AppColor.ink3)
                 Text(s.label)
-                    .monoLabel(11, color: section == s ? AppColor.ink : AppColor.inkSoft)
+                    .uiLabel(11, color: section == s ? AppColor.ink : AppColor.ink2)
                 Spacer()
                 if section == s {
                     Rectangle().fill(AppColor.accent).frame(width: 3, height: 16)
@@ -131,7 +131,7 @@ struct AppShell: View {
             .padding(.horizontal, AppMetric.l)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(section == s ? AppColor.paper : Color.clear)
+            .background(section == s ? AppColor.base : Color.clear)
             .contentShape(Rectangle())
         }
 
@@ -144,6 +144,6 @@ extension Bundle {
     /// badge can never lie about which build is running.
     static var versionBadge: String {
         let v = main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        return "V\(v.replacingOccurrences(of: ".", with: "·")) / MACOS"
+        return "V\(v.replacingOccurrences(of: ".", with: "·")) / macOS"
     }
 }

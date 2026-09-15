@@ -26,7 +26,7 @@ struct DictationView: View {
                     InkRule()
                     Spacer().frame(height: AppMetric.l)
 
-                    SectionIndex(3, "DICTATE", summary: summary(controller))
+                    SectionIndex(3, "Dictate", summary: summary(controller))
                         .padding(.horizontal, AppMetric.sheetPadding)
 
                     Spacer().frame(height: AppMetric.l)
@@ -60,12 +60,12 @@ struct DictationView: View {
 
             if let err = controller.lastError {
                 HStack {
-                    Text(err.uppercased()).monoLabel(9, color: AppColor.accent)
+                    Text(err).uiLabel(9, color: AppColor.statusError)
                     Spacer()
                 }
                 .padding(.horizontal, AppMetric.sheetPadding)
                 .padding(.vertical, 6)
-                .background(AppColor.paperEdge)
+                .background(AppColor.baseDeep)
             }
             footer(controller)
         }
@@ -84,17 +84,17 @@ struct DictationView: View {
         case .listening:
             HStack(spacing: 8) {
                 PulseDot(diameter: 6)
-                Text("LISTENING").monoLabel(10, color: AppColor.accent)
+                Text(c.micOpen ? "Listening" : "Opening mic").uiLabel(10, color: AppColor.accentOnLight)
             }
         case .transcribing, .inserting:
-            Text("RECOGNIZING").monoLabel(10, color: AppColor.inkSoft)
+            Text("Recognizing").uiLabel(10, color: AppColor.ink2)
         default:
             HStack(spacing: AppMetric.m) {
                 TapButton { showSetup.toggle() } label: {
-                    Text("SETUP").monoLabel(10, color: AppColor.inkMuted)
+                    Text("Setup").uiLabel(10, color: AppColor.ink3)
                 }
-                Text(c.hotkeyArmed ? "HOTKEY · \(c.settings.hotkey.glyph)" : "HOTKEY · OFF")
-                    .monoLabel(10, color: c.hotkeyArmed ? AppColor.ink : AppColor.inkMuted)
+                Text(c.hotkeyArmed ? "Hotkey · \(c.settings.hotkey.glyph)" : "Hotkey · off")
+                    .uiLabel(10, color: c.hotkeyArmed ? AppColor.ink : AppColor.ink3)
             }
         }
     }
@@ -121,36 +121,37 @@ struct DictationView: View {
         let allDone = micOK && c.accessibilityTrusted && c.inputMonitoringGranted
         VStack(alignment: .leading, spacing: AppMetric.s) {
             HStack {
-                Text("SETUP · \(allDone ? "ALL SET" : "THREE PERMISSIONS, ONCE")").monoLabel(10, color: allDone ? AppColor.ink : AppColor.accent)
+                Text("Setup · \(allDone ? "all set" : "three permissions, once")")
+                    .uiLabel(10, color: allDone ? AppColor.ink : AppColor.accentOnLight)
                 Spacer()
                 if allDone || s.onboarded {
                     TapButton {
                         s.onboarded = true
                         showSetup = false
-                    } label: { Text(allDone ? "DONE" : "HIDE").monoLabel(10, color: AppColor.inkSoft) }
+                    } label: { Text(allDone ? "Done" : "Hide").uiLabel(10, color: AppColor.ink2) }
                 }
             }
-            setupRow(1, "MICROPHONE", done: micOK,
+            setupRow(1, "Microphone", done: micOK,
                      detail: micOK ? "Granted." : "Needed to hear you. Nothing is recorded until you press the key.",
-                     action: micOK ? nil : ("ALLOW", {
+                     action: micOK ? nil : ("Allow", {
                         AVCaptureDevice.requestAccess(for: .audio) { _ in
                             DispatchQueue.main.async { micStatus = AVCaptureDevice.authorizationStatus(for: .audio) }
                         }
                      }))
-            setupRow(2, "ACCESSIBILITY", done: c.accessibilityTrusted,
+            setupRow(2, "Accessibility", done: c.accessibilityTrusted,
                      detail: c.accessibilityTrusted ? "Granted." : "Lets the app see the hotkey in other apps and paste the text at the cursor.",
-                     action: c.accessibilityTrusted ? nil : ("GRANT", { c.requestAccessibility() }))
-            setupRow(3, "INPUT MONITORING", done: c.inputMonitoringGranted,
+                     action: c.accessibilityTrusted ? nil : ("Grant", { c.requestAccessibility() }))
+            setupRow(3, "Input monitoring", done: c.inputMonitoringGranted,
                      detail: c.inputMonitoringGranted ? "Granted." : "Lets the app receive the key press itself. Usually ticked together with Accessibility.",
-                     action: c.inputMonitoringGranted ? nil : ("GRANT", { c.requestInputMonitoring() }))
-            setupRow(4, "TRY IT", done: !c.lastHotkeyEvent.isEmpty,
+                     action: c.inputMonitoringGranted ? nil : ("Grant", { c.requestInputMonitoring() }))
+            setupRow(4, "Try it", done: !c.lastHotkeyEvent.isEmpty,
                      detail: c.lastHotkeyEvent.isEmpty
                         ? "Press \(s.hotkey.label) once. This line changes the moment the key is seen."
                         : "Seen: \(c.lastHotkeyEvent). \(s.mode == .hold ? "Hold it and talk." : "Tap to start, tap to stop — or hold to talk.")",
                      action: nil)
         }
         .padding(AppMetric.m)
-        .overlay(Rectangle().stroke(allDone ? AppColor.hairline : AppColor.accent, lineWidth: 1))
+        .overlay(Rectangle().stroke(allDone ? AppColor.hair : AppColor.accent, lineWidth: 1))
         .onAppear { micStatus = AVCaptureDevice.authorizationStatus(for: .audio) }
     }
 
@@ -160,18 +161,16 @@ struct DictationView: View {
         action: (String, () -> Void)?
     ) -> some View {
         HStack(alignment: .top, spacing: AppMetric.m) {
-            Rectangle().fill(done ? AppColor.accent : AppColor.inkFaint).frame(width: 8, height: 8).padding(.top, 4)
+            Rectangle().fill(done ? AppColor.accent : AppColor.ink4).frame(width: 8, height: 8).padding(.top, 4)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(n) · \(title)").monoLabel(10, color: done ? AppColor.ink : AppColor.inkSoft)
-                Text(detail).font(AppFont.inter(12)).foregroundStyle(AppColor.inkSoft)
+                Text("\(n) · \(title)").uiLabel(10, color: done ? AppColor.ink : AppColor.ink2)
+                Text(detail).font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
                     .frame(maxWidth: 560, alignment: .leading)
             }
             Spacer()
             if let action {
                 TapButton(action: action.1) {
-                    Text(action.0).monoLabel(10, color: AppColor.paper)
-                        .padding(.horizontal, AppMetric.m).padding(.vertical, 6)
-                        .background(AppColor.ink)
+                    LitButtonChrome(.primary, compact: true) { Text(action.0) }
                 }
             }
         }
@@ -183,26 +182,26 @@ struct DictationView: View {
     private func optionsRow(_ c: DictationController) -> some View {
         let s = c.settings
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("DICTATION OPTIONS · TAP A VALUE TO CHANGE")
-                .monoLabel(10, color: AppColor.inkSoft)
+            Text("Dictation options · tap a value to change")
+                .uiLabel(10, color: AppColor.ink2)
             HStack(alignment: .top, spacing: AppMetric.l) {
-                option("HOTKEY", s.hotkey.glyph, active: s.hotkey != .off,
+                option("Hotkey", s.hotkey.glyph, active: s.hotkey != .off,
                        hint: "modifier key that\nstarts dictation") { cycleHotkey(s) }
-                option("MODE", s.mode == .hold ? "HOLD" : "TOGGLE", active: s.mode == .toggle,
+                option("Mode", s.mode == .hold ? "Hold" : "Toggle", active: s.mode == .toggle,
                        hint: s.mode == .hold ? "hold to talk,\nrelease to insert" : "tap to start, tap to\nstop · or hold to talk") {
                     s.mode = s.mode == .hold ? .toggle : .hold
                 }
-                option("MODE·DEFAULT", s.defaultMode == .smart ? "SMART" : s.defaultMode == .verbatim ? "VERBATIM" : "CLEAN",
+                option("Mode · default", s.defaultMode == .smart ? "Smart" : s.defaultMode == .verbatim ? "Verbatim" : "Clean",
                        active: s.defaultMode == .smart,
                        hint: "apps without a rule ·\nsmart = Gemma, context-aware") { cycleMode(s) }
-                option("HISTORY", s.keepHistory ? "ON" : "OFF", active: s.keepHistory,
+                option("History", s.keepHistory ? "On" : "Off", active: s.keepHistory,
                        hint: "save each passage to\nthe Dictation folder") { s.keepHistory.toggle() }
-                option("LANG", s.languages.isEmpty ? "AUTO" : s.languages.sorted().joined(separator: ",").uppercased(),
+                option("Lang", s.languages.isEmpty ? "Auto" : s.languages.sorted().joined(separator: ", "),
                        active: !s.languages.isEmpty,
                        hint: "spoken language") { cycleLanguage(s) }
-                option("ENGINE", s.engine.displayName.uppercased(), active: false,
+                option("Engine", s.engine.displayName, active: false,
                        hint: "speech engine for\nsingle passages") { cycleEngine(s) }
-                option("MIC", s.voiceProcessing ? "FILTERED" : "RAW", active: s.voiceProcessing,
+                option("Mic", s.voiceProcessing ? "Filtered" : "Raw", active: s.voiceProcessing,
                        hint: s.voiceProcessing ? "Apple echo/noise filter ·\n~1 s slower start" : "instant start · filter\nturns other apps down") {
                     s.voiceProcessing.toggle()
                 }
@@ -219,7 +218,7 @@ struct DictationView: View {
         VStack(alignment: .leading, spacing: 4) {
             TagPair(label: label, value: value, active: active, action: action)
             Text(hint)
-                .monoLabel(8, color: AppColor.inkSoft.opacity(0.75))
+                .uiLabel(8, color: AppColor.ink2.opacity(0.75))
                 .lineSpacing(1)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -269,41 +268,37 @@ struct DictationView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Rectangle()
-                        .fill(c.accessibilityTrusted ? AppColor.accent : AppColor.inkFaint)
+                        .fill(c.accessibilityTrusted ? AppColor.accent : AppColor.ink4)
                         .frame(width: 8, height: 8)
-                    Text("ACCESSIBILITY · \(c.accessibilityTrusted ? "GRANTED" : "NOT GRANTED")")
-                        .monoLabel(10, color: c.accessibilityTrusted ? AppColor.ink : AppColor.inkSoft)
+                    Text("Accessibility · \(c.accessibilityTrusted ? "granted" : "not granted")")
+                        .uiLabel(10, color: c.accessibilityTrusted ? AppColor.ink : AppColor.ink2)
                 }
                 Text(c.accessibilityTrusted
                      ? "The global hotkey works in every app and text is inserted at the cursor."
                      : "Needed for the global hotkey and for inserting text into other apps. Without it, dictation still works here and copies to the clipboard.")
-                    .font(AppFont.inter(12))
-                    .foregroundStyle(AppColor.inkSoft)
+                    .font(AppFont.text(12))
+                    .foregroundStyle(AppColor.ink2)
                     .frame(maxWidth: 520, alignment: .leading)
                 if c.accessibilityTrusted, !c.inputMonitoringGranted {
                     HStack(spacing: AppMetric.m) {
-                        Text("INPUT MONITORING · NOT GRANTED — THE HOTKEY STAYS DEAF WITHOUT IT")
-                            .monoLabel(9, color: AppColor.accent)
+                        Text("Input monitoring · not granted — the hotkey stays deaf without it")
+                            .uiLabel(9, color: AppColor.statusWarning)
                         TapButton { c.requestInputMonitoring() } label: {
-                            Text("GRANT INPUT MONITORING")
-                                .monoLabel(9, color: AppColor.paper)
-                                .padding(.horizontal, AppMetric.s)
-                                .padding(.vertical, 5)
-                                .background(AppColor.accent)
+                            LitButtonChrome(.accent, compact: true) { Text("Grant input monitoring") }
                         }
                     }
                 }
                 if c.accessibilityTrusted, c.settings.hotkey != .off {
                     Text(c.hotkeyArmed
-                         ? "HOTKEY \(c.settings.hotkey.glyph) · \(c.hotkeyMechanism.uppercased()) · LAST EVENT: \(c.lastHotkeyEvent.isEmpty ? "NONE YET — PRESS IT" : c.lastHotkeyEvent)"
-                         : "HOTKEY NOT ARMED — RELAUNCH TRANSCRIBERR")
-                        .monoLabel(9, color: c.hotkeyArmed && !c.lastHotkeyEvent.isEmpty ? AppColor.ink : AppColor.inkSoft)
+                         ? "Hotkey \(c.settings.hotkey.glyph) · \(c.hotkeyMechanism) · last event: \(c.lastHotkeyEvent.isEmpty ? "none yet — press it" : c.lastHotkeyEvent)"
+                         : "Hotkey not armed — relaunch Transcriberr")
+                        .uiLabel(9, color: c.hotkeyArmed && !c.lastHotkeyEvent.isEmpty ? AppColor.ink : AppColor.ink2)
                         .lineLimit(2)
                 }
                 if !c.accessibilityTrusted, DictationController.isAdHocSigned {
                     Text("Already ticked in System Settings? The entry belongs to an earlier build whose signature no longer matches: remove Transcriberr from the Accessibility list with −, then add /Applications/Transcriberr.app again. Builds from 3.1.1 on keep the grant across updates. The strip updates by itself once it's granted.")
-                        .font(AppFont.inter(11))
-                        .foregroundStyle(AppColor.accent)
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.statusWarning)
                         .frame(maxWidth: 520, alignment: .leading)
                 }
             }
@@ -313,20 +308,12 @@ struct DictationView: View {
                     TapButton {
                         c.openAccessibilitySettings()
                     } label: {
-                        Text("OPEN SETTINGS")
-                            .monoLabel(10, color: AppColor.ink)
-                            .padding(.horizontal, AppMetric.m)
-                            .padding(.vertical, 8)
-                            .overlay(Rectangle().stroke(AppColor.ink, lineWidth: 1))
+                        LitButtonChrome(.secondary) { Text("Open Settings") }
                     }
                     TapButton {
                         c.requestAccessibility()
                     } label: {
-                        Text("GRANT ACCESS")
-                            .monoLabel(10, color: AppColor.paper)
-                            .padding(.horizontal, AppMetric.m)
-                            .padding(.vertical, 8)
-                            .background(AppColor.ink)
+                        LitButtonChrome(.primary) { Text("Grant access") }
                     }
                 }
             }
@@ -360,8 +347,8 @@ struct DictationView: View {
                 }
                 .frame(height: 40)
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(phaseLabel(c)).monoLabel(9, color: c.phase == .listening ? AppColor.accent : AppColor.inkSoft)
-                    Text("\(c.sessionCount) PASSAGES · SESSION").monoLabel(9, color: AppColor.inkMuted)
+                    Text(phaseLabel(c)).uiLabel(9, color: c.phase == .listening ? AppColor.accentOnLight : AppColor.ink2)
+                    Text("\(c.sessionCount) passages · session").uiLabel(9, color: AppColor.ink3)
                 }
             }
             .padding(.horizontal, AppMetric.sheetPadding)
@@ -372,11 +359,13 @@ struct DictationView: View {
 
     private func phaseLabel(_ c: DictationController) -> String {
         switch c.phase {
-        case .idle:          return "READY"
-        case .listening:     return c.pendingPasses > 0 ? "LISTENING · WRITING…" : "LISTENING"
-        case .transcribing:  return "RECOGNIZING"
-        case .inserting:     return "INSERTING"
-        case .message(let m): return m.uppercased()
+        case .idle:          return "Ready"
+        case .listening:
+            guard c.micOpen else { return "Opening mic" }
+            return c.pendingPasses > 0 ? "Listening · writing…" : "Listening"
+        case .transcribing:  return "Recognizing"
+        case .inserting:     return "Inserting"
+        case .message(let m): return m
         }
     }
 
@@ -385,29 +374,29 @@ struct DictationView: View {
     @ViewBuilder
     private func editorBlock(_ c: DictationController, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            EyebrowRow("SCRATCH PAD · TEXT DICTATED WHILE THIS SCREEN IS OPEN LANDS HERE") {
+            EyebrowRow("Scratch pad · text dictated while this screen is open lands here") {
                 EmptyView()
             } right: {
                 HStack(spacing: AppMetric.m) {
-                    EditorialChip(label: "COPY") { copyAll(text.wrappedValue) }
-                    EditorialChip(label: "SAVE TO LIBRARY") { saveToLibrary(c, text.wrappedValue) }
-                    EditorialChip(label: "CLEAR") { text.wrappedValue = "" }
+                    LitChip(label: "Copy") { copyAll(text.wrappedValue) }
+                    LitChip(label: "Save to library") { saveToLibrary(c, text.wrappedValue) }
+                    LitChip(label: "Clear") { text.wrappedValue = "" }
                 }
             }
             if !c.suggestedNames.isEmpty {
                 HStack(spacing: AppMetric.s) {
-                    Text("NEW NAMES · TAP TO ADD TO VOCABULARY").monoLabel(9, color: AppColor.inkSoft)
+                    Text("New names · tap to add to vocabulary").uiLabel(9, color: AppColor.ink2)
                     ForEach(c.suggestedNames.prefix(6), id: \.self) { name in
                         HStack(spacing: 4) {
                             TapButton { c.addToVocabulary(name) } label: {
                                 Text("+ \(name)")
-                                    .font(AppFont.mono(10))
+                                    .font(AppFont.display(10, weight: .semibold))
                                     .foregroundStyle(AppColor.ink)
                                     .padding(.horizontal, 8).padding(.vertical, 4)
                                     .overlay(Rectangle().stroke(AppColor.accent, lineWidth: 1))
                             }
                             TapButton { c.dismissSuggestion(name) } label: {
-                                Text("×").monoLabel(10, color: AppColor.inkMuted)
+                                Text("×").uiLabel(10, color: AppColor.ink3)
                             }
                         }
                     }
@@ -419,24 +408,24 @@ struct DictationView: View {
                     Text(c.phase == .listening && !c.previewText.isEmpty
                          ? c.previewText + " …"
                          : c.settings.hotkey == .off
-                         ? "Press DICTATE below and start talking."
-                         : "Hold \(c.settings.hotkey.label) and start talking — or press DICTATE below.")
-                        .font(AppFont.fraunces(20, italic: true))
-                        .foregroundStyle(AppColor.inkSoft)
+                         ? "Press Dictate below and start talking."
+                         : "Hold \(c.settings.hotkey.label) and start talking — or press Dictate below.")
+                        .font(AppFont.text(20))
+                        .foregroundStyle(AppColor.ink2)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 12)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: text)
-                    .font(AppFont.inter(15))
+                    .font(AppFont.text(15))
                     .lineSpacing(4)
                     .foregroundStyle(AppColor.ink)
                     .scrollContentBackground(.hidden)
                     .padding(6)
                     .frame(minHeight: 240)
             }
-            .background(AppColor.paperEdge)
-            .overlay(Rectangle().stroke(AppColor.hairline, lineWidth: 1))
+            .background(AppColor.baseDeep)
+            .overlay(Rectangle().stroke(AppColor.hair, lineWidth: 1))
         }
     }
 
@@ -455,25 +444,25 @@ struct DictationView: View {
     private func footer(_ c: DictationController) -> some View {
         switch c.phase {
         case .listening:
-            InverseFooter("Stop & insert", subtitle: c.settings.mode == .toggle ? "FLUSHES ON PAUSES · TAP TO FINISH" : "RELEASE THE KEY OR TAP HERE",
+            InverseFooter("Stop & insert", subtitle: c.settings.mode == .toggle ? "Flushes on pauses · tap to finish" : "Release the key or tap here",
                           action: { c.finish() }) {
                 PulseDot()
             } right: {
                 TapButton { c.cancel() } label: {
-                    Text("CANCEL").monoLabel(10, color: AppColor.paper.opacity(0.7))
+                    Text("Cancel").uiLabel(10, color: AppColor.onNight.opacity(0.7))
                         .padding(.horizontal, AppMetric.m)
                         .padding(.vertical, 8)
-                        .overlay(Rectangle().stroke(AppColor.paper.opacity(0.4), lineWidth: 1))
+                        .overlay(Rectangle().stroke(AppColor.onNight.opacity(0.4), lineWidth: 1))
                 }
             }
         case .transcribing, .inserting:
-            InverseFooter("Recognizing…", subtitle: c.activeMode == .smart ? "PARAKEET → GEMMA FORMATTING" : "PARAKEET ON THE NEURAL ENGINE", left: {
-                ProgressView().controlSize(.small).tint(AppColor.paper)
+            InverseFooter("Recognizing…", subtitle: c.activeMode == .smart ? "Parakeet → Gemma formatting" : "Parakeet on the Neural Engine", left: {
+                ProgressView().controlSize(.small).tint(AppColor.onNight)
             })
         default:
             InverseFooter("Dictate", subtitle: c.hotkeyArmed
-                            ? "OR HOLD \(c.settings.hotkey.glyph) IN ANY APP"
-                            : (c.settings.hotkey == .off ? "GLOBAL HOTKEY OFF" : "GRANT ACCESSIBILITY FOR THE GLOBAL HOTKEY"),
+                            ? "or hold \(c.settings.hotkey.glyph) in any app"
+                            : (c.settings.hotkey == .off ? "Global hotkey off" : "Grant Accessibility for the global hotkey"),
                           action: { c.begin(target: .pane) }) {
                 PulseDot()
             } right: {
@@ -483,7 +472,9 @@ struct DictationView: View {
                     .overlay {
                         Image(systemName: "mic.fill")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(AppColor.paper)
+                            // On an accent fill, per Lit Field's .btn-accent
+                            // recipe, the mark reads in ink — not onNight.
+                            .foregroundStyle(AppColor.ink)
                     }
             }
         }

@@ -413,6 +413,13 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
         UserDefaults.standard.set(engineB ?? "gemma4-litert", forKey: "ensemble.engineB")
         UserDefaults.standard.set(true, forKey: "ui.superMaxQuality")
     }
+    // The CLI has its own defaults domain; borrow the app's vocabulary so a
+    // headless run biases and votes exactly as the app would.
+    if let app = UserDefaults(suiteName: "nl.ihnatov.Transcriberr") {
+        for key in ["prompt.vocabulary", "prompt.vocabulary.byLang"] {
+            if let v = app.string(forKey: key) { UserDefaults.standard.set(v, forKey: key) }
+        }
+    }
     let prompts = PromptStore()
     let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
     let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())

@@ -15,9 +15,9 @@ Companion to [Transcriber-Android](https://github.com/Ihnatov-yuri) — same sid
 |---|---|---|---|
 | **Parakeet v3** (default) | nvidia/parakeet-tdt-0.6b-v3 (CoreML) | ANE, ~100× realtime | English + major EU languages, long files |
 | **Parakeet v2** | English-only variant | ANE | Fast English-only runs |
-| **Whisper** | openai/whisper-large-v3 (WhisperKit CoreML) | GPU | Multilingual gold standard — best for Ukrainian, Arabic |
+| **Whisper** | openai/whisper-large-v3 (WhisperKit CoreML) | GPU | Multilingual gold standard — best for Ukrainian, Arabic. Segments Whisper itself scores as non-speech (stock "Дякую за перегляд!" lines on silence) are dropped |
 | **Gemma (LiteRT-LM)** | google/gemma E2B / E4B `.litertlm` | GPU + CPU | Prompt-steerable ASR with vocabulary, all text post-processing |
-| **Super** | Any two of the above + Gemma arbitration | mixed | Maximum quality: word-confidence ROVER merge; disputed chunks arbitrated in a second pass with two-sided transcript context + vocabulary |
+| **Super** | Any two of the above + Gemma arbitration | mixed | Maximum quality: word-confidence ROVER merge; disputed chunks arbitrated in a second pass with two-sided transcript context + vocabulary. Silence consensus drops a line only one engine "heard"; agreed words keep the trusted engine's casing and punctuation; vocabulary spellings settle a disputed word; the English-only engine is swapped out of a non-English run |
 | Cloud (optional) | OpenAI / Anthropic / Gemini | API | Off by default; requires keys |
 
 **Diarization** is always available on every engine: FluidAudio pyannote (community-1) CoreML pre-pass, word-level speaker attribution via token timings, speaker-turn coalescing (gap tunable in Settings), and automatic speaker-name inference from the conversation itself ("Hi, I'm Nicole…"). Names you assign persist across re-runs and versions.

@@ -260,6 +260,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         // ---------- load backend ----------
         continuation.yield(.stage(text: "Loading model…", fraction: 0.14))
         let backend = factory.backend(for: params.backend)
+        await (backend as? EnsembleBackend)?.setRunLanguages(params.languages)
         do {
             try await backend.load(modelPath: params.modelDirectory)
             AppLog.info("runner", "backend \(params.backend.rawValue) loaded")
@@ -319,6 +320,26 @@ final class TranscriptionRunner: @unchecked Sendable {
         let richBox = RichBox()
         runWedgeCount = 0
         var perChunkParsed: [Int: [RawSegment]] = [:]
+
+        // Chunks share a 1 s recap with their predecessor, so the word spoken
+        // across the boundary is transcribed twice ("…дивувати." / "дивувати.
+        // І от…"). Trim the repeat against the previous chunk of the SAME
+        // track — split-track chunks interleave on the shared timeline.
+        func seamTrimmed(_ parsed: [RawSegment], idx: Int) -> [RawSegment] {
+            guard var first = parsed.first else { return parsed }
+            let isMic = micChunkIndices.contains(idx)
+            guard let j = (0..<idx).last(where: { micChunkIndices.contains($0) == isMic }),
+                  chunks[idx].startSeconds < chunks[j].endSeconds,
+                  let prevText = perChunkParsed[j]?.map(\.text).joined(separator: " "),
+                  !prevText.isEmpty else { return parsed }
+            let trimmed = TranscriptHygiene.trimSeamRepeat(
+                previous: String(prevText.suffix(200)), next: first.text)
+            guard trimmed != first.text else { return parsed }
+            AppLog.info("runner", "chunk \(idx + 1): trimmed seam repeat \"\(first.text.prefix(first.text.count - trimmed.count))\"")
+            var out = parsed
+            if trimmed.isEmpty { out.removeFirst() } else { first.text = trimmed; out[0] = first }
+            return out
+        }
 
         var pipelineResults: [Int: String] = [:]
         if pipelineWidth > 1 {
@@ -407,6 +428,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                     return s
                 }
             }
+            parsed = seamTrimmed(parsed, idx: idx)
             // Cross-chunk near-duplicate guard: LLM engines occasionally
             // re-emit the previous chunk's tail (context echo) or loop a
             // near-identical line across consecutive chunks ("…and um
@@ -532,7 +554,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                         return s
                     }
                 }
-                perChunkParsed[idx] = parsed
+                perChunkParsed[idx] = seamTrimmed(parsed, idx: idx)
             }
             if !disputes.isEmpty {
                 // Rebuild in chunk order (already time-sorted across tracks)

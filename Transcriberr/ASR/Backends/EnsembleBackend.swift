@@ -33,6 +33,28 @@ actor EnsembleBackend: ASRBackend {
         self.factory = factory
     }
 
+    /// Languages of the upcoming run — set by the runner before `load` so
+    /// the pair can be checked against them.
+    private var runLanguages: Set<String> = []
+    func setRunLanguages(_ languages: Set<String>) { runLanguages = languages }
+
+    /// Parakeet v2 is English-only: in a non-English run it contributes a
+    /// transliterated guess at half weight, which makes "Super" a slower
+    /// single-engine run on the OTHER engine — and with the default pair
+    /// that other engine is Parakeet v3, the weak one for Ukrainian. Swap v2
+    /// for Whisper (or for v3 when Whisper is already in the pair).
+    static func resolvePair(
+        _ a: BackendFactory.Kind, _ b: BackendFactory.Kind, languages: Set<String>
+    ) -> (BackendFactory.Kind, BackendFactory.Kind) {
+        guard languages.count == 1, languages.first?.lowercased() != "english",
+              a == .parakeetV2 || b == .parakeetV2 else { return (a, b) }
+        let other = a == .parakeetV2 ? b : a
+        let substitute: BackendFactory.Kind = other == .whisper ? .parakeet : .whisper
+        AppLog.info("ensemble", "Parakeet v2 is English-only — using \(substitute.rawValue) for this \(languages.first ?? "") run")
+        // Whisper leads the pair: it is the anchor for non-English audio.
+        return substitute == .whisper ? (.whisper, other) : (other, substitute)
+    }
+
     static func storedKind(_ key: String, fallback: BackendFactory.Kind) -> BackendFactory.Kind {
         guard let raw = UserDefaults.standard.string(forKey: key),
               let kind = BackendFactory.Kind(rawValue: raw)
@@ -45,8 +67,10 @@ actor EnsembleBackend: ASRBackend {
     /// `modelPath` is the Gemma model directory — used for the merge arbiter
     /// and for Gemma if it's picked as a sub-engine.
     func load(modelPath: URL?) async throws {
-        let a = Self.storedKind("ensemble.engineA", fallback: .parakeet)
-        let b = Self.storedKind("ensemble.engineB", fallback: .parakeetV2)
+        let (a, b) = Self.resolvePair(
+            Self.storedKind("ensemble.engineA", fallback: .parakeet),
+            Self.storedKind("ensemble.engineB", fallback: .parakeetV2),
+            languages: runLanguages)
         guard a != b else {
             throw ASRError.backendUnavailable(reason: "Super merge needs two different engines.")
         }
@@ -183,6 +207,7 @@ actor EnsembleBackend: ASRBackend {
         let textB = ((try? await taskB) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
         if textA.isEmpty && textB.isEmpty { return "" }
+        if let ruled = TranscriptHygiene.phantomResolution(textA, textB) { return Self.logPhantom(textA, textB, ruled) }
         if textA.isEmpty { return textB }
         if textB.isEmpty { return textA }
 
@@ -224,6 +249,9 @@ actor EnsembleBackend: ASRBackend {
             async let taskA = pa.transcribeDetailed(samples: samples, languages: languages)
             async let taskB = pb.transcribeDetailed(samples: samples, languages: languages)
             if let a = try? await taskA, let b = try? await taskB {
+                if let ruled = TranscriptHygiene.phantomResolution(a.text, b.text) {
+                    return RichChunk(text: Self.logPhantom(a.text, b.text, ruled), agreement: 1, textA: "", textB: "")
+                }
                 if a.text.isEmpty { return RichChunk(text: b.text, agreement: 1, textA: a.text, textB: b.text) }
                 if b.text.isEmpty { return RichChunk(text: a.text, agreement: 1, textA: a.text, textB: b.text) }
                 let priorA = Self.votePrior(for: kindA, languages: languages)
@@ -234,7 +262,8 @@ actor EnsembleBackend: ASRBackend {
                     ? Self.diceSimilarity(a.words.map(\.norm), b.words.map(\.norm))
                     : Self.tokenSimilarity(a.text, b.text)
                 let voted = haveWords
-                    ? Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB)
+                    ? Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB,
+                                      vocabulary: Self.vocabularyNorms(languages: languages))
                     : preferredText
                 return RichChunk(
                     text: voted.isEmpty ? preferredText : voted,
@@ -252,6 +281,9 @@ actor EnsembleBackend: ASRBackend {
             samples: samples, languages: languages, translateTo: nil,
             diarize: false, previousContext: nil, speakerHints: [])) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let ruled = TranscriptHygiene.phantomResolution(textA, textB) {
+            return RichChunk(text: Self.logPhantom(textA, textB, ruled), agreement: 1, textA: "", textB: "")
+        }
         if textA.isEmpty { return RichChunk(text: textB, agreement: 1, textA: textA, textB: textB) }
         if textB.isEmpty { return RichChunk(text: textA, agreement: 1, textA: textA, textB: textB) }
         let preferA = Self.votePrior(for: kindA, languages: languages)
@@ -300,6 +332,7 @@ actor EnsembleBackend: ASRBackend {
         context: String? = nil,
         languages: Set<String> = []
     ) async -> String {
+        if let ruled = TranscriptHygiene.phantomResolution(a.text, b.text) { return Self.logPhantom(a.text, b.text, ruled) }
         if a.text.isEmpty { return b.text }
         if b.text.isEmpty { return a.text }
 
@@ -340,7 +373,8 @@ actor EnsembleBackend: ASRBackend {
             AppLog.info("ensemble", String(format: "agreement %.2f — hard conflict, Gemma arbitrates", similarity))
             return await gemmaMerge(textA: a.text, textB: b.text, context: context, languages: languages)
         }
-        let merged = Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB)
+        let merged = Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB,
+                                     vocabulary: Self.vocabularyNorms(languages: languages))
         AppLog.info("ensemble", String(format: "agreement %.2f — confidence-voted merge (%d/%d words → %d)", similarity, a.words.count, b.words.count, merged.split(separator: " ").count))
         return merged.isEmpty ? preferredText : merged
     }
@@ -355,7 +389,8 @@ actor EnsembleBackend: ASRBackend {
         _ a: [ScoredWord],
         _ b: [ScoredWord],
         priorA: Float = 1,
-        priorB: Float = 1
+        priorB: Float = 1,
+        vocabulary: Set<String> = []
     ) -> String {
         let n = a.count, m = b.count
         guard n > 0, m > 0 else { return joinSurfaces((n > 0 ? a : b).map(\.surface)) }
@@ -370,24 +405,53 @@ actor EnsembleBackend: ASRBackend {
         }
         let insertionFloor: Float = 0.55
         var i = n, j = m
-        var reversed: [String] = []
+        // source: 0 = aligned pair, 1 = only engine A had it, 2 = only engine B
+        var reversed: [(surface: String, source: Int)] = []
         while i > 0 || j > 0 {
             if i > 0, j > 0,
                dp[i][j] == dp[i-1][j-1] + (a[i-1].norm == b[j-1].norm ? 0 : 1)
             {
-                // Match or substitution → higher prior-weighted confidence wins.
-                reversed.append(a[i-1].confidence * priorA >= b[j-1].confidence * priorB
-                                ? a[i-1].surface : b[j-1].surface)
+                let wa = a[i-1], wb = b[j-1]
+                if wa.norm == wb.norm {
+                    // Same word: the vote has nothing to decide, so take the
+                    // trusted engine's SURFACE. Picking by confidence here
+                    // interleaved two engines' casing and punctuation
+                    // ("і Вони проводять, Вони ж зараз").
+                    reversed.append((priorA >= priorB ? wa.surface : wb.surface, 0))
+                } else if vocabulary.contains(wa.norm) != vocabulary.contains(wb.norm) {
+                    // One reading is a spelling the user has declared
+                    // authoritative — that settles it.
+                    reversed.append((vocabulary.contains(wa.norm) ? wa.surface : wb.surface, 0))
+                } else {
+                    // Substitution → higher prior-weighted confidence wins.
+                    reversed.append((wa.confidence * priorA >= wb.confidence * priorB
+                                     ? wa.surface : wb.surface, 0))
+                }
                 i -= 1; j -= 1
             } else if i > 0, dp[i][j] == dp[i-1][j] + 1 {
-                if a[i-1].confidence >= insertionFloor { reversed.append(a[i-1].surface) }
+                if a[i-1].confidence >= insertionFloor { reversed.append((a[i-1].surface, 1)) }
                 i -= 1
             } else {
-                if b[j-1].confidence >= insertionFloor { reversed.append(b[j-1].surface) }
+                if b[j-1].confidence >= insertionFloor { reversed.append((b[j-1].surface, 2)) }
                 j -= 1
             }
         }
-        return joinSurfaces(reversed.reversed())
+        // The weak-language engine's lone insertions are misalignment debris
+        // ("Воно ж продається Воно пода, як практично" — Parakeet's two
+        // extra words inside a Whisper sentence). A phrase the strong engine
+        // skipped shows up as a RUN of insertions; only runs of 3+ survive.
+        var words = Array(reversed.reversed())
+        if priorA != priorB {
+            let weak = priorA < priorB ? 1 : 2
+            var k = 0
+            while k < words.count {
+                guard words[k].source == weak else { k += 1; continue }
+                var end = k
+                while end < words.count, words[end].source == weak { end += 1 }
+                if end - k < 3 { words.removeSubrange(k..<end) } else { k = end }
+            }
+        }
+        return joinSurfaces(words.map(\.surface))
     }
 
     /// Join word surfaces defensively: trim stray engine whitespace (double
@@ -401,14 +465,49 @@ actor EnsembleBackend: ASRBackend {
             guard !w.isEmpty else { continue }
             if out.isEmpty {
                 out = w
-            } else if let first = w.first, "'’ʼ‘".contains(first), w.count > 1,
-                      let last = out.last, last.isLetter {
+            } else if attachesToPrevious(w, previous: out) {
                 out += w
             } else {
                 out += " " + w
             }
         }
         return out
+    }
+
+    /// A fragment that continues the previous word rather than starting a
+    /// new one: "'ятаєш" after "Пам", "-менш" after "більш", ":00" after
+    /// "10". A dash with a space after it is punctuation and stays apart.
+    static func attachesToPrevious(_ fragment: String, previous: String?) -> Bool {
+        guard let first = fragment.first, fragment.count > 1,
+              let prevLast = previous?.last else { return false }
+        let second = fragment[fragment.index(after: fragment.startIndex)]
+        if "'’ʼ‘".contains(first) { return prevLast.isLetter && second.isLetter }
+        if first == "-" { return (prevLast.isLetter || prevLast.isNumber) && (second.isLetter || second.isNumber) }
+        if first == ":" { return prevLast.isNumber && second.isNumber }
+        return false
+    }
+
+    /// Normalized words of the user's vocabulary (global + the run's
+    /// languages). Single-word terms only — the vote is per word.
+    static func vocabularyNorms(languages: Set<String>) -> Set<String> {
+        let d = UserDefaults.standard
+        var raw = d.string(forKey: "prompt.vocabulary") ?? ""
+        if let js = d.string(forKey: "prompt.vocabulary.byLang"),
+           let map = try? JSONDecoder().decode([String: String].self, from: Data(js.utf8)) {
+            for lang in languages { raw += "," + (map[lang] ?? "") }
+        }
+        var out = Set<String>()
+        for term in raw.split(whereSeparator: { $0 == "," || $0.isNewline }) {
+            let words = TranscriptHygiene.normWords(String(term))
+            if words.count == 1, words[0].count >= 3 { out.insert(words[0]) }
+        }
+        return out
+    }
+
+    private static func logPhantom(_ a: String, _ b: String, _ ruled: String) -> String {
+        let phantom = TranscriptHygiene.isPhantomOnly(a) ? a : b
+        AppLog.info("ensemble", "phantom \"\(phantom.prefix(40))\" from one engine — \(ruled.isEmpty ? "chunk ruled silent" : "keeping the other engine's \(ruled.count) chars")")
+        return ruled
     }
 
     /// Per-language trust multiplier for the ROVER vote. Parakeet reports
@@ -437,7 +536,9 @@ actor EnsembleBackend: ASRBackend {
         context: String? = nil,
         languages: Set<String> = []
     ) async -> String {
-        guard let arbiter else { return textA }
+        let fallback = Self.votePrior(for: kindA, languages: languages)
+            >= Self.votePrior(for: kindB, languages: languages) ? textA : textB
+        guard let arbiter else { return fallback }
         // Authoritative entity spellings — the exact words engines fight over.
         var vocabBlock = ""
         let d = UserDefaults.standard
@@ -470,6 +571,8 @@ actor EnsembleBackend: ASRBackend {
                 - Keep content the transcripts agree on.
                 - Where they conflict, choose the reading that fits the preceding conversation context and is more plausible.
                 - Never include content that appears in neither transcript. Never repeat the context. Never summarize, never comment.
+                - Write in the language of the audio\(languages.count == 1 ? " (\(languages.first!))" : ""). Never translate. Keep names, brands and English terms that a transcript wrote in Latin script in Latin script.
+                - A transcript may be empty or noise for a stretch the other one covers; keep the covered content.
                 Output ONLY the merged transcript text.
                 """,
                 userMessage: vocabBlock + contextBlock + """
@@ -485,10 +588,10 @@ actor EnsembleBackend: ASRBackend {
             )
             let cleaned = merged.trimmingCharacters(in: .whitespacesAndNewlines)
             AppLog.info("ensemble", "gemma merge: A=\(textA.count)ch B=\(textB.count)ch → \(cleaned.count)ch")
-            return cleaned.isEmpty ? textA : cleaned
+            return cleaned.isEmpty ? fallback : cleaned
         } catch {
-            AppLog.warn("ensemble", "arbiter merge failed (\(error.localizedDescription)) — using engine A")
-            return textA
+            AppLog.warn("ensemble", "arbiter merge failed (\(error.localizedDescription)) — using the preferred engine's text")
+            return fallback
         }
     }
 

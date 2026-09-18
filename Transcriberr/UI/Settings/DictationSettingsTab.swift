@@ -86,7 +86,7 @@ struct DictationSettingsTab: View {
                        isOn: Binding(get: { s.livePreview }, set: { s.livePreview = $0 }))
                 Toggle("Use names learned from my transcripts (Settings → Style & Vocabulary)",
                        isOn: Binding(get: { s.useLearnedTerms }, set: { s.useLearnedTerms = $0 }))
-                Text("Verbatim inserts the recognizer's words untouched. Clean applies the deterministic passes (vocabulary, fillers, commands, self-corrections) in well under a second. Smart additionally runs Gemma with the target app, its register, and the text before the cursor — chat stays short and casual, mail gets full sentences, an enumeration becomes a list. Password fields are always verbatim and never read.")
+                Text("Verbatim inserts the recognizer's words untouched. Clean applies the deterministic passes (vocabulary, fillers, commands, self-corrections) in well under a second. Smart additionally runs Gemma with the target app, its register, and the text before the cursor — chat stays short and casual, mail gets full sentences, an enumeration becomes a list. Smart uses the text engine chosen under Post-processing; if that is a cloud engine, the dictated passage is sent to it, but the window title and the text around your cursor never leave this Mac. Password fields are always verbatim and never read.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
 

@@ -13,6 +13,10 @@ struct DetailView: View {
     @State private var proseMode = false
     @State private var showTimestamps = true
     @State private var fullscreen = false
+    /// Height of the detail pane, to cap the header (see `content`).
+    @State private var paneHeight: CGFloat = 800
+    /// Top row + tab strip + player + a readable stretch of transcript.
+    private static let reservedForTranscript: CGFloat = 400
     @State private var runExpanded = false
     @State private var editingSegment: Segment?
     @State private var renamingSpeaker: String?
@@ -68,9 +72,20 @@ struct DetailView: View {
             VStack(alignment: .leading, spacing: 0) {
                 topRow()
                 if !fullscreen {
-                    headerBlock(model)
-                    runStrip(model)
-                    speakerChipRow()
+                    // Bounded, and scrolls inside that bound: title + metadata
+                    // + an expanded Run block is 500–900 pt of chrome, which
+                    // on a 640 pt window left the transcript three rows — or
+                    // pushed it, the tabs and the player off the bottom.
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            headerBlock(model)
+                            runStrip(model)
+                            speakerChipRow()
+                        }
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: max(140, paneHeight - Self.reservedForTranscript))
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 tabStrip()
                 PlayerBar(recording: recording)
@@ -78,6 +93,7 @@ struct DetailView: View {
                 tabContent(model)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { paneHeight = $0 }
         }
         .sheet(item: $editingSegment) { seg in
             SegmentEditSheet(segment: seg, container: container)
@@ -372,6 +388,7 @@ struct DetailView: View {
 
             Text(recording.title)
                 .font(AppFont.text(26))
+                .lineLimit(3)
                 .lineSpacing(4)
                 .tracking(-0.2)
                 .foregroundStyle(AppColor.ink)
@@ -736,8 +753,14 @@ struct DetailView: View {
                         }
                     }
                 }
+                // Tabs that don't fit scroll; the fade says there is more.
+                .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+                                             .init(color: .black, location: 0.94),
+                                             .init(color: .clear, location: 1)],
+                                     startPoint: .leading, endPoint: .trailing))
                 Spacer(minLength: AppMetric.s)
                 if tab == .transcript {
+                  HStack(spacing: AppMetric.m) {
                     TapButton {
                         proseMode.toggle()
                         container.uiPrefs.proseMode = proseMode
@@ -754,6 +777,8 @@ struct DetailView: View {
                         Text(fullscreen ? "Exit ⤡" : "Read ⤢")
                             .uiLabel(9, color: fullscreen ? AppColor.accentOnLight : AppColor.ink2)
                     }
+                  }
+                  .fixedSize()
                 }
             }
             .padding(.horizontal, AppMetric.sheetPadding)
@@ -967,6 +992,9 @@ struct TranscriptPane: View {
                     .font(AppFont.text(16))
                     .lineSpacing(6)
                     .foregroundStyle(AppColor.ink)
+                    // A readable measure: full screen on a wide display ran
+                    // one line to ~2000 pt.
+                    .frame(maxWidth: 760, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
                     .padding(.horizontal, AppMetric.sheetPadding)

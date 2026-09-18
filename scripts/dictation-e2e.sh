@@ -8,6 +8,8 @@
 # history entry it creates is removed afterwards.
 set -u
 APP="${1:-.build/xcode/Build/Products/Release/Transcriberr.app}"
+# Absolute: `open -a` does not resolve a relative bundle path.
+APP="$(cd "$(dirname "$APP")" && pwd)/$(basename "$APP")"
 LOG=~/Library/Logs/Transcriberr/transcriberr.log
 DEF=nl.ihnatov.Transcriberr
 STORE=~/Library/Application\ Support/Transcriberr.store
@@ -71,7 +73,10 @@ for PK in $(sqlite3 "$STORE" "select Z_PK from ZRECORDING where ZCREATEDATMILLIS
   sqlite3 "$STORE" "delete from ZSEGMENT where ZRECORDING=$PK; delete from ZTRANSCRIPTVERSION where ZRECORDING=$PK; delete from ZRECORDING where Z_PK=$PK;"
   [ -n "$AUDIO" ] && rm -f "$AUDIO"
   UUID=$(echo "$ID" | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/')
-  rm -rf ~/Documents/"Transcriberr Backups"/"$UUID"
+  # An empty/garbled id would turn this into `rm -rf` of the whole backups root.
+  if [[ "$UUID" =~ ^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$ ]]; then
+    rm -rf ~/Documents/"Transcriberr Backups"/"$UUID"
+  fi
 done
 sqlite3 "$STORE" "delete from ZFOLDER where ZNAME='Dictation' and not exists (select 1 from ZRECORDING where ZFOLDER=ZFOLDER.Z_PK); pragma wal_checkpoint(TRUNCATE);" >/dev/null
 open -a "$APP"

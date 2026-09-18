@@ -54,7 +54,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
     /// pipeline to one for the rest of the session, on later runs that never
     /// touched Gemma at all. The delay is long enough that back-to-back runs
     /// and a preset fired straight after a run keep the engine warm.
-    var onIdle: (() async -> Void)?
+    var onIdle: (() async -> Bool)?
+    /// Suspends until nothing is rewriting this recording's audio files (mix
+    /// rebuild / compression after a recording). AppContainer points this at
+    /// `AudioPostProcessTracker.waitUntilIdle`.
+    var waitForAudio: ((UUID) async -> Void)?
     static let idleReleaseSeconds: UInt64 = 120
     private var idleTask: Task<Void, Never>?
 
@@ -129,14 +133,58 @@ final class TranscriptionJobManager: @unchecked Sendable {
             id: recording.id, stage: "Queued…", fraction: 0, failed: false, failureReason: nil
         )
         queue.append((recording, params, onSourceConsumed))
+        repository.savePendingTask(for: recording, params: params)
         idleTask?.cancel()
         idleTask = nil
         drain()
     }
 
+    private static let runningKey = "jobs.runningRecordingId"
+    private static let retriedKey = "jobs.retriedRecordingId"
+
+    /// Re-queue whatever was still waiting (or running) when the app last
+    /// went away. Called once at launch.
+    func resumePendingTasks() {
+        // The run that was IN FLIGHT when the app died gets one more go. If
+        // it was in flight the time before as well, it is what kills the app
+        // (a native crash in an engine) — drop it instead of crash-looping.
+        let defaults = UserDefaults.standard
+        let interrupted = defaults.string(forKey: Self.runningKey)
+        let poisoned = interrupted != nil && interrupted == defaults.string(forKey: Self.retriedKey)
+        defaults.set(poisoned ? nil : interrupted, forKey: Self.retriedKey)
+        defaults.removeObject(forKey: Self.runningKey)
+        for task in repository.pendingTasks() {
+            if poisoned, task.recordingId.uuidString == interrupted {
+                AppLog.warn("job", "run for \(task.recordingId.uuidString) interrupted the app twice — not resuming it")
+                repository.removePendingTask(task.recordingId)
+                continue
+            }
+            guard let recording = try? repository.get(id: task.recordingId),
+                  let backend = BackendFactory.Kind(rawValue: task.backend),
+                  FileManager.default.fileExists(atPath: recording.audioPath),
+                  !isActive(recording.id)
+            else {
+                repository.removePendingTask(task.recordingId)
+                continue
+            }
+            AppLog.info("job", "resuming interrupted run recording=\(recording.id.uuidString) backend=\(backend.rawValue)")
+            enqueue(recording, params: TranscriptionRunner.Params(
+                file: URL(fileURLWithPath: recording.audioPath),
+                backend: backend,
+                languages: Set(task.languages.split(separator: ",").map(String.init)),
+                translateTo: task.translateTo,
+                diarize: task.diarize,
+                hybridDiarize: task.hybridDiarize,
+                expectedSpeakers: task.expectedSpeakers,
+                expectedSpeakersExact: recording.runSpeakersExact ?? false
+            ))
+        }
+    }
+
     func cancel(_ recordingId: UUID) {
         for entry in queue where entry.0.id == recordingId { entry.2?() }
         queue.removeAll { $0.0.id == recordingId }
+        repository.removePendingTask(recordingId)
         if currentRecordingId == recordingId {
             currentJob?.cancel()
         }
@@ -154,7 +202,9 @@ final class TranscriptionJobManager: @unchecked Sendable {
             return
         }
         let (recording, params, onSourceConsumed) = queue.removeFirst()
-        currentRecordingId = recording.id
+        let recordingId = recording.id
+        currentRecordingId = recordingId
+        UserDefaults.standard.set(recordingId.uuidString, forKey: Self.runningKey)
         currentJob = Task { @MainActor [weak self] in
             defer {
                 self?.currentJob = nil
@@ -162,6 +212,14 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 self?.drain()
             }
             await self?.runOne(recording: recording, params: params, onSourceConsumed: onSourceConsumed)
+            // Finished, failed or cancelled — all are final. Only a run cut
+            // short by the app going away stays pending.
+            // (`recordingId`, not `recording.id`: the model may be deleted.)
+            self?.repository.removePendingTask(recordingId)
+            UserDefaults.standard.removeObject(forKey: Self.runningKey)
+            if UserDefaults.standard.string(forKey: Self.retriedKey) == recordingId.uuidString {
+                UserDefaults.standard.removeObject(forKey: Self.retriedKey)
+            }
         }
     }
 
@@ -172,7 +230,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
             try? await Task.sleep(nanoseconds: Self.idleReleaseSeconds * 1_000_000_000)
             guard !Task.isCancelled else { return }
             guard let self, self.queue.isEmpty, self.currentJob == nil else { return }
-            await self.onIdle?()
+            // Skipped because a generation is still using the engine → try
+            // again after another quiet period.
+            if await self.onIdle?() == false, self.queue.isEmpty, self.currentJob == nil {
+                self.scheduleIdleRelease()
+            }
         }
     }
 
@@ -194,6 +256,23 @@ final class TranscriptionJobManager: @unchecked Sendable {
         }
         defer { fireSourceConsumed() }
 
+        // A Run pressed seconds after Stop (auto-transcribe off) raced the
+        // background mix rebuild + compression: the decode met a half-written
+        // or already-deleted WAV. Wait for it, then use the path the
+        // recording points at NOW — the one captured at enqueue may be gone.
+        var params = params
+        await waitForAudio?(recording.id)
+        if recording.isDeleted || recording.modelContext == nil {
+            statuses.removeValue(forKey: recording.id)
+            return
+        }
+        let current = URL(fileURLWithPath: recording.audioPath)
+        if current != params.file, !FileManager.default.fileExists(atPath: params.file.path),
+           FileManager.default.fileExists(atPath: current.path) {
+            AppLog.info("job", "source moved while queued → \(current.lastPathComponent)")
+            params.file = current
+        }
+
         // Rescue snapshot: if the current transcript was never versioned
         // (e.g. produced by an older build), preserve it before wiping —
         // deduped inside snapshotVersion, so post-run snapshots don't double.
@@ -202,17 +281,26 @@ final class TranscriptionJobManager: @unchecked Sendable {
             let prevLabel = BackendFactory.Kind(rawValue: prevId)?.displayName ?? "Earlier run (\(prevId))"
             try? repository.snapshotVersion(of: recording, engineId: prevId, engineLabel: prevLabel)
         }
-        recording.transcribedWithBackend = params.backend.rawValue
-        recording.translateToEnglish = (params.translateTo == "English")
-        // Lock the language actually used for THIS run onto the recording
-        // itself, rather than leaving Library/Detail to fall back to the
-        // global "last selected" picker — which may have since moved on to
-        // a different recording and would then show the wrong language for
-        // this one. Empty (auto) or multi-language hints leave sourceLanguage
-        // nil: there's no detected-language signal to report, and a set of
-        // hints isn't a single language, so neither is safe to claim as fact.
-        recording.runLanguages = params.languages.isEmpty ? nil : params.languages.sorted().joined(separator: ",")
-        recording.sourceLanguage = params.languages.count == 1 ? params.languages.first : nil
+        // Stamped when the run first PRODUCES something, not up front: a run
+        // that fails before any output (missing API key, model missing) used
+        // to leave the old transcript labelled with the engine and language
+        // of the failed attempt — and the next rescue snapshot copied that.
+        var stamped = false
+        func stampRunMetadata() {
+            guard !stamped else { return }
+            stamped = true
+            recording.transcribedWithBackend = params.backend.rawValue
+            recording.translateToEnglish = (params.translateTo == "English")
+            // Lock the language actually used for THIS run onto the recording
+            // itself, rather than leaving Library/Detail to fall back to the
+            // global "last selected" picker — which may have since moved on to
+            // a different recording and would then show the wrong language for
+            // this one. Empty (auto) or multi-language hints leave sourceLanguage
+            // nil: there's no detected-language signal to report, and a set of
+            // hints isn't a single language, so neither is safe to claim as fact.
+            recording.runLanguages = params.languages.isEmpty ? nil : params.languages.sorted().joined(separator: ",")
+            recording.sourceLanguage = params.languages.count == 1 ? params.languages.first : nil
+        }
         AppLog.info("job", "starting recording=\(recording.id.uuidString) backend=\(params.backend.rawValue)")
 
         var wipedOldTranscript = false
@@ -253,6 +341,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         try? repository.clearSegments(of: recording)
                         wipedOldTranscript = true
                     }
+                    stampRunMetadata()
                     // Live append: turn raws into Segments and persist now.
                     let segs = raws.map { raw in
                         Segment(
@@ -308,6 +397,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // into per-speaker turns, and infers speaker names. Its
                     // payload is the authoritative transcript — replace the
                     // live-appended rows with it whenever it differs.
+                    stampRunMetadata()
                     let differs = finalRaws.count != allSegments.count
                         || finalRaws.contains { $0.speakerKey != nil || $0.speakerName != nil }
                         || zip(finalRaws, allSegments).contains { $0.text != $1.text }

@@ -221,7 +221,9 @@ struct RecordView: View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
             Text("Recording options · tap a value to change")
                 .uiLabel(10, color: AppColor.ink2)
-            HStack(alignment: .top, spacing: AppMetric.l) {
+            // Wraps: the row needs ~1000 pt, the pane has ~740 at the
+            // minimum window.
+            FlowLayout(spacing: AppMetric.l) {
                 option("Auto-run", m.autoTranscribe ? "On" : "Off",
                        active: m.autoTranscribe,
                        hint: "transcribe as soon\nas you press stop") { m.autoTranscribe.toggle() }
@@ -244,7 +246,6 @@ struct RecordView: View {
                            active: !m.liveLanguages.isEmpty,
                            hint: "spoken language\nfor live preview") { cycleLanguage(m) }
                 }
-                Spacer()
             }
         }
     }

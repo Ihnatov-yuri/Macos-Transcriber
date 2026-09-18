@@ -15,6 +15,12 @@ SIGN="${IDENTITY:--}"
 find "$APP/Contents/Frameworks" \( -name "*.dylib" -o -name "*.framework" \) -maxdepth 1 2>/dev/null | while read f; do
   codesign --force -s "$SIGN" "$f"
 done
+# Hardened runtime + explicit entitlements. A plain re-sign drops both (Xcode's
+# ENABLE_HARDENED_RUNTIME does not survive it), and without the runtime any
+# local process could start the app with DYLD_INSERT_LIBRARIES and inherit its
+# Microphone / Accessibility / Keychain access.
+ENT="$(cd "$(dirname "$0")" && pwd)/release.entitlements"
+HARDEN=(--options runtime --entitlements "$ENT")
 if [ "$SIGN" = "-" ]; then
   # Ad-hoc: macOS keys TCC grants (Microphone, Accessibility) to the app's
   # DESIGNATED REQUIREMENT, which for an ad-hoc signature defaults to the
@@ -22,8 +28,8 @@ if [ "$SIGN" = "-" ]; then
   # System Settings showed a ticked-but-dead entry. An explicit identifier-only
   # requirement is stable across builds, so grants made once stay valid.
   BUNDLE_ID="$(defaults read "$PWD/$APP/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || defaults read "$APP/Contents/Info.plist" CFBundleIdentifier)"
-  codesign --force -s - -i "$BUNDLE_ID" -r="designated => identifier \"$BUNDLE_ID\"" "$APP"
+  codesign --force -s - "${HARDEN[@]}" -i "$BUNDLE_ID" -r="designated => identifier \"$BUNDLE_ID\"" "$APP"
 else
-  codesign --force -s "$SIGN" "$APP"
+  codesign --force -s "$SIGN" "${HARDEN[@]}" "$APP"
 fi
 codesign --verify --deep "$APP" && echo "signed OK: $APP"

@@ -184,7 +184,9 @@ struct DictationView: View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
             Text("Dictation options · tap a value to change")
                 .uiLabel(10, color: AppColor.ink2)
-            HStack(alignment: .top, spacing: AppMetric.l) {
+            // Wraps: the row needs ~1000 pt, the pane has ~740 at the
+            // minimum window.
+            FlowLayout(spacing: AppMetric.l) {
                 option("Hotkey", s.hotkey.glyph, active: s.hotkey != .off,
                        hint: "modifier key that\nstarts dictation") { cycleHotkey(s) }
                 option("Mode", s.mode == .hold ? "Hold" : "Toggle", active: s.mode == .toggle,
@@ -205,7 +207,6 @@ struct DictationView: View {
                        hint: s.voiceProcessing ? "Apple echo/noise filter ·\n~1 s slower start" : "instant start · filter\nturns other apps down") {
                     s.voiceProcessing.toggle()
                 }
-                Spacer()
             }
         }
     }

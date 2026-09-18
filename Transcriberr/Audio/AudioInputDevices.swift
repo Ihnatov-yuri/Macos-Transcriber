@@ -113,15 +113,45 @@ enum AudioInputDevices {
     /// answers -10851. For those there is no way around binding `inputNode`
     /// first and accepting that the default input is opened in passing;
     /// `Capture` keeps that window as short as it can.
+    /// Engines we pointed at a specific device (weakly held).
+    private static let pinnedEngines = NSHashTable<AVAudioEngine>.weakObjects()
+    private static let pinnedLock = NSLock()
+
+    private static func wasPinned(_ engine: AVAudioEngine) -> Bool {
+        pinnedLock.lock(); defer { pinnedLock.unlock() }
+        return pinnedEngines.contains(engine)
+    }
+
+    private static func setPinned(_ engine: AVAudioEngine, _ pinned: Bool) {
+        pinnedLock.lock(); defer { pinnedLock.unlock() }
+        if pinned { pinnedEngines.add(engine) } else { pinnedEngines.remove(engine) }
+    }
+
     @discardableResult
     static func apply(uid: String?, to engine: AVAudioEngine) -> Device? {
-        guard let device = resolve(uid: uid) else { return systemDefault() }
+        guard let device = resolve(uid: uid) else {
+            // A long-lived engine stays bound to whatever `setDeviceID` last
+            // gave it. Going back to "System default" (or losing the chosen
+            // mic) has to move it back too, or it keeps recording from — or
+            // failing on — the old device while we report the default.
+            let fallback = systemDefault()
+            if let fallback, wasPinned(engine) {
+                if (try? engine.outputNode.auAudioUnit.setDeviceID(fallback.id)) == nil {
+                    try? engine.inputNode.auAudioUnit.setDeviceID(fallback.id)
+                }
+                setPinned(engine, false)
+                AppLog.info("audio", "back to the system default input '\(fallback.name)'")
+            }
+            return fallback
+        }
         if (try? engine.outputNode.auAudioUnit.setDeviceID(device.id)) != nil {
             AppLog.info("audio", "capturing from '\(device.name)' (no default input opened)")
+            setPinned(engine, true)
             return device
         }
         do {
             try engine.inputNode.auAudioUnit.setDeviceID(device.id)
+            setPinned(engine, true)
             AppLog.info("audio", "capturing from '\(device.name)' (input-only device — the system default was opened in passing)")
             return device
         } catch {

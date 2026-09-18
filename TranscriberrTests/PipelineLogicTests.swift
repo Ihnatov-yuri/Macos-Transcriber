@@ -99,4 +99,25 @@ final class PipelineLogicTests: XCTestCase {
         let after = cleaned.reduce(0.0) { $0 + Double($1 * $1) }
         XCTAssertLessThan(after, before * 0.25, "pure echo at 150 ms should lose ≥6 dB")
     }
+
+    /// No chunk — recap included — may exceed the 28 s the LiteRT backend
+    /// keeps; the old fixed grid produced up to 33 s and lost the tail.
+    func testChunksNeverExceedEngineLimit() {
+        let decoder = AudioDecoder()
+        // Silences placed to pull one boundary early and the next one late.
+        let silences = [26.0, 57.9, 80.5, 113.9].map {
+            AudioDecoder.Silence(startSeconds: $0 - 0.2, endSeconds: $0 + 0.2)
+        }
+        let duration = 200.0
+        let cuts = decoder.computeCutPoints(silences: silences, durationSeconds: duration)
+        let samples = [Float](repeating: 0, count: Int(duration * AudioDecoder.sampleRate))
+        let chunks = decoder.slice(samples: samples, cuts: cuts)
+        XCTAssertFalse(chunks.isEmpty)
+        for c in chunks {
+            XCTAssertLessThanOrEqual(Double(c.samples.count) / AudioDecoder.sampleRate,
+                                     AudioDecoder.chunkSeconds + 0.001)
+        }
+        XCTAssertEqual(chunks.last?.endSeconds ?? 0, duration, accuracy: 0.001)
+        XCTAssertEqual(cuts, cuts.sorted())
+    }
 }

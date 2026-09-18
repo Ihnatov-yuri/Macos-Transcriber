@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 
@@ -21,8 +22,15 @@ final class ModelDownloader: @unchecked Sendable {
 
     init() {}
 
+    // Main actor: `progress`, `isDownloading` and `activeTasks` are read by
+    // SwiftUI and were being mutated from the download task's pool thread — a
+    // dictionary data race. The bytes still arrive on URLSession's queue.
+    @MainActor
     @discardableResult
     func download(_ entry: ModelEntry) async throws -> URL {
+        // A second press while one is running would truncate the shared
+        // `.partial` underneath the first writer.
+        if let running = activeTasks[entry.id] { return try await running.value }
         // Single-file models (.litertlm bundles): direct streaming download —
         // a repo snapshot would pull every device-specific variant (~20 GB).
         if let direct = entry.directURL {
@@ -34,16 +42,20 @@ final class ModelDownloader: @unchecked Sendable {
         )
     }
 
+    @MainActor
     private func downloadDirect(_ entry: ModelEntry, from remote: URL) async throws -> URL {
         // Run inside a registered Task so cancel(id:) actually stops the byte
         // loop (before this, CANCEL left the loop running and a second press
         // could interleave two writers into one .partial file).
-        let task = Task<URL, Error> { try await self.downloadDirectBody(entry, from: remote) }
-        await MainActor.run { activeTasks[entry.id] = task }
-        defer { Task { @MainActor in self.activeTasks.removeValue(forKey: entry.id) } }
+        let task = Task<URL, Error> { @MainActor in try await self.downloadDirectBody(entry, from: remote) }
+        activeTasks[entry.id] = task
+        // Only unregister OUR task — a cancel + restart may have put a new
+        // one under the same id by the time this one unwinds.
+        defer { if activeTasks[entry.id] == task { activeTasks.removeValue(forKey: entry.id) } }
         return try await task.value
     }
 
+    @MainActor
     private func downloadDirectBody(_ entry: ModelEntry, from remote: URL) async throws -> URL {
         guard let dir = directTargetDirectory(entry) else {
             throw NSError(domain: "Transcriberr.ModelDownloader", code: -3,
@@ -100,6 +112,18 @@ final class ModelDownloader: @unchecked Sendable {
             progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: "Cancelled.")
             throw CancellationError()
         }
+        if let expected = entry.sha256 {
+            progress[entry.id] = ProgressInfo(bytesDownloaded: written, totalBytes: written, status: "Verifying…")
+            let actual = try await Task.detached(priority: .userInitiated) { try Self.sha256(of: temp) }.value
+            guard actual == expected else {
+                try? FileManager.default.removeItem(at: temp)
+                progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes,
+                                                  status: "Failed: the downloaded file did not match its checksum.")
+                AppLog.error("models", "checksum mismatch for \(entry.id): got \(actual)")
+                throw NSError(domain: "Transcriberr.ModelDownloader", code: -6,
+                              userInfo: [NSLocalizedDescriptionKey: "\(entry.name): checksum mismatch — download discarded."])
+            }
+        }
         try FileManager.default.moveItem(at: temp, to: target)
         progress[entry.id] = ProgressInfo(
             bytesDownloaded: written,
@@ -107,6 +131,16 @@ final class ModelDownloader: @unchecked Sendable {
             status: "Downloaded.")
         AppLog.info("models", "direct download done: \(target.lastPathComponent) (\(written) bytes)")
         return dir
+    }
+
+    nonisolated static func sha256(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 8 << 20), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private func directTargetDirectory(_ entry: ModelEntry) -> URL? {

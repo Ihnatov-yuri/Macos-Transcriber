@@ -51,9 +51,12 @@ final class AudioPlayerController: @unchecked Sendable {
             Task { @MainActor [weak self] in self?.currentTime = secs }
         }
         player = p
+        let loaded = ObjectIdentifier(p)
         Task { @MainActor in
             let asset = item.asset
             let dur = try? await asset.load(.duration)
+            // A slower load of the PREVIOUS file must not land on this one.
+            guard self.player.map(ObjectIdentifier.init) == loaded else { return }
             if let dur, dur.isValid, dur.seconds.isFinite {
                 self.duration = dur.seconds
             }
@@ -62,7 +65,10 @@ final class AudioPlayerController: @unchecked Sendable {
         // peaks are ready — until then the player bar shows the plain track.
         Task.detached(priority: .utility) { [weak self] in
             let peaks = await WaveformLoader.extractPeaks(from: url, buckets: 200)
-            await MainActor.run { self?.waveform = peaks }
+            await MainActor.run {
+                guard let self, self.player.map(ObjectIdentifier.init) == loaded else { return }
+                self.waveform = peaks
+            }
         }
     }
 

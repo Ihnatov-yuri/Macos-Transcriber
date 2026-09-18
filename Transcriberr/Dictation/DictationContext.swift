@@ -138,14 +138,20 @@ enum DictationPrompt {
         return s
     }
 
-    static func user(passage: String, context: DictationContext, vocabulary: [String]) -> String {
+    /// `shareSurroundings` is false when the text engine is a cloud one: the
+    /// window title and the text before the cursor belong to ANOTHER app
+    /// (a mail draft, a chat) and were read through Accessibility — they stay
+    /// on this Mac. The passage itself is what the user chose to send.
+    static func user(passage: String, context: DictationContext, vocabulary: [String],
+                     shareSurroundings: Bool = true) -> String {
         var u = ""
         if let app = context.appName {
             u += "Target app: \(app)"
-            if let title = context.windowTitle, !title.isEmpty { u += " — window “\(title.prefix(80))”" }
+            if shareSurroundings, let title = context.windowTitle, !title.isEmpty { u += " — window “\(title.prefix(80))”" }
             u += "\n"
         }
-        if let preceding = context.preceding?.trimmingCharacters(in: .whitespacesAndNewlines), !preceding.isEmpty {
+        if shareSurroundings,
+           let preceding = context.preceding?.trimmingCharacters(in: .whitespacesAndNewlines), !preceding.isEmpty {
             u += "Text already before the cursor (for continuity only — do NOT repeat it):\n«\(preceding.suffix(400))»\n"
         }
         if !vocabulary.isEmpty {

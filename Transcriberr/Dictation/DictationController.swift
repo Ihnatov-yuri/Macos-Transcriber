@@ -116,7 +116,11 @@ final class DictationController: @unchecked Sendable {
     private var messageTask: Task<Void, Never>?
     private var trustPoll: Task<Void, Never>?
     /// Bumped by cancel(): queued passes from a cancelled session are dropped.
-    private var generation = 0
+    /// Sessions the user cancelled. Per session, not a global generation
+    /// counter: cancelling the session being HELD (a too-short press, a
+    /// modifier combo) used to discard the previous session's passage that
+    /// was still being recognized — silently.
+    private var cancelledSessions: Set<Int> = []
     /// Bumped by begin(): background loops belonging to an older session stop.
     private var sessionID = 0
     private var pressedAt: Date?
@@ -577,8 +581,10 @@ final class DictationController: @unchecked Sendable {
         phase = .transcribing
         updateHUD()
         let start = startTask
-        let gen = generation
         let session = sessionID
+        // Frozen NOW: `begin()` may overwrite target/context/mode/tone during
+        // the awaits below (release-then-press inside the tail grace).
+        let passage = currentPassage(session: session)
         teardown = Task { @MainActor [weak self] in
             await start?.value
             // Tail grace: the key goes down while the last syllable is still
@@ -588,7 +594,7 @@ final class DictationController: @unchecked Sendable {
             let samples = self.capture.stop()
             // Only a cancel drops the audio. A new session may already be
             // listening by now (fast double tap) — the passage still counts.
-            guard gen == self.generation else { return }
+            guard !self.cancelledSessions.contains(session) else { return }
             let seconds = Double(samples.count) / UtteranceCapture.sampleRate
             if seconds < Self.minimumSessionSeconds, !self.flushedSessions.contains(session) {
                 // Too short to hold a word and nothing delivered earlier:
@@ -600,13 +606,13 @@ final class DictationController: @unchecked Sendable {
                 }
                 return
             }
-            self.enqueue(samples, final: true, session: session)
+            self.enqueue(samples, final: true, passage: passage)
         }
     }
 
     /// End a listening session with nothing to recognize: capture stops,
-    /// nothing is queued, no notice. Unlike `cancel()` the generation is
-    /// left alone, so passes already flushed still land.
+    /// nothing is queued, no notice. Unlike `cancel()` the session is
+    /// not marked cancelled, so passes already flushed still land.
     @MainActor
     private func endQuietly(_ reason: String) {
         guard phase == .listening else { return }
@@ -627,7 +633,7 @@ final class DictationController: @unchecked Sendable {
 
     @MainActor
     func cancel(quiet: Bool = false) {
-        generation &+= 1
+        cancelledSessions.insert(sessionID)
         flushLoop?.cancel()
         flushLoop = nil
         previewLoop?.cancel()
@@ -674,7 +680,7 @@ final class DictationController: @unchecked Sendable {
                     && ((buffered >= 60 && silence >= 0.4) || buffered >= 90)
                 if flushOnPause || flushOnLength {
                     let samples = self.capture.drain()
-                    self.enqueue(samples, final: false, session: session)
+                    self.enqueue(samples, final: false, passage: self.currentPassage(session: session))
                 }
                 if !self.capture.hasVoiceSinceDrain, buffered > 20 {
                     // Nothing but room tone: drop it so silence never
@@ -727,22 +733,26 @@ final class DictationController: @unchecked Sendable {
     /// Passes run strictly in order (one shared engine, and the text must
     /// arrive in the order it was spoken).
     @MainActor
-    private func enqueue(_ samples: [Float], final: Bool, session: Int) {
-        let gen = generation
+    private func currentPassage(session: Int) -> Passage {
+        Passage(target: target, context: context, mode: activeMode, tone: activeTone, session: session)
+    }
+
+    @MainActor
+    private func enqueue(_ samples: [Float], final: Bool, passage: Passage) {
+        let session = passage.session
         let prior = pipelineTail
-        let passage = Passage(target: target, context: context, mode: activeMode, tone: activeTone, session: session)
         if final { flushedSessions.remove(session) } else { pendingPasses += 1; flushedSessions.insert(session) }
         pipelineTail = Task { @MainActor [weak self] in
             await prior?.value
             guard let self else { return }
             defer { if !final { self.pendingPasses = max(0, self.pendingPasses - 1) } }
-            guard gen == self.generation else { return }
-            await self.processUtterance(samples, final: final, generation: gen, passage: passage)
+            guard !self.cancelledSessions.contains(session) else { return }
+            await self.processUtterance(samples, final: final, passage: passage)
         }
     }
 
     @MainActor
-    private func processUtterance(_ raw: [Float], final: Bool, generation gen: Int, passage: Passage) async {
+    private func processUtterance(_ raw: [Float], final: Bool, passage: Passage) async {
         let seconds = Double(raw.count) / UtteranceCapture.sampleRate
         let samples = UtteranceCapture.applyGain(raw, sensitivity: RecorderSettings.shared.micSensitivity)
 
@@ -808,7 +818,7 @@ final class DictationController: @unchecked Sendable {
             if final { finalMessage("Recognition failed: \(error.localizedDescription)") }
             return
         }
-        guard gen == generation else { return }
+        guard !cancelledSessions.contains(passage.session) else { return }
         guard !text.isEmpty else {
             if final { endEmptyFinal(passage: passage) }
             return
@@ -951,7 +961,8 @@ final class DictationController: @unchecked Sendable {
             system += "\nAdditional instructions from the user:\n" + custom
         }
         let systemPrompt = system
-        let userPrompt = DictationPrompt.user(passage: text, context: passage.context, vocabulary: vocab)
+        let userPrompt = DictationPrompt.user(passage: text, context: passage.context, vocabulary: vocab,
+                                              shareSurroundings: kind.isLocal)
         do {
             if await !backend.isReady {
                 try await Self.withTimeout(seconds: 120) { try await backend.load(modelPath: nil) }
@@ -1221,19 +1232,47 @@ final class DictationController: @unchecked Sendable {
     }
 
     /// Wall-clock guard for native calls that don't observe cancellation.
+    ///
+    /// Unstructured on purpose: a task group awaits ALL its children before
+    /// it returns or throws, so a native call that ignores cancellation kept
+    /// the "timeout" waiting for exactly the hang it was meant to bound — and
+    /// every later passage queued behind it. The abandoned operation is left
+    /// to finish (or not) on its own.
     private static func withTimeout<T: Sendable>(
         seconds: TimeInterval,
         _ op: @Sendable @escaping () async throws -> T
     ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await op() }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw ASRError.chunkTimeout
+        let race = TimeoutRace<T>()
+        return try await withCheckedThrowingContinuation { continuation in
+            race.arm(continuation)
+            let work = Task {
+                do { race.finish(.success(try await op())) }
+                catch { race.finish(.failure(error)) }
             }
-            let first = try await group.next()!
-            group.cancelAll()
-            return first
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if race.finish(.failure(ASRError.chunkTimeout)) { work.cancel() }
+            }
+        }
+    }
+
+    /// First result wins; the continuation resumes exactly once.
+    private final class TimeoutRace<T: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<T, Error>?
+
+        func arm(_ c: CheckedContinuation<T, Error>) {
+            lock.lock(); continuation = c; lock.unlock()
+        }
+
+        @discardableResult
+        func finish(_ result: Result<T, Error>) -> Bool {
+            lock.lock()
+            let c = continuation
+            continuation = nil
+            lock.unlock()
+            c?.resume(with: result)
+            return c != nil
         }
     }
 }

@@ -161,6 +161,17 @@ final class BackendFactory: @unchecked Sendable {
     /// documented three-chunks-in-flight pipeline into a single file for the
     /// rest of the session, for Parakeet runs and live captions that never
     /// touched Gemma at all.
+    /// Idle housekeeping: skip while a preset, auto-title or dictation polish
+    /// is generating. Returns false when it skipped.
+    func releaseLiteRTIfIdle() async -> Bool {
+        cacheLock.lock()
+        let litert = sharedLiteRT
+        cacheLock.unlock()
+        if let litert, await litert.isBusy { return false }
+        await releaseLiteRT()
+        return true
+    }
+
     func releaseLiteRT() async {
         cacheLock.lock()
         let ens = sharedEnsemble

@@ -106,7 +106,7 @@ final class MCPServer {
                 let rows = try kb.list(folder: arguments["folder"] as? String,
                                        tag: arguments["tag"] as? String,
                                        since: since,
-                                       limit: intArg(arguments, "limit", 25))
+                                       limit: limitArg(arguments, 25))
                 text = KBRender.markdownList(rows)
 
             case "kb_search":
@@ -114,7 +114,7 @@ final class MCPServer {
                     return toolError("'query' is required.")
                 }
                 text = KBRender.markdown(
-                    try kb.search(query, limit: intArg(arguments, "limit", 20)),
+                    try kb.search(query, limit: limitArg(arguments, 20)),
                     query: query)
 
             case "kb_get_transcript":
@@ -126,7 +126,7 @@ final class MCPServer {
                     startSeconds: doubleArg(arguments, "start_seconds"),
                     endSeconds: doubleArg(arguments, "end_seconds"),
                     offset: intArg(arguments, "offset", 0),
-                    limit: intArg(arguments, "limit", 200)))
+                    limit: limitArg(arguments, 200)))
 
             case "kb_get_outputs":
                 guard let id = arguments["id"] as? String, !id.isEmpty else {
@@ -156,6 +156,12 @@ final class MCPServer {
 
     private func intArg(_ args: [String: Any], _ key: String, _ def: Int) -> Int {
         (args[key] as? NSNumber)?.intValue ?? (args[key] as? String).flatMap(Int.init) ?? def
+    }
+
+    /// One response is one line on stdout: an unbounded limit would hand the
+    /// client a whole library in a single message. Page with `offset` instead.
+    private func limitArg(_ args: [String: Any], _ def: Int) -> Int {
+        min(max(intArg(args, "limit", def), 1), 1000)
     }
 
     private func doubleArg(_ args: [String: Any], _ key: String) -> Double? {

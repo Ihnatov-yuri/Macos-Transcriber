@@ -510,8 +510,12 @@ enum DictationText {
         let rawWords = raw.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
         let polWords = polished.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
         guard !polWords.isEmpty, !rawWords.isEmpty else { return false }
-        let lcs = longestCommonSubsequence(Array(rawWords.prefix(400)), Array(polWords.prefix(400)))
-        guard Double(lcs) / Double(min(rawWords.count, polWords.count)) >= minOverlap else { return false }
+        // The comparison is capped at 400 words a side, so the ratios must use
+        // the capped counts too — against the full counts no passage past
+        // ~530 words could ever pass.
+        let rawHead = Array(rawWords.prefix(400)), polHead = Array(polWords.prefix(400))
+        let lcs = longestCommonSubsequence(rawHead, polHead)
+        guard Double(lcs) / Double(min(rawHead.count, polHead.count)) >= minOverlap else { return false }
         // A model that trims the END of a passage ("…dog. Second passage?" →
         // "…dog.") still scores high in-order overlap. The last words the
         // user said must still be there, near the end.
@@ -520,7 +524,7 @@ enum DictationText {
             guard tail.contains(lastRaw) || tail.contains(where: { $0.hasPrefix(lastRaw) || lastRaw.hasPrefix($0) }) else { return false }
         }
         // …and the model must not have dropped more than a fifth of the words.
-        return Double(lcs) / Double(rawWords.count) >= 0.75
+        return Double(lcs) / Double(rawHead.count) >= 0.75
     }
 
     static func longestCommonSubsequence(_ a: [String], _ b: [String]) -> Int {

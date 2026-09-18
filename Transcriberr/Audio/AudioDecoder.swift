@@ -190,25 +190,33 @@ struct AudioDecoder: Sendable {
         return silences
     }
 
-    /// Snap nominal `chunkSeconds` boundaries to the midpoint of the nearest
-    /// silence within ±`alignFlexSeconds`. Falls back to a fixed-time cut
-    /// when no qualifying silence is in range.
+    /// Cut the audio into chunks of AT MOST `chunkSeconds` — recap included —
+    /// snapping each boundary to the midpoint of the nearest silence within
+    /// ±`alignFlexSeconds`. Falls back to a fixed-time cut when no qualifying
+    /// silence is in range.
+    ///
+    /// Each cut is measured from the PREVIOUS cut, not from a fixed 28 s grid:
+    /// on the grid, one boundary snapping early and the next snapping late
+    /// (plus the recap) made chunks of up to 33 s, and the LiteRT backend
+    /// truncates at 28 — up to 5 s at such a seam was never transcribed.
     func computeCutPoints(silences: [Silence], durationSeconds: Double) -> [Double] {
+        let stride = Self.chunkSeconds - Self.overlapSeconds - Self.alignFlexSeconds
         var cuts: [Double] = []
-        var t = Self.chunkSeconds
-        while t < durationSeconds {
+        var previous = 0.0
+        while previous + stride < durationSeconds {
+            let t = previous + stride
             let nearest = silences.min { a, b in
                 abs((a.startSeconds + a.endSeconds) / 2 - t) <
                 abs((b.startSeconds + b.endSeconds) / 2 - t)
             }
+            var cut = t
             if let s = nearest,
                abs((s.startSeconds + s.endSeconds) / 2 - t) <= Self.alignFlexSeconds
             {
-                cuts.append((s.startSeconds + s.endSeconds) / 2)
-            } else {
-                cuts.append(t)
+                cut = (s.startSeconds + s.endSeconds) / 2
             }
-            t += Self.chunkSeconds
+            cuts.append(cut)
+            previous = cut
         }
         return cuts
     }

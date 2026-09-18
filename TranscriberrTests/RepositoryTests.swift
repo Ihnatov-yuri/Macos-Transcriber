@@ -536,4 +536,34 @@ final class RepositoryTests: XCTestCase {
         try repo.clearSegments(of: rec)
         XCTAssertTrue(rec.segments.isEmpty)
     }
+
+    // MARK: - Pending queue
+
+    func testPendingTaskRoundTripAndReplace() throws {
+        let rec = Recording(title: "Queued", audioPath: "/tmp/queued.wav")
+        try repo.save(rec)
+        var params = TranscriptionRunner.Params(file: URL(fileURLWithPath: rec.audioPath),
+                                                backend: .whisper, languages: ["Dutch", "English"],
+                                                diarize: true, expectedSpeakers: 3)
+        repo.savePendingTask(for: rec, params: params)
+        params.backend = .parakeet
+        repo.savePendingTask(for: rec, params: params)   // re-queue replaces, never duplicates
+
+        let tasks = repo.pendingTasks()
+        XCTAssertEqual(tasks.count, 1)
+        XCTAssertEqual(tasks.first?.backend, BackendFactory.Kind.parakeet.rawValue)
+        XCTAssertEqual(tasks.first?.languages, "Dutch,English")
+        XCTAssertEqual(tasks.first?.expectedSpeakers, 3)
+
+        repo.removePendingTask(rec.id)
+        XCTAssertTrue(repo.pendingTasks().isEmpty)
+    }
+
+    func testDeletingRecordingDropsItsPendingTask() throws {
+        let rec = Recording(title: "Doomed", audioPath: "/tmp/doomed.wav")
+        try repo.save(rec)
+        repo.savePendingTask(for: rec, params: .init(file: URL(fileURLWithPath: rec.audioPath)))
+        try repo.delete(rec)
+        XCTAssertTrue(repo.pendingTasks().isEmpty)
+    }
 }

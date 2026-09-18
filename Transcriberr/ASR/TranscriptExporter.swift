@@ -30,30 +30,90 @@ enum TranscriptExporter {
     private static func writeSrt(stem: String, dir: URL, segments: [Segment]) throws {
         var out = ""
         for (idx, seg) in segments.enumerated() {
-            out += "\(idx + 1)\n\(srtTime(seg.startSeconds)) --> \(srtTime(seg.endSeconds))\n\(seg.text)\n\n"
+            // A blank line ends an SRT cue: text carrying one (an LLM chunk
+            // with paragraphs) cut its own cue short.
+            let text = seg.text.split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            out += "\(idx + 1)\n\(srtTime(seg.startSeconds)) --> \(srtTime(seg.endSeconds))\n\(text)\n\n"
         }
         try out.write(to: dir.appendingPathComponent("\(stem).srt"), atomically: true, encoding: .utf8)
     }
 
     private static func writeJson(stem: String, dir: URL, recording: Recording, segments: [Segment]) throws {
-        // TODO: emit the same shape as the Android exporter (segments + meta).
-        let url = dir.appendingPathComponent("\(stem).json")
-        let payload: [String: Any] = [
-            "title": recording.title,
-            "duration_seconds": recording.durationSeconds,
-            "segments": segments.map { seg in
-                [
-                    "start": seg.startSeconds,
-                    "end": seg.endSeconds,
-                    "text": seg.text,
-                    "speaker": seg.speaker ?? "",
-                    "speakerName": seg.speakerName ?? "",
-                    "language": seg.language ?? "",
-                ] as [String: Any]
-            },
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: url)
+        let data = try jsonData(recording: recording, segments: segments)
+        try data.write(to: dir.appendingPathComponent("\(stem).json"), options: .atomic)
+    }
+
+    /// Same document as Android's `TranscriptExporter.toJson`: identical keys,
+    /// and absent values written as explicit `null` (kotlinx decodes those
+    /// into its nullable fields; an empty string would not round-trip).
+    static func jsonData(recording: Recording, segments: [Segment]) throws -> Data {
+        let doc = TranscriptJson(
+            audioPath: recording.audioPath,
+            title: recording.title,
+            language: recording.sourceLanguage,
+            translated: recording.translateToEnglish,
+            durationSeconds: recording.durationSeconds,
+            backend: recording.transcribedWithBackend,
+            model: recording.transcribedWithModel,
+            segments: segments.map {
+                JsonSegment(
+                    start: $0.startSeconds,
+                    end: $0.endSeconds,
+                    speaker: $0.speaker,
+                    speakerName: $0.speakerName,
+                    language: $0.language,
+                    text: $0.text
+                )
+            }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(doc)
+    }
+
+    struct TranscriptJson: Codable, Equatable {
+        var audioPath: String
+        var title: String
+        var language: String?
+        var translated: Bool
+        var durationSeconds: Double
+        var backend: String?
+        var model: String?
+        var segments: [JsonSegment]
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(audioPath, forKey: .audioPath)
+            try c.encode(title, forKey: .title)
+            try c.encode(language, forKey: .language)
+            try c.encode(translated, forKey: .translated)
+            try c.encode(durationSeconds, forKey: .durationSeconds)
+            try c.encode(backend, forKey: .backend)
+            try c.encode(model, forKey: .model)
+            try c.encode(segments, forKey: .segments)
+        }
+    }
+
+    struct JsonSegment: Codable, Equatable {
+        var start: Double
+        var end: Double
+        var speaker: String?
+        var speakerName: String?
+        var language: String?
+        var text: String
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(start, forKey: .start)
+            try c.encode(end, forKey: .end)
+            try c.encode(speaker, forKey: .speaker)
+            try c.encode(speakerName, forKey: .speakerName)
+            try c.encode(language, forKey: .language)
+            try c.encode(text, forKey: .text)
+        }
     }
 
     private static func writeSpeakerSidecar(stem: String, dir: URL, segments: [Segment]) throws {

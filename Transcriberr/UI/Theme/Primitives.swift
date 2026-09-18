@@ -356,6 +356,11 @@ struct TagPair: View {
                     Text(label).uiLabel(10, color: AppColor.ink2)
                     Text(value).uiLabel(10)
                 }
+                // One line, at its own width — in a crowded row a pair used
+                // to wrap mid-value; rows of pairs wrap as a whole instead
+                // (FlowLayout).
+                .lineLimit(1)
+                .fixedSize()
                 // No fixed width: a VStack proposes its own resolved width
                 // (set by its widest child, the HStack above) to every
                 // child, so a Rectangle with only a height constraint

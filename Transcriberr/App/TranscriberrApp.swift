@@ -30,6 +30,10 @@ struct TranscriberrApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        // First launch opened at the 980×640 minimum, where the detail pane
+        // is 398 pt wide — the layout breathes from ~1250 pt up.
+        .defaultSize(width: 1320, height: 860)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About Transcriberr") { Self.showAbout() }

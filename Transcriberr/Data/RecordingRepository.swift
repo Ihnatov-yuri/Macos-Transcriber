@@ -660,8 +660,42 @@ final class RecordingRepository: @unchecked Sendable {
     }
 
     func delete(_ recording: Recording) throws {
+        let id = recording.id
         context.delete(recording)
         try context.save()
+        removePendingTask(id)
+    }
+
+    // MARK: - Pending transcription queue
+
+    /// The job queue, mirrored to the store so a quit (or crash, or an update
+    /// relaunch) mid-queue doesn't silently forget the runs still waiting.
+    /// One row per recording — `recordingId` is unique — so re-queuing the
+    /// same recording replaces its row.
+    func savePendingTask(for recording: Recording, params: TranscriptionRunner.Params) {
+        removePendingTask(recording.id, save: false)
+        context.insert(PendingTask(
+            recordingId: recording.id,
+            backend: params.backend.rawValue,
+            languages: params.languages.sorted().joined(separator: ","),
+            translateTo: params.translateTo,
+            diarize: params.diarize,
+            expectedSpeakers: params.expectedSpeakers,
+            hybridDiarize: params.hybridDiarize
+        ))
+        try? context.save()
+    }
+
+    func removePendingTask(_ recordingId: UUID, save: Bool = true) {
+        let descriptor = FetchDescriptor<PendingTask>(predicate: #Predicate { $0.recordingId == recordingId })
+        guard let rows = try? context.fetch(descriptor), !rows.isEmpty else { return }
+        rows.forEach(context.delete)
+        if save { try? context.save() }
+    }
+
+    /// Oldest first — the order they were queued in.
+    func pendingTasks() -> [PendingTask] {
+        (try? context.fetch(FetchDescriptor<PendingTask>(sortBy: [.init(\.queuedAtMillis)]))) ?? []
     }
 
     /// Append a chunk's worth of new segments to a recording (live transcribe).

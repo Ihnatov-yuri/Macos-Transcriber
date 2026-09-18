@@ -132,6 +132,10 @@ final class HotkeyMonitor {
             trace("flagsChanged keyCode=\(code) \(down ? "down" : "up")")
             edge(down: down)
         case .keyDown:
+            // Our own ⌘V / Backspace (TextInserter) is not the user making a
+            // combo: a paste landing while the key is held for the NEXT
+            // passage used to cancel that session.
+            guard !TextInserter.isSynthetic(event) else { return }
             if isDown {
                 trace("keyDown while held → combo")
                 handler(.otherKeyDown)
@@ -152,6 +156,7 @@ final class HotkeyMonitor {
             trace("flagsChanged keyCode=\(event.keyCode) \(down ? "down" : "up") (NSEvent)")
             edge(down: down)
         case .keyDown:
+            if let cg = event.cgEvent, TextInserter.isSynthetic(cg) { return }
             if isDown {
                 trace("keyDown while held → combo (NSEvent)")
                 handler(.otherKeyDown)

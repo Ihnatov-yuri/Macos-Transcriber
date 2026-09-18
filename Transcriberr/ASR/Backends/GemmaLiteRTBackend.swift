@@ -134,7 +134,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         previousContext: String?,
         speakerHints: [SpeakerHint]
     ) async throws -> String {
-        guard isReady, let engine else {
+        guard isReady, engine != nil else {
             throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
         }
         guard samples.count >= 8_000 else { return "" }
@@ -149,6 +149,10 @@ actor GemmaLiteRTBackend: ASRBackend {
         // one engine and must never interleave conversations on it.
         let lockGen = await acquireEngine()
         defer { releaseEngine(lockGen) }
+        // Read AFTER the wait — see generateText.
+        guard let engine else {
+            throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
+        }
         // Cross-engine exclusivity: LiteRT's Metal path wedges when another
         // engine infers concurrently in-process (see InferenceGate).
         let gateStamp = await InferenceGate.shared.acquire()
@@ -198,6 +202,9 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// eventual release a no-op instead of corrupting the new holder.
     private var lockGeneration = 0
 
+    /// A generation is running or queued — not the moment for an idle release.
+    var isBusy: Bool { engineBusy }
+
     private func acquireEngine() async -> Int {
         if !engineBusy { engineBusy = true; return lockGeneration }
         await withCheckedContinuation { engineWaiters.append($0) }
@@ -228,11 +235,16 @@ actor GemmaLiteRTBackend: ASRBackend {
         userMessage: String,
         maxTokens: Int
     ) async throws -> String {
+        // The idle release can land between two windows of a long preset run;
+        // come back up instead of failing every remaining window.
+        if !isReady || engine == nil { try await load(modelPath: nil) }
+        let lockGen = await acquireEngine()
+        defer { releaseEngine(lockGen) }
+        // Read AFTER the wait: a wedge recovery swaps the engine while we
+        // queue, and the one bound before the wait is the wedged one.
         guard isReady, let engine else {
             throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
         }
-        let lockGen = await acquireEngine()
-        defer { releaseEngine(lockGen) }
         let gateStamp = await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
         func attempt() async throws -> String {

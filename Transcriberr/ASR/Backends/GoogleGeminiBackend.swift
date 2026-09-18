@@ -43,9 +43,15 @@ actor GoogleGeminiBackend: ASRBackend {
         let pcmData = try wavData(samples: samples, sampleRate: 16_000)
         let b64 = pcmData.base64EncodedString()
 
-        let lang = languages.first ?? "the spoken language"
+        // `languages` is a Set: `.first` named an arbitrary one of several
+        // hints, and speech in the others came back translated or garbled.
+        let names = languages.sorted()
         let action = translateTo == nil
-            ? "Transcribe the speech in this audio in \(lang) into \(lang) text. Output only the transcript."
+            ? (names.count == 1
+                ? "Transcribe the speech in this audio in \(names[0]) into \(names[0]) text. Output only the transcript."
+                : names.isEmpty
+                    ? "Transcribe the speech in this audio in the language it is spoken in. Do not translate. Output only the transcript."
+                    : "Transcribe the speech in this audio. It may be in any of: \(names.joined(separator: ", ")). Keep each utterance in the language it was spoken in — do not translate. Output only the transcript.")
             : "Translate the speech in this audio into idiomatic \(translateTo!). Output only the translation."
         var prompt = action
         if let ctx = previousContext, !ctx.isEmpty {
@@ -56,10 +62,13 @@ actor GoogleGeminiBackend: ASRBackend {
         }
 
         let url = URL(string:
-            "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(key)"
+            "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
         )!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        // Header, not `?key=`: a query string ends up in URLError user info,
+        // proxy logs and diagnostics.
+        req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let payload: [String: Any] = [
@@ -100,10 +109,13 @@ actor GoogleGeminiBackend: ASRBackend {
             throw ASRError.modelLoadFailed(reason: "Gemini API key missing")
         }
         let url = URL(string:
-            "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(key)"
+            "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
         )!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        // Header, not `?key=`: a query string ends up in URLError user info,
+        // proxy logs and diagnostics.
+        req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let payload: [String: Any] = [

@@ -334,6 +334,9 @@ struct LibraryView: View {
                     }
                     Spacer(minLength: 0)
                 }
+                // ~208 pt wide: with a folder and two tags each label used to
+                // wrap word by word. One line; the tail truncates.
+                .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 

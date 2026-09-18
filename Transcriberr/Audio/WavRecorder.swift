@@ -373,7 +373,85 @@ final class WavRecorder: @unchecked Sendable {
             openFileURL = url
             state = .recording(file: url)
             startTickTask()
+            observeConfigurationChanges()
         }
+    }
+
+    // MARK: - Device changes
+
+    @ObservationIgnored @MainActor private var configObserver: NSObjectProtocol?
+
+    @MainActor
+    private func observeConfigurationChanges() {
+        guard configObserver == nil else { return }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleConfigurationChange() }
+        }
+    }
+
+    /// The engine stops itself when the route changes (headphones plugged in,
+    /// AirPods connecting, a new default input). Unhandled, the screen kept
+    /// saying RECORDING with a running clock while the file received nothing —
+    /// found out at Stop. Same rebuild as `UtteranceCapture`: the tap and the
+    /// converter were built from the previous native format.
+    @MainActor
+    private func handleConfigurationChange() {
+        let wasPaused: Bool
+        switch state {
+        case .recording: wasPaused = false
+        case .paused: wasPaused = true
+        default: return
+        }
+        guard !engine.isRunning || wasPaused else { return }
+        AppLog.warn("recorder", "audio configuration changed mid-recording — rebuilding tap and restarting")
+
+        func fail(_ reason: String) {
+            AppLog.error("recorder", reason)
+            // Stop still salvages the file from a failed state (`openFileURL`).
+            state = .failed(reason: "The microphone changed and recording could not continue (\(reason)). Press Stop to keep what was recorded.")
+        }
+
+        let input = engine.inputNode
+        var nativeFormat: AVAudioFormat?
+        try? ExceptionTrap.run { nativeFormat = input.outputFormat(forBus: 0) }
+        guard let nativeFormat, nativeFormat.channelCount > 0, nativeFormat.sampleRate > 0,
+              let monoFormat = AVAudioFormat(
+                  commonFormat: .pcmFormatFloat32, sampleRate: nativeFormat.sampleRate,
+                  channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: monoFormat, to: targetFormat)
+        else { return fail("no usable input after the change") }
+        converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
+        converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
+        ioQueue.sync {
+            // Whatever the old converter still holds belongs in the file
+            // before the rate changes underneath it.
+            self.flushConverterTail()
+            self.converter = converter
+            self.inputFormat = nativeFormat
+        }
+        do {
+            try ExceptionTrap.run {
+                input.removeTap(onBus: 0)
+                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buf, _ in
+                    self?.ingest(buffer: buf)
+                }
+            }
+        } catch {
+            return fail("tap reinstall failed: \(error.localizedDescription)")
+        }
+        guard !wasPaused else { return }   // resume() starts the engine
+        var startError: Error?
+        do {
+            try ExceptionTrap.run {
+                do { try self.engine.start() } catch { startError = error }
+            }
+        } catch {
+            startError = error
+        }
+        if let startError { return fail("engine restart failed: \(startError.localizedDescription)") }
+        AppLog.info("recorder", "capture resumed at \(Int(nativeFormat.sampleRate)) Hz, \(nativeFormat.channelCount) ch")
     }
 
     /// Observable writes from the nonisolated `start()`/`stop()` paths.

@@ -110,7 +110,8 @@ struct PlayerBar: View {
 
     private var progress: Double {
         guard container.audioPlayer.duration > 0 else { return 0 }
-        return container.audioPlayer.currentTime / container.audioPlayer.duration
+        // currentTime can briefly be the previous recording's.
+        return min(1, max(0, container.audioPlayer.currentTime / container.audioPlayer.duration))
     }
 
     private func timeStamp(_ s: Double) -> String {

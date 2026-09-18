@@ -134,6 +134,13 @@ final class DictationTextTests: XCTestCase {
 
     // MARK: - Polish guard
 
+    /// The LCS is capped at 400 words a side; the ratios once divided by the
+    /// full length, so a long hands-free passage could never be polished.
+    func testPolishGuardAcceptsLongPassage() {
+        let raw = (0 ..< 700).map { "word\($0)" }.joined(separator: " ")
+        XCTAssertTrue(DictationText.acceptPolished(raw: raw, polished: raw.capitalized + "."))
+    }
+
     func testPolishGuardAcceptsCleanup() {
         let raw = "so um we should ship it on monday and tell the team"
         let polished = "So we should ship it on Monday and tell the team."

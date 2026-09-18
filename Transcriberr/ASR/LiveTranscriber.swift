@@ -41,6 +41,14 @@ final class LiveTranscriber: @unchecked Sendable {
     private let factory: BackendFactory
     private weak var source: (any LiveChunkSource)?
     private var consumer: Task<Void, Never>?
+    /// Bumped by every start/stop, so a `start()` that was suspended in a
+    /// model load can tell it has been superseded.
+    private var startToken = 0
+
+    /// Read per chunk, not captured at start: switching the language on the
+    /// Record screen mid-recording has to reach the very next live chunk.
+    var languages: Set<String> = []
+    var translateTo: String?
 
     init(factory: BackendFactory, recorder: any LiveChunkSource) {
         self.factory = factory
@@ -54,14 +62,19 @@ final class LiveTranscriber: @unchecked Sendable {
         modelDirectory: URL?
     ) async {
         await stop()
+        self.languages = languages
+        self.translateTo = translateTo
+        let token = startToken
         status = .loading
         let backend = factory.backend(for: engine)
         do {
             try await backend.load(modelPath: modelDirectory)
         } catch {
-            status = .failed(reason: error.localizedDescription)
+            if token == startToken { status = .failed(reason: error.localizedDescription) }
             return
         }
+        // Stopped (or restarted) while the model was loading.
+        guard token == startToken else { return }
         status = .running
         guard let source else { return }
         let chunkStream = source.chunks
@@ -69,12 +82,14 @@ final class LiveTranscriber: @unchecked Sendable {
             for await chunk in chunkStream {
                 guard let self else { break }
                 if Task.isCancelled { break }
-                await self.handleChunk(chunk, backend: backend, languages: languages, translateTo: translateTo)
+                await self.handleChunk(chunk, backend: backend,
+                                       languages: self.languages, translateTo: self.translateTo)
             }
         }
     }
 
     func stop() async {
+        startToken &+= 1
         consumer?.cancel()
         consumer = nil
         if status == .running || status == .loading {

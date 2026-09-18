@@ -27,11 +27,19 @@ final class DictationHUD {
     }
 
     func show() {
+        // A pending hide means the card on screen is the PREVIOUS session's
+        // closing notice — this show starts a new one.
+        let lingering = hideTask != nil
         hideTask?.cancel()
         hideTask = nil
         if panel == nil { build() }
         guard let panel else { return }
-        position(panel)
+        // Choose the screen when the HUD APPEARS; while it stays up it stays
+        // put — `show()` runs on every phase change, and following the
+        // pointer made the card hop displays between LISTENING and
+        // RECOGNIZING.
+        if !panel.isVisible || lingering { position(panel) }
+        observeScreenChanges()
         panel.alphaValue = 1
         panel.orderFrontRegardless()
     }
@@ -89,13 +97,29 @@ final class DictationHUD {
         panel = p
     }
 
+    private var screenObserver: NSObjectProtocol?
+
+    /// A display unplugged or a resolution change mid-session left the
+    /// borderless panel where the old geometry had it — possibly off-screen.
+    private func observeScreenChanges() {
+        guard screenObserver == nil else { return }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let panel = self.panel, panel.isVisible else { return }
+                self.position(panel)
+            }
+        }
+    }
+
     /// Bottom-centre of the screen the pointer is on. The visible card sits
     /// `shadowMargin` inside the (larger) panel on every side, so the panel
     /// origin is offset up by that margin to keep the CARD's bottom edge —
     /// not the panel's — anchored 56pt above the screen bottom.
     private func position(_ panel: NSPanel) {
         let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
         guard let frame = screen?.visibleFrame else { return }
         let origin = NSPoint(
             x: frame.midX - size.width / 2,

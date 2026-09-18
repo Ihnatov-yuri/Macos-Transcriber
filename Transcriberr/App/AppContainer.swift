@@ -150,8 +150,11 @@ final class AppContainer: @unchecked Sendable {
             // Hand the multi-gigabyte LiteRT engine back once the queue has
             // been quiet for a while — it is the only thing holding the
             // process-wide inference gate down.
+            jobs.waitForAudio = { [weak self] id in
+                await self?.audioPostProcessTracker.waitUntilIdle(id)
+            }
             jobs.onIdle = { [weak self] in
-                await self?.backendFactory.releaseLiteRT()
+                await self?.backendFactory.releaseLiteRTIfIdle() ?? true
             }
         }
 
@@ -161,6 +164,10 @@ final class AppContainer: @unchecked Sendable {
             guard let self else { return }
             let healed = self.repository.healEmptyTranscripts()
             if healed > 0 { AppLog.info("app", "restored \(healed) transcript(s) from versions") }
+            // Not under the unit-test host: it opens the user's real store.
+            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+                self.jobManager.resumePendingTasks()
+            }
         }
 
         // Pre-warm Parakeet (the default speech-to-text engine). First-ever

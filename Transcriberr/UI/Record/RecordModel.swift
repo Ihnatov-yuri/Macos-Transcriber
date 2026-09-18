@@ -20,7 +20,13 @@ final class RecordModel {
     var autoTranscribe: Bool { didSet { container.uiPrefs.autoTranscribe = autoTranscribe } }
     var liveEnabled: Bool { didSet { container.uiPrefs.liveEnabled = liveEnabled } }
     var liveEngine: BackendFactory.Kind { didSet { container.uiPrefs.liveEngine = liveEngine } }
-    var liveLanguages: Set<String> { didSet { container.uiPrefs.lastLanguages = liveLanguages } }
+    var liveLanguages: Set<String> {
+        didSet {
+            container.uiPrefs.lastLanguages = liveLanguages
+            // Reaches a live session already running.
+            liveWorker.languages = liveLanguages
+        }
+    }
     /// Meeting mode: capture system audio (the other participants, tapped
     /// digitally) alongside the mic. Live transcription is unavailable in
     /// this mode — the live worker feeds off WavRecorder's chunk stream.

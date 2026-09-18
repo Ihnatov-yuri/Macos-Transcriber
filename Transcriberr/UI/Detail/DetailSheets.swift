@@ -292,23 +292,32 @@ struct SplitRecordingSheet: View {
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
+    /// A subview never gets more than the container's width: a chip with a
+    /// long folder or speaker name used to be placed at its unconstrained size
+    /// and ran out of a narrow column.
+    private func size(of sv: LayoutSubview, within width: CGFloat) -> CGSize {
+        let ideal = sv.sizeThatFits(.unspecified)
+        guard width.isFinite, ideal.width > width else { return ideal }
+        return sv.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? 320
-        var rows: [[CGSize]] = [[]]
-        var rowWidth: CGFloat = 0
-        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        for s in sizes {
-            if rowWidth + s.width > width, !rows.last!.isEmpty {
-                rows.append([])
+        let width = proposal.width ?? .infinity
+        var height: CGFloat = 0, rowWidth: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
+        for sv in subviews {
+            let s = size(of: sv, within: width)
+            if rowWidth > 0, rowWidth + s.width > width {
+                height += rowHeight + spacing
                 rowWidth = 0
+                rowHeight = 0
             }
-            rows[rows.count - 1].append(s)
             rowWidth += s.width + spacing
+            rowHeight = max(rowHeight, s.height)
+            widest = max(widest, rowWidth - spacing)
         }
-        let height = rows.reduce(0) { partial, r in
-            partial + (r.map(\.height).max() ?? 0) + (partial > 0 ? spacing : 0)
-        }
-        return CGSize(width: width, height: height)
+        height += rowHeight
+        // Unbounded proposal → report what the rows actually use, never ∞.
+        return CGSize(width: width.isFinite ? width : widest, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
@@ -316,9 +325,9 @@ struct FlowLayout: Layout {
         var x = bounds.minX
         var y = bounds.minY
         var rowHeight: CGFloat = 0
-        for (i, sv) in subviews.enumerated() {
-            let s = sv.sizeThatFits(.unspecified)
-            if x - bounds.minX + s.width > width, x > bounds.minX {
+        for sv in subviews {
+            let s = size(of: sv, within: width)
+            if x > bounds.minX, x - bounds.minX + s.width > width {
                 x = bounds.minX
                 y += rowHeight + spacing
                 rowHeight = 0
@@ -326,7 +335,6 @@ struct FlowLayout: Layout {
             sv.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .init(s))
             x += s.width + spacing
             rowHeight = max(rowHeight, s.height)
-            _ = i
         }
     }
 }

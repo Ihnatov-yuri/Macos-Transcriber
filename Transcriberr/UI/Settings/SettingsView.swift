@@ -117,7 +117,7 @@ struct EnginesSettingsTab: View {
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Languages by engine") {
-                LabeledContent("Parakeet v3", value: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk, ru… (no Arabic/Asian)")
+                LabeledContent("Parakeet v3", value: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk… (no Arabic/Asian)")
                 LabeledContent("Parakeet v2", value: "English only — best English accuracy")
                 LabeledContent("Whisper large-v3", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese")
                 LabeledContent("Gemma 4 LiteRT", value: "~140 languages incl. Gulf Arabic — strongest Arabic (as on Android)")

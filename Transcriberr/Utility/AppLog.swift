@@ -46,6 +46,7 @@ enum AppLog {
 
     // MARK: - File I/O
 
+    private static let maxFileBytes = 5 * 1024 * 1024
     private static var didOpenFile = false
     private static var handle: FileHandle?
 
@@ -63,9 +64,19 @@ enum AppLog {
         guard !didOpenFile else { return }
         didOpenFile = true
         let fm = FileManager.default
-        if !fm.fileExists(atPath: logFileURL.path) {
-            fm.createFile(atPath: logFileURL.path, contents: Data())
+        // The log carries transcript snippets and recording titles: owner-only,
+        // and capped — one rotation at launch keeps at most ~2× the limit.
+        let ownerOnly: [FileAttributeKey: Any] = [.posixPermissions: 0o600]
+        if let size = (try? fm.attributesOfItem(atPath: logFileURL.path))?[.size] as? Int,
+           size > maxFileBytes {
+            let old = logFileURL.appendingPathExtension("1")
+            try? fm.removeItem(at: old)
+            try? fm.moveItem(at: logFileURL, to: old)
         }
+        if !fm.fileExists(atPath: logFileURL.path) {
+            fm.createFile(atPath: logFileURL.path, contents: Data(), attributes: ownerOnly)
+        }
+        try? fm.setAttributes(ownerOnly, ofItemAtPath: logFileURL.path)
         if let h = try? FileHandle(forWritingTo: logFileURL) {
             try? h.seekToEnd()
             handle = h

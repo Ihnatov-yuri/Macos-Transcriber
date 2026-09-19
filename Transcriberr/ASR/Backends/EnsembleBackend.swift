@@ -28,6 +28,9 @@ actor EnsembleBackend: ASRBackend {
     /// Set when Gemma wedged repeatedly this run — the remaining chunks run
     /// single-engine so the run finishes instead of stalling per chunk.
     private var gemmaBenched = false
+    /// What the arbiter learned from reading the whole first-pass transcript
+    /// — handed to every arbitration of this run.
+    private var brief: MeetingBrief?
 
     init(factory: BackendFactory) {
         self.factory = factory
@@ -111,6 +114,7 @@ actor EnsembleBackend: ASRBackend {
             AppLog.warn("ensemble", "Gemma arbiter unavailable — merge falls back to engine A output")
         }
         gemmaBenched = false
+        brief = nil
         isReady = true
     }
 
@@ -315,6 +319,20 @@ actor EnsembleBackend: ASRBackend {
         return RichChunk(text: t, agreement: 1, textA: t, textB: "")
     }
 
+    /// Between the passes: the arbiter reads the WHOLE voted transcript once.
+    /// Throws on timeout/failure; the run then arbitrates without a brief.
+    func prepareBrief(transcript: String, vocabulary: String) async throws -> MeetingBrief? {
+        guard let arbiter else { return nil }
+        let built = try await MeetingBriefBuilder.build(
+            transcript: transcript, vocabulary: vocabulary
+        ) { system, user, maxTokens in
+            try await arbiter.generateText(
+                systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+        }
+        brief = built
+        return built
+    }
+
     /// Second pass of max-quality Super: Gemma rules on a disputed chunk with
     /// surrounding-transcript context and the user's vocabulary.
     func arbitrate(
@@ -422,6 +440,16 @@ actor EnsembleBackend: ASRBackend {
                     // One reading is a spelling the user has declared
                     // authoritative — that settles it.
                     reversed.append((vocabulary.contains(wa.norm) ? wa.surface : wb.surface, 0))
+                } else if priorA != priorB,
+                          Self.isLatinWord(priorA > priorB ? wa.norm : wb.norm),
+                          !Self.isLatinWord(priorA > priorB ? wb.norm : wa.norm) {
+                    // The trusted engine wrote a Latin-script word where the
+                    // weak-language engine wrote a native-script one: that is
+                    // code-switched English ("doesn't make it") against a
+                    // phonetic guess ("Долин місяць"). The weak engine cannot
+                    // emit Latin at all in this language, so its confidence
+                    // says nothing here.
+                    reversed.append((priorA > priorB ? wa.surface : wb.surface, 0))
                 } else {
                     // Substitution → higher prior-weighted confidence wins.
                     reversed.append((wa.confidence * priorA >= wb.confidence * priorB
@@ -472,6 +500,11 @@ actor EnsembleBackend: ASRBackend {
             }
         }
         return out
+    }
+
+    static func isLatinWord(_ norm: String) -> Bool {
+        let letters = norm.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        return !letters.isEmpty && letters.allSatisfy { $0.value < 0x250 }
     }
 
     /// A fragment that continues the previous word rather than starting a
@@ -575,7 +608,7 @@ actor EnsembleBackend: ASRBackend {
                 - A transcript may be empty or noise for a stretch the other one covers; keep the covered content.
                 Output ONLY the merged transcript text.
                 """,
-                userMessage: vocabBlock + contextBlock + """
+                userMessage: vocabBlock + (brief?.promptBlock ?? "") + contextBlock + """
                 Transcript A (\(kindA.displayName)):
                 \(textA)
 

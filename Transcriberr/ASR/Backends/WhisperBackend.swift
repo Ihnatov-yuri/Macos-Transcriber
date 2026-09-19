@@ -200,6 +200,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     static func rejectReason(
         text: String, avgLogprob: Float, noSpeechProb: Float, ukrainian: Bool
     ) -> String? {
+        if TranscriptHygiene.isOutroOnly(text) { return "subtitle sign-off" }
         if noSpeechProb > 0.6, avgLogprob < -1.0 { return "no speech" }
         if TranscriptHygiene.isPhantomOnly(text), noSpeechProb > 0.25 || avgLogprob < -0.55 {
             return "phantom line"

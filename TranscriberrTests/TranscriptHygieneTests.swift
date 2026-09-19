@@ -40,7 +40,7 @@ final class TranscriptHygieneTests: XCTestCase {
         XCTAssertEqual(WhisperBackend.rejectReason(
             text: "Якийсь текст", avgLogprob: -1.3, noSpeechProb: 0.8, ukrainian: true), "no speech")
         XCTAssertEqual(WhisperBackend.rejectReason(
-            text: "Дякую за перегляд!", avgLogprob: -0.3, noSpeechProb: 0.4, ukrainian: true), "phantom line")
+            text: "Дякую.", avgLogprob: -0.3, noSpeechProb: 0.4, ukrainian: true), "phantom line")
         // A confident, clearly voiced "Дякую." is kept.
         XCTAssertNil(WhisperBackend.rejectReason(
             text: "Дякую.", avgLogprob: -0.2, noSpeechProb: 0.05, ukrainian: true))
@@ -115,6 +115,25 @@ final class TranscriptHygieneTests: XCTestCase {
                        "воно ж продається дуже добре всюди як практично")
         // Equal priors: single insertions above the floor still survive.
         XCTAssertEqual(EnsembleBackend.roverMerge(whisper, debris), "воно ж продається воно пода як практично")
+    }
+
+    func testRoverKeepsTrustedEnginesLatinWords() {
+        func w(_ t: String, _ c: Float) -> ScoredWord {
+            ScoredWord(surface: t, norm: t.lowercased().filter { $0.isLetter || $0.isNumber }, confidence: c)
+        }
+        // Whisper unsure of its English, Parakeet very sure of its guess.
+        let whisper = [w("щоб", 0.9), w("doesn't", 0.3), w("make", 0.3), w("цікаво", 0.9)]
+        let parakeet = [w("що", 0.9), w("Долин", 0.99), w("місяць", 0.99), w("цікаво", 0.9)]
+        XCTAssertEqual(EnsembleBackend.roverMerge(whisper, parakeet, priorA: 1, priorB: 0.5),
+                       "щоб doesn't make цікаво")
+    }
+
+    func testSubtitleSignOffIsAlwaysRejected() {
+        XCTAssertEqual(WhisperBackend.rejectReason(
+            text: "Дякую за перегляд!", avgLogprob: -0.05, noSpeechProb: 0, ukrainian: true), "subtitle sign-off")
+        XCTAssertNil(WhisperBackend.rejectReason(
+            text: "Дякую.", avgLogprob: -0.05, noSpeechProb: 0, ukrainian: true))
+        XCTAssertFalse(TranscriptHygiene.isOutroOnly("Дякую за перегляд цього звіту, колеги"))
     }
 
     func testNonEnglishRunReplacesEnglishOnlyEngine() {

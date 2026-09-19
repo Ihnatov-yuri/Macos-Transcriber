@@ -496,7 +496,28 @@ final class TranscriptionRunner: @unchecked Sendable {
         // the expensive judgment too, because it's only spent where engines
         // actually fight — and the arbiter sees text BEFORE AND AFTER the
         // disputed chunk plus the user's vocabulary.
+        var spellingFixes: [MeetingBrief.Fix] = []
         if ensembleTwoPass, let ens = backend as? EnsembleBackend, await !ens.isGemmaBenched {
+            // The arbiter first reads the whole voted transcript: who is
+            // talking, about what, and which names the engines spelled three
+            // ways. Every arbitration below gets that brief; its guarded
+            // spelling fixes are applied to the finished text.
+            let firstPass = allSegments.map(\.text).joined(separator: "\n")
+            if MeetingBriefBuilder.isEnabled, firstPass.count >= 600 {
+                continuation.yield(.stage(text: "Reading the whole transcript…", fraction: 0.89))
+                let vocabulary = prompts.vocabulary(for: params.languages)
+                do {
+                    let brief = try await withChunkTimeout(
+                        seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass)
+                    ) {
+                        try await ens.prepareBrief(transcript: firstPass, vocabulary: vocabulary)
+                    }
+                    spellingFixes = brief?.fixes ?? []
+                } catch {
+                    AppLog.warn("runner", "meeting brief unavailable (\(error.localizedDescription)) — arbitrating without it")
+                    if case ASRError.chunkTimeout = error { try? await ens.recoverWedge(modelPath: nil) }
+                }
+            }
             let rich = richBox.all()
             // Worst disagreements first, bounded: cross-family engine pairs
             // (Whisper+Gemma on Ukrainian) can dispute 70% of chunks — 22
@@ -577,6 +598,15 @@ final class TranscriptionRunner: @unchecked Sendable {
                 micChunkIndices: micChunkIndices,
                 continuation: continuation
             )
+        }
+
+        // After refinement, so re-transcribed chunks are covered too.
+        if !spellingFixes.isEmpty {
+            allSegments = allSegments.map { seg in
+                var s = seg
+                s.text = MeetingBriefBuilder.apply(spellingFixes, to: seg.text)
+                return s
+            }
         }
 
         let myNameSetting = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")

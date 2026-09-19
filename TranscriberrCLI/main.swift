@@ -397,6 +397,40 @@ func cmdGenTest() async -> Int32 {
     }
 }
 
+/// Meeting brief on a real transcript (.txt) with the local Gemma — shows
+/// what the model proposes, what the guards accept, and how long one
+/// whole-transcript read takes.
+@MainActor
+func cmdBrief(path: String) async -> Int32 {
+    let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+        print("[brief] ❌ cannot read \(path)"); return 1
+    }
+    let app = UserDefaults(suiteName: "nl.ihnatov.Transcriberr")
+    let vocabulary = app?.string(forKey: "prompt.vocabulary") ?? ""
+    let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore())
+    let backend = factory.backend(for: .gemmaLiteRT)
+    do {
+        try await backend.load(modelPath: nil)
+        let parts = MeetingBriefBuilder.sections(text)
+        print("[brief] \(text.count) chars ≈ \(MeetingBriefBuilder.estimatedTokens(text)) tokens → \(parts.count) section(s)")
+        let t0 = Date()
+        let brief = try await MeetingBriefBuilder.build(transcript: text, vocabulary: vocabulary) { system, user, maxTokens in
+            let raw = try await backend.generateText(systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+            print("── raw model output ──\n\(raw)\n──────────────────────")
+            return raw
+        }
+        print("[brief] ✓ \(String(format: "%.0f", Date().timeIntervalSince(t0)))s")
+        print(brief.promptBlock)
+        for f in brief.fixes {
+            print("ACCEPTED FIX  \(f.from) → \(f.to)  (\(MeetingBriefBuilder.occurrences(of: f.from, in: text))×)")
+        }
+        return 0
+    } catch {
+        print("[brief] ❌ \(error)"); return 1
+    }
+}
+
 /// Full transcription pipeline, headless — same code path as the app's
 /// RUN button, for validating changes on real recordings without a deploy.
 @MainActor
@@ -520,6 +554,9 @@ func main() async -> Int32 {
             engineA: args.count > 5 ? args[5] : nil,
             engineB: args.count > 6 ? args[6] : nil,
             language: args.count > 7 ? args[7] : "English")
+    case "brief":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdBrief(path: args[2])
     case "aec":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdAEC(base: args[2])

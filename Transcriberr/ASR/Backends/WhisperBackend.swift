@@ -88,6 +88,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
 
         let isUkrainian = languages.count == 1 && languages.first?.lowercased() == "ukrainian"
+        let chunkSeconds = Double(samples.count) / 16_000
         var words: [ScoredWord] = []
         var keptTexts: [String] = []
         for result in results {
@@ -100,16 +101,44 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                 guard !segText.isEmpty else { continue }
                 if let reason = Self.rejectReason(
                     text: segText, avgLogprob: segment.avgLogprob,
-                    noSpeechProb: segment.noSpeechProb, ukrainian: isUkrainian) {
+                    noSpeechProb: segment.noSpeechProb,
+                    chunkSeconds: chunkSeconds) {
                     AppLog.warn("whisper", String(
                         format: "dropping segment (%@; logprob %.2f, no-speech %.2f): %@",
                         reason, segment.avgLogprob, segment.noSpeechProb, String(segText.prefix(60))))
                     continue
                 }
-                if TranscriptHygiene.isPhantomOnly(segText) {
+                // Observed, never acted on: a user who mixes languages says
+                // these letters for real, and no logged run ever showed the
+                // drift this was meant to catch.
+                if isUkrainian, TranscriptHygiene.nonUkrainianCyrillicShare(segText) > 0.04 {
                     AppLog.info("whisper", String(
-                        format: "stock line kept as speech (logprob %.2f, no-speech %.2f): %@",
-                        segment.avgLogprob, segment.noSpeechProb, segText))
+                        format: "non-Ukrainian Cyrillic in segment (logprob %.2f): %@",
+                        segment.avgLogprob, String(segText.prefix(60))))
+                }
+                // Whisper scores its own phantoms as confident speech
+                // (measured: log-prob −0.1, no-speech 0.00 on a silent
+                // track), so the witness has to be the audio. Each stock
+                // line is weighed over ITS OWN time range: a "Дякую." the
+                // model tacked onto the quiet tail of a chunk full of real
+                // speech is exactly the case a whole-chunk measurement
+                // cannot see. Long chunks only — in dictation a 2-second
+                // "Дякую" is the entire utterance.
+                if chunkSeconds >= 8, TranscriptHygiene.isPhantomOnly(segText) {
+                    let peak = Self.peakWindowRMS(
+                        samples, from: Double(segment.start), to: Double(segment.end))
+                    // nil = the segment lies past the end of the real audio.
+                    // Whisper pads every window to 30 s with zeros, and these
+                    // lines are what it writes over that padding: measured on
+                    // a Ukrainian meeting, "Дякую." timed at 29.5-29.6 s in a
+                    // 26 s chunk, every time. Nothing was said there.
+                    let verdict = peak.map { $0 < Self.phantomPeakRMS ? "dropped as silence" : "kept" }
+                        ?? "dropped — past the end of the audio (padding)"
+                    AppLog.info("whisper", String(
+                        format: "stock line \"%@\" @%.1f-%.1fs — peak RMS %@ → %@",
+                        segText, segment.start, segment.end,
+                        peak.map { String(format: "%.4f", $0) } ?? "n/a", verdict))
+                    if peak.map({ $0 < Self.phantomPeakRMS }) ?? true { continue }
                 }
                 keptTexts.append(segText)
                 for w in segWords {
@@ -136,20 +165,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                 }
             }
         }
-        var text = keptTexts.joined(separator: " ")
-        // Whisper scores its own phantoms as confident speech (measured:
-        // log-prob −0.1, no-speech 0.00 on a silent track), so a chunk that
-        // is NOTHING but a stock line needs an independent witness: the
-        // audio itself. A spoken "Дякую" has a loud voiced burst; the quiet
-        // side of a split-track meeting does not.
-        if TranscriptHygiene.isPhantomOnly(text) {
-            let peak = Self.peakWindowRMS(samples)
-            let drop = peak < Self.phantomPeakRMS
-            AppLog.info("whisper", String(
-                format: "stock-line-only chunk \"%@\" — peak RMS %.4f → %@",
-                String(text.prefix(30)), peak, drop ? "dropped as silence" : "kept"))
-            if drop { text = ""; words = [] }
-        }
+        let text = keptTexts.joined(separator: " ")
         AppLog.info("whisper", String(
             format: "chunk %.1fs → %d chars, %d scored words",
             Double(samples.count) / 16_000.0, text.count, words.count
@@ -174,13 +190,32 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// Below this peak a chunk holds no speech loud enough to be a phrase.
     static let phantomPeakRMS: Float = 0.012
 
-    /// Loudest 200 ms window of the chunk (RMS).
-    static func peakWindowRMS(_ samples: [Float]) -> Float {
+    /// Loudest 200 ms window (RMS) over a time range, whole buffer by
+    /// default. A range shorter than the window is widened around its
+    /// midpoint — a 0.1 s segment measured against the whole chunk would
+    /// inherit the loudest speech in it and never read as silence.
+    /// Returns nil when the range starts past the end of the buffer: that
+    /// is Whisper's zero padding, not audio, and the caller treats it as
+    /// stronger evidence than any RMS.
+    static func peakWindowRMS(_ samples: [Float], from: Double = 0, to: Double = .infinity) -> Float? {
         let win = 3_200
-        guard samples.count >= win else { return 0 }
+        var lo = 0, hi = samples.count
+        if from > 0 || to.isFinite {
+            guard from >= 0, to > from else { return samples.count >= win ? rawPeak(samples, 0, samples.count, win) : 0 }
+            let a = Int(from * 16_000)
+            guard a < samples.count - win / 2 else { return nil }   // padding
+            var b = Int(to.rounded(.up) * 16_000)
+            if b - a < win { let mid = (a + b) / 2; b = mid + win / 2; lo = max(0, mid - win / 2) } else { lo = a }
+            hi = min(samples.count, max(b, lo + win))
+        }
+        guard hi - lo >= win else { return 0 }
+        return rawPeak(samples, lo, hi, win)
+    }
+
+    private static func rawPeak(_ samples: [Float], _ lo: Int, _ hi: Int, _ win: Int) -> Float {
         var peak: Float = 0
-        var i = 0
-        while i + win <= samples.count {
+        var i = lo
+        while i + win <= hi {
             var e: Float = 0
             for v in samples[i..<(i + win)] { e += v * v }
             peak = max(peak, (e / Float(win)).squareRoot())
@@ -193,20 +228,23 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         text.replacing(#/<\|[^|]*\|>/#, with: "")
     }
 
-    /// Whisper's own evidence that a segment is not speech. The thresholds
-    /// are the reference implementation's (no-speech 0.6 / log-prob −1.0);
-    /// stock phantom lines are held to a much stricter bar because they are
-    /// exactly what the model emits when it is guessing.
+    /// Reasons to drop a segment outright. Deliberately few: Whisper rates
+    /// its own phantoms as confident speech (log-prob −0.1, no-speech 0.00),
+    /// so score rules catch little — the evidence-backed work is done by the
+    /// sign-off list here, the loudness witness above and the second engine.
+    ///   - a subtitle sign-off is never speech;
+    ///   - the reference implementation's no-speech rule;
+    ///   - a stock line with weak scores, but only in a LONG chunk: in
+    ///     dictation a 2-second "Дякую" is the whole utterance, and a short
+    ///     utterance scores low without being a phantom.
     static func rejectReason(
-        text: String, avgLogprob: Float, noSpeechProb: Float, ukrainian: Bool
+        text: String, avgLogprob: Float, noSpeechProb: Float, chunkSeconds: Double
     ) -> String? {
         if TranscriptHygiene.isOutroOnly(text) { return "subtitle sign-off" }
         if noSpeechProb > 0.6, avgLogprob < -1.0 { return "no speech" }
-        if TranscriptHygiene.isPhantomOnly(text), noSpeechProb > 0.25 || avgLogprob < -0.55 {
+        if chunkSeconds >= 8, TranscriptHygiene.isPhantomOnly(text),
+           noSpeechProb > 0.25 || avgLogprob < -0.55 {
             return "phantom line"
-        }
-        if ukrainian, TranscriptHygiene.nonUkrainianCyrillicShare(text) > 0.04, avgLogprob < -0.4 {
-            return "language drift"
         }
         return nil
     }

@@ -435,7 +435,10 @@ actor EnsembleBackend: ASRBackend {
                     // trusted engine's SURFACE. Picking by confidence here
                     // interleaved two engines' casing and punctuation
                     // ("і Вони проводять, Вони ж зараз").
-                    reversed.append((priorA >= priorB ? wa.surface : wb.surface, 0))
+                    // With no trusted engine (equal priors) it stays what it
+                    // was: the more confident reading.
+                    let takeA = priorA != priorB ? priorA > priorB : wa.confidence >= wb.confidence
+                    reversed.append((takeA ? wa.surface : wb.surface, 0))
                 } else if vocabulary.contains(wa.norm) != vocabulary.contains(wb.norm) {
                     // One reading is a spelling the user has declared
                     // authoritative — that settles it.

@@ -30,11 +30,11 @@ enum TranscriptHygiene {
         // Ukrainian
         ["дякую", "за", "перегляд"], ["дякую", "за", "увагу"], ["дякуємо", "за", "перегляд"],
         ["дякую", "вам", "за", "перегляд"], ["дякую", "що", "дивитесь"], ["дякую", "за", "підписку"],
-        ["до", "зустрічі"], ["до", "побачення"], ["дякую"], ["дякуємо"], ["угу"], ["ага"],
+        ["до", "зустрічі"], ["до", "побачення"], ["дякую"], ["дякуємо"],
         ["субтитри"], ["продовження", "слідує"], ["далі", "буде"],
         // English
         ["thank", "you"], ["thanks", "for", "watching"], ["thank", "you", "for", "watching"],
-        ["thank", "you", "very", "much"], ["bye"], ["you"], ["okay"],
+        ["thank", "you", "very", "much"],
         ["subtitles", "by", "the", "amaraorg", "community"],
         // Dutch
         ["bedankt", "voor", "het", "kijken"], ["dank", "u", "wel"], ["ondertitels", "ingediend", "door", "de", "amaraorg", "gemeenschap"],
@@ -44,6 +44,13 @@ enum TranscriptHygiene {
         ["gracias"], ["gracias", "por", "ver", "el", "video"],
         ["dziękuję"], ["dziękuję", "za", "uwagę"], ["napisy", "stworzone", "przez", "społeczność", "amaraorg"],
     ]
+
+    /// One-word turns Whisper also loops on in silence ("Угу, угу, угу").
+    /// Real far more often than the lines above, so they only ever count as
+    /// phantoms against an engine that heard NOTHING.
+    private static let backchannels: Set<String> = ["угу", "ага", "bye", "you", "okay", "ok", "mhm"]
+
+    private static let phrasesLongestFirst = phantomPhrases.sorted { $0.count > $1.count }
 
     /// Subtitle sign-offs. Unlike "Дякую", nobody says these in a meeting or
     /// a dictation — they exist only in the subtitle files Whisper learned
@@ -56,27 +63,34 @@ enum TranscriptHygiene {
     }
 
     static func isOutroOnly(_ text: String) -> Bool {
-        let words = normWords(text)
-        return !words.isEmpty && outroPhrases.contains(words)
+        consists(of: outroPhrases.sorted { $0.count > $1.count }, normWords(text))
     }
 
-    /// True when `text` is nothing but phantom phrases (possibly repeated:
-    /// "Дякую. Дякую."). Empty text is not a phantom — it is just empty.
-    static func isPhantomOnly(_ text: String) -> Bool {
-        let words = normWords(text)
+    /// `words` is a non-empty concatenation of phrases from `table`
+    /// (longest first, so "дякую за перегляд" isn't read as "дякую" + two
+    /// unexplained words).
+    private static func consists(of table: [[String]], _ words: [String]) -> Bool {
         guard !words.isEmpty, words.count <= 14 else { return false }
         var i = 0
         outer: while i < words.count {
-            // Longest phrase first so "дякую за перегляд" isn't consumed as
-            // "дякую" + two unexplained words.
-            for p in phantomPhrases.sorted(by: { $0.count > $1.count })
-            where i + p.count <= words.count && Array(words[i..<(i + p.count)]) == p {
+            for p in table where i + p.count <= words.count && Array(words[i..<(i + p.count)]) == p {
                 i += p.count
                 continue outer
             }
             return false
         }
         return true
+    }
+
+    static func isBackchannelOnly(_ text: String) -> Bool {
+        let words = normWords(text)
+        return !words.isEmpty && words.count <= 14 && words.allSatisfy(backchannels.contains)
+    }
+
+    /// True when `text` is nothing but phantom phrases (possibly repeated:
+    /// "Дякую. Дякую."). Empty text is not a phantom — it is just empty.
+    static func isPhantomOnly(_ text: String) -> Bool {
+        consists(of: phrasesLongestFirst, normWords(text)) || isBackchannelOnly(text)
     }
 
     /// What an acoustic engine "hears" in silence: nothing, or a lone number
@@ -103,6 +117,9 @@ enum TranscriptHygiene {
         guard pa != pb else { return nil }
         let phantom = pa ? a : b, other = pa ? b : a
         if isEffectivelySilent(other) { return "" }
+        // "Okay." against "Right." is two engines hearing one short real
+        // turn differently — not a phantom. Merge as usual.
+        if isBackchannelOnly(phantom) { return nil }
         let otherWords = normWords(other)
         if !Set(normWords(phantom)).isDisjoint(with: otherWords) { return nil }
         return otherWords.count >= 3 ? other.trimmingCharacters(in: .whitespacesAndNewlines) : ""

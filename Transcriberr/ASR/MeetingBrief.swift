@@ -310,6 +310,12 @@ enum MeetingBriefBuilder {
 
     /// Known to the system spell checker in any of the app's languages.
     static func isDictionaryWord(_ word: String) -> Bool {
+        // NSSpellChecker is AppKit: main thread only. Callers sit on an
+        // actor or a detached task; the main thread is never blocked on
+        // them (they are awaited), so a sync hop cannot deadlock.
+        if !Thread.isMainThread {
+            return DispatchQueue.main.sync { isDictionaryWord(word) }
+        }
         let checker = NSSpellChecker.shared
         let w = word.lowercased()
         // A checker passes any word outside its own script as "no error",

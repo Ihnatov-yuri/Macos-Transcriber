@@ -33,19 +33,30 @@ final class TranscriptHygieneTests: XCTestCase {
         XCTAssertNil(TranscriptHygiene.phantomResolution("Дякую.", "дякую"))
         XCTAssertNil(TranscriptHygiene.phantomResolution("Дякую.", "дякую тобі дуже"))
         XCTAssertNil(TranscriptHygiene.phantomResolution("", ""))
+        // Two engines, two short real words: not a phantom, merge as usual.
+        XCTAssertNil(TranscriptHygiene.phantomResolution("Okay.", "Right."))
+        XCTAssertNil(TranscriptHygiene.phantomResolution("Угу.", "Так, так"))
+        // …but a backchannel loop against total silence still is.
+        XCTAssertEqual(TranscriptHygiene.phantomResolution("Угу, угу, угу, угу", "100"), "")
         XCTAssertNil(TranscriptHygiene.phantomResolution("Звичайне речення тут", "Звичайне речення там"))
     }
 
     func testWhisperRejectReasons() {
         XCTAssertEqual(WhisperBackend.rejectReason(
-            text: "Якийсь текст", avgLogprob: -1.3, noSpeechProb: 0.8, ukrainian: true), "no speech")
+            text: "Якийсь текст", avgLogprob: -1.3, noSpeechProb: 0.8, chunkSeconds: 26), "no speech")
         XCTAssertEqual(WhisperBackend.rejectReason(
-            text: "Дякую.", avgLogprob: -0.3, noSpeechProb: 0.4, ukrainian: true), "phantom line")
+            text: "Дякую.", avgLogprob: -0.3, noSpeechProb: 0.4, chunkSeconds: 26), "phantom line")
+        // The same scores on a 2-second dictation are just a short utterance.
+        XCTAssertNil(WhisperBackend.rejectReason(
+            text: "Дякую.", avgLogprob: -0.7, noSpeechProb: 0.4, chunkSeconds: 2))
+        // Mixed-language speech is never dropped for its letters.
+        XCTAssertNil(WhisperBackend.rejectReason(
+            text: "абвгд ыэъё абвгд абвгд", avgLogprob: -0.6, noSpeechProb: 0.1, chunkSeconds: 26))
         // A confident, clearly voiced "Дякую." is kept.
         XCTAssertNil(WhisperBackend.rejectReason(
-            text: "Дякую.", avgLogprob: -0.2, noSpeechProb: 0.05, ukrainian: true))
+            text: "Дякую.", avgLogprob: -0.2, noSpeechProb: 0.05, chunkSeconds: 26))
         XCTAssertNil(WhisperBackend.rejectReason(
-            text: "Вони щорічно проводять конференцію", avgLogprob: -0.7, noSpeechProb: 0.3, ukrainian: true))
+            text: "Вони щорічно проводять конференцію", avgLogprob: -0.7, noSpeechProb: 0.3, chunkSeconds: 26))
     }
 
     func testScriptDriftShare() {
@@ -128,12 +139,40 @@ final class TranscriptHygieneTests: XCTestCase {
                        "щоб doesn't make цікаво")
     }
 
+    func testPeakWindowRMSMeasuresTheGivenRange() {
+        // 10 s: silent, then a loud burst in the last second.
+        var samples = [Float](repeating: 0, count: 10 * 16_000)
+        for i in 9 * 16_000..<(10 * 16_000) { samples[i] = 0.5 }
+        XCTAssertLessThan(WhisperBackend.peakWindowRMS(samples, from: 0, to: 8) ?? 1, 0.001)
+        XCTAssertGreaterThan(WhisperBackend.peakWindowRMS(samples, from: 9, to: 10) ?? 0, 0.4)
+        // Whole buffer: the burst dominates — a tail phantom would survive
+        // a chunk-wide measurement, which is why the range matters.
+        XCTAssertGreaterThan(WhisperBackend.peakWindowRMS(samples) ?? 0, 0.4)
+        // A sub-window range is widened around its midpoint, NOT silently
+        // replaced by the whole buffer (which would inherit the burst).
+        XCTAssertLessThan(WhisperBackend.peakWindowRMS(samples, from: 4.0, to: 4.1) ?? 1, 0.001)
+        // Past the end of the audio = Whisper's zero padding, not silence.
+        XCTAssertNil(WhisperBackend.peakWindowRMS(samples, from: 11.5, to: 11.6))
+        XCTAssertNil(WhisperBackend.peakWindowRMS(samples, from: 29.5, to: 29.6))
+        // Unusable range → whole buffer, never a false verdict.
+        XCTAssertGreaterThan(WhisperBackend.peakWindowRMS(samples, from: 5, to: 5) ?? 0, 0.4)
+    }
+
     func testSubtitleSignOffIsAlwaysRejected() {
         XCTAssertEqual(WhisperBackend.rejectReason(
-            text: "Дякую за перегляд!", avgLogprob: -0.05, noSpeechProb: 0, ukrainian: true), "subtitle sign-off")
+            text: "Дякую за перегляд!", avgLogprob: -0.05, noSpeechProb: 0, chunkSeconds: 26), "subtitle sign-off")
+        XCTAssertEqual(WhisperBackend.rejectReason(
+            text: "Дякую за перегляд! Дякую за перегляд!", avgLogprob: -0.05, noSpeechProb: 0, chunkSeconds: 2),
+            "subtitle sign-off")
         XCTAssertNil(WhisperBackend.rejectReason(
-            text: "Дякую.", avgLogprob: -0.05, noSpeechProb: 0, ukrainian: true))
+            text: "Дякую.", avgLogprob: -0.05, noSpeechProb: 0, chunkSeconds: 26))
         XCTAssertFalse(TranscriptHygiene.isOutroOnly("Дякую за перегляд цього звіту, колеги"))
+    }
+
+    func testRoverEqualPriorsStillFollowConfidenceOnAgreedWords() {
+        let a = [ScoredWord(surface: "hello", norm: "hello", confidence: 0.4)]
+        let b = [ScoredWord(surface: "Hello,", norm: "hello", confidence: 0.9)]
+        XCTAssertEqual(EnsembleBackend.roverMerge(a, b), "Hello,")
     }
 
     func testNonEnglishRunReplacesEnglishOnlyEngine() {

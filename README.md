@@ -105,3 +105,21 @@ Built on [FluidAudio](https://github.com/FluidInference/FluidAudio) (Parakeet + 
 **PolyForm Noncommercial 1.0.0** — free for personal, hobby, research, and other noncommercial use. Business/commercial use requires a separate license: [atoman@gmail.com](mailto:atoman@gmail.com).
 
 (The [Android app](https://github.com/Ihnatov-yuri) remains Apache-2.0.)
+
+### Real-world regression check
+
+Unit tests cover the logic; this checks the pipeline against your own
+recordings, which is where every defect in this project was actually found:
+
+```
+scripts/realworld-test.sh <recording.m4a> <start-sec> <duration-sec> <Language> [backend] [engineA] [engineB]
+```
+
+It cuts a slice out of a real recording (with its `.mic`/`.sys` sidecars, so
+the split-track path runs), transcribes it headlessly through the full
+pipeline, and prints the defect counts this project has been bitten by —
+subtitle sign-offs, stock-line-only lines, detached hyphens, seam repeats,
+word loops, script drift — next to the same counts for the transcript the app
+stored for that time window, plus an order-insensitive content-retention
+figure. Slices and outputs go to `$TMPDIR`; recordings are private and never
+belong in the repo.

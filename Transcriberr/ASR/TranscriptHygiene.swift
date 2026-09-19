@@ -45,6 +45,21 @@ enum TranscriptHygiene {
         ["dziękuję"], ["dziękuję", "za", "uwagę"], ["napisy", "stworzone", "przez", "społeczność", "amaraorg"],
     ]
 
+    /// Subtitle sign-offs. Unlike "Дякую", nobody says these in a meeting or
+    /// a dictation — they exist only in the subtitle files Whisper learned
+    /// from — so a segment that is nothing else is dropped on sight.
+    private static let outroPhrases: [[String]] = phantomPhrases.filter {
+        $0.contains("перегляд") || $0.contains("watching") || $0.contains("amaraorg")
+            || $0.contains("підписку") || $0.contains("дивитесь") || $0.contains("kijken")
+            || $0 == ["продовження", "слідує"] || $0 == ["субтитри"]
+            || $0.contains("regardé") || $0 == ["gracias", "por", "ver", "el", "video"]
+    }
+
+    static func isOutroOnly(_ text: String) -> Bool {
+        let words = normWords(text)
+        return !words.isEmpty && outroPhrases.contains(words)
+    }
+
     /// True when `text` is nothing but phantom phrases (possibly repeated:
     /// "Дякую. Дякую."). Empty text is not a phantom — it is just empty.
     static func isPhantomOnly(_ text: String) -> Bool {

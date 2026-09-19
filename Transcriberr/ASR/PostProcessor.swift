@@ -123,8 +123,8 @@ final class PostProcessor: @unchecked Sendable {
             .sorted { $0.startSeconds < $1.startSeconds }
             .map(\.text)
             .joined(separator: "\n")
-        let transcript = TextDestutter.collapse(rawTranscript)
-        let transcriptWithSpeakers = TextDestutter.collapse(
+        var transcript = TextDestutter.collapse(rawTranscript)
+        var transcriptWithSpeakers = TextDestutter.collapse(
             recording.segments
                 .sorted { $0.startSeconds < $1.startSeconds }
                 .map { seg in
@@ -170,13 +170,26 @@ final class PostProcessor: @unchecked Sendable {
                     try await backend.load(modelPath: modelDirectory)
                 }
             }
+            // One whole-transcript read (cached per transcript) tells every
+            // later call what the recording is about; its guarded spelling
+            // fixes are applied to the source text before any preset sees it.
+            // Only the windowed rewrites are worth a fresh build: Summary and
+            // Minutes read the whole transcript themselves, so they take a
+            // brief when one is already cached and never wait for one.
+            let brief = await meetingBrief(
+                transcript: transcriptWithSpeakers, vocabulary: vocab, backend: backend,
+                buildIfMissing: rewritePresets.contains(presetId))
+            if let brief, !brief.fixes.isEmpty {
+                transcript = MeetingBriefBuilder.apply(brief.fixes, to: transcript)
+                transcriptWithSpeakers = MeetingBriefBuilder.apply(brief.fixes, to: transcriptWithSpeakers)
+            }
             let markdown: String
             if rewritePresets.contains(presetId) {
                 markdown = try await runChunked(
                     preset: preset,
                     backend: backend,
                     system: system,
-                    vocabPrefix: vocabPrefix,
+                    vocabPrefix: vocabPrefix + (brief?.promptBlock ?? ""),
                     transcriptWithSpeakers: transcriptWithSpeakers,
                     transcript: transcript
                 )
@@ -213,6 +226,40 @@ final class PostProcessor: @unchecked Sendable {
         } catch {
             AppLog.error("postproc", "preset=\(presetId) failed: \(error.localizedDescription)")
             await setStatus(key, .failed(error.localizedDescription))
+        }
+    }
+
+    /// Cached brief for this exact transcript, or one fresh read. Never
+    /// fails the preset: no brief simply means the old, context-free run.
+    @MainActor
+    private func meetingBrief(
+        transcript: String, vocabulary: String, backend: any ASRBackend, buildIfMissing: Bool
+    ) async -> MeetingBrief? {
+        guard MeetingBriefBuilder.isEnabled, transcript.count >= 600 else { return nil }
+        let key = MeetingBriefBuilder.cacheKey(transcript: transcript, vocabulary: vocabulary)
+        if let hit = MeetingBriefBuilder.cached(key: key) { return hit }
+        guard buildIfMissing else { return nil }
+        let t0 = Date()
+        do {
+            let brief = try await MeetingBriefBuilder.build(
+                transcript: transcript, vocabulary: vocabulary
+            ) { system, user, maxTokens in
+                try await Self.withTimeout(seconds: 120) {
+                    try await backend.generateText(
+                        systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+                }
+            }
+            AppLog.info("postproc", "meeting brief built in \(String(format: "%.0f", Date().timeIntervalSince(t0)))s (\(transcript.count)ch read)")
+            MeetingBriefBuilder.store(brief, key: key)
+            return brief
+        } catch {
+            AppLog.warn("postproc", "meeting brief unavailable (\(error.localizedDescription)) — continuing without it")
+            // A timed-out read leaves LiteRT's native call wedged; the preset
+            // that follows would only queue behind it.
+            if case ASRError.chunkTimeout = error, let litert = backend as? GemmaLiteRTBackend {
+                try? await litert.recoverWedge(modelPath: nil)
+            }
+            return nil
         }
     }
 

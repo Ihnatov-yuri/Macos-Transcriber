@@ -35,6 +35,7 @@ struct SettingsView: View {
 /// cleanup, translation, titles, merge arbitration — and is additionally
 /// selectable as an EXPERIMENTAL audio engine (known to hallucinate).
 struct EnginesSettingsTab: View {
+    @AppStorage("ui.meetingBrief") private var meetingBrief = true
     @Environment(AppContainer.self) private var container
     @AppStorage("ui.myName") private var myName = ""
 
@@ -101,6 +102,9 @@ struct EnginesSettingsTab: View {
                     get: { container.uiPrefs.superMaxQuality },
                     set: { container.uiPrefs.superMaxQuality = $0 }
                 ))
+                Toggle("Gemma reads the whole transcript first (recording brief)", isOn: $meetingBrief)
+                Text("One extra read (under a minute) gives Gemma the topic, the people and the names as spelled in this recording. Max-quality arbitration and the Clean / Context rewrite / Translate presets all use it, and a name spelled inconsistently is unified when the correction sounds the same.")
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 Text("Both engines transcribe every chunk in parallel; disagreements are settled word-by-word by recognizer confidence. With Max quality on, chunks where the engines disagree (agreement < 0.8) get a second pass: Gemma rules with transcript context from both sides and your vocabulary.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }

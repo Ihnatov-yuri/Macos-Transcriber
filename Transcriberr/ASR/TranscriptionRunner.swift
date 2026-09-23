@@ -293,6 +293,11 @@ final class TranscriptionRunner: @unchecked Sendable {
             if let cleanedMic { tracks.append((1, cleanedMic)) }
             await ens.prepareTimeline(tracks: tracks, languages: params.languages, splitTracks: splitTracks)
             cleanedMic = nil
+        } else if let ens = backend as? EnsembleBackend {
+            // The ensemble is shared across runs: without this, a run that
+            // skips the timeline (English, one track) read the PREVIOUS
+            // recording's long-form Whisper words for its chunk windows.
+            await ens.clearTimeline()
         }
 
         // ---------- chunk loop ----------
@@ -378,8 +383,10 @@ final class TranscriptionRunner: @unchecked Sendable {
                         group.addTask { [self] in
                             let rich = try await richChunkWithRetry(
                                 ens: ens, samples: chunk.samples,
-                                window: .init(track: micChunkIndices.contains(idx) ? 1 : 0,
-                                              start: chunk.startSeconds, end: chunk.endSeconds),
+                                window: prepareTimeline
+                                    ? .init(track: micChunkIndices.contains(idx) ? 1 : 0,
+                                            start: chunk.startSeconds, end: chunk.endSeconds)
+                                    : nil,
                                 params: params, continuation: continuation)
                             richBox.set(idx, rich)
                             return (idx, rich.text)

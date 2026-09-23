@@ -431,7 +431,10 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // payload is the authoritative transcript — replace the
                     // live-appended rows with it whenever it differs.
                     stampRunMetadata()
-                    if params.keepVisibleUntilDone {
+                    if params.keepVisibleUntilDone && (finalRaws.isEmpty && allSegments.isEmpty) {
+                        // Never trade the readable draft for nothing.
+                        AppLog.warn("job", "background run produced no segments — keeping the draft")
+                    } else if params.keepVisibleUntilDone {
                         // Nothing of this run is on screen yet: swap it in whole.
                         let segs = finalRaws.isEmpty
                             ? allSegments.sorted { $0.startSeconds < $1.startSeconds }.map {

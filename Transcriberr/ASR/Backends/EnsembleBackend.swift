@@ -288,9 +288,15 @@ actor EnsembleBackend: ASRBackend {
     /// side (seconds of ANE time) is the reference for removing echo from
     /// the mic by timing (`echoFiltered`), and of the mic the second
     /// opinion that points `repairLanguage` at suspect stretches.
-    func prepareTimeline(tracks: [(id: Int, samples: [Float])], languages: Set<String>, splitTracks: Bool) async {
+    /// Forget the previous recording's timeline (the ensemble is shared
+    /// across runs; stale words would be served for a new recording's windows).
+    func clearTimeline() {
         longForm = [:]
         farSide = []
+    }
+
+    func prepareTimeline(tracks: [(id: Int, samples: [Float])], languages: Set<String>, splitTracks: Bool) async {
+        clearTimeline()
         let whisper = (kindA == .whisper ? engineA : kindB == .whisper ? engineB : nil) as? WhisperBackend
         let parakeet = [(kindA, engineA), (kindB, engineB)]
             .first { $0.0 == .parakeet || $0.0 == .parakeetV2 }?.1 as? ParakeetBackend
@@ -298,22 +304,35 @@ actor EnsembleBackend: ASRBackend {
         let t0 = Date()
         var whisperTracks: [Int: (words: [TimedWord], segments: [WhisperBackend.SegmentSpan])] = [:]
         var parakeetTracks: [Int: [TimedWord]] = [:]
-        await withTaskGroup(of: (Int, Bool, [TimedWord], [WhisperBackend.SegmentSpan]).self) { group in
+        // A failed reading is left OUT, never cached as empty: an empty
+        // long-form track made Whisper's side of every chunk blank — Super
+        // silently Parakeet-only. Left out, chunks read Whisper per chunk.
+        await withTaskGroup(of: (Int, Bool, [TimedWord], [WhisperBackend.SegmentSpan])?.self) { group in
             for t in tracks {
                 if useWhisper, let whisper {
                     group.addTask {
-                        let r = try? await whisper.transcribeTimedSegments(samples: t.samples, languages: languages)
-                        return (t.id, true, r?.words ?? [], r?.segments ?? [])
+                        do {
+                            let r = try await whisper.transcribeTimedSegments(samples: t.samples, languages: languages)
+                            return (t.id, true, r.words, r.segments)
+                        } catch {
+                            AppLog.warn("ensemble", "long-form whisper failed on track \(t.id): \(error.localizedDescription) — per-chunk reading instead")
+                            return nil
+                        }
                     }
                 }
                 if splitTracks, let parakeet {
                     group.addTask {
-                        let r = try? await parakeet.transcribeTimed(samples: t.samples, languages: languages)
-                        return (t.id, false, r?.words ?? [], [])
+                        do {
+                            let r = try await parakeet.transcribeTimed(samples: t.samples, languages: languages)
+                            return (t.id, false, r.words, [])
+                        } catch {
+                            AppLog.warn("ensemble", "whole-track parakeet failed on track \(t.id): \(error.localizedDescription)")
+                            return nil
+                        }
                     }
                 }
             }
-            for await (id, isWhisper, words, segments) in group {
+            for await case let (id, isWhisper, words, segments)? in group {
                 if isWhisper { whisperTracks[id] = (words, segments) } else { parakeetTracks[id] = words }
             }
         }

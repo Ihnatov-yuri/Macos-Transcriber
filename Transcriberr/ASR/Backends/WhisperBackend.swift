@@ -67,18 +67,29 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         return DetailedTranscription(text: timed.text, words: timed.words.map(\.word))
     }
 
-    /// The same reading with each word's time in `samples` (seconds). Given
-    /// a whole track, WhisperKit runs its own long-form loop: every 30 s
-    /// window starts at the last segment it finished, so no word is ever
-    /// read from a cut-off scrap (see `EnsembleBackend.prepareLongForm`).
+    /// A kept segment's span (seconds in the audio it was read from).
+    struct SegmentSpan: Sendable { let start: Double; let end: Double }
+
     func transcribeTimed(
         samples: [Float],
         languages: Set<String>
     ) async throws -> (text: String, words: [TimedWord]) {
+        let r = try await transcribeTimedSegments(samples: samples, languages: languages)
+        return (r.text, r.words)
+    }
+
+    /// The same reading with each word's time in `samples` (seconds). Given
+    /// a whole track, WhisperKit runs its own long-form loop: every 30 s
+    /// window starts at the last segment it finished, so no word is ever
+    /// read from a cut-off scrap (see `EnsembleBackend.prepareLongForm`).
+    func transcribeTimedSegments(
+        samples: [Float],
+        languages: Set<String>
+    ) async throws -> (text: String, words: [TimedWord], segments: [SegmentSpan]) {
         guard isReady, let pipe else {
             throw ASRError.modelLoadFailed(reason: "Whisper backend not loaded")
         }
-        guard samples.count >= 8_000 else { return ("", []) }
+        guard samples.count >= 8_000 else { return ("", [], []) }
 
         var options = DecodingOptions()
         options.task = .transcribe
@@ -103,6 +114,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         let chunkSeconds = Double(samples.count) / 16_000
         var words: [TimedWord] = []
         var keptTexts: [String] = []
+        var spans: [SegmentSpan] = []
         for result in results {
             for segment in result.segments {
                 let segWords = segment.words ?? []
@@ -153,6 +165,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                     if peak.map({ $0 < Self.phantomPeakRMS }) ?? true { continue }
                 }
                 keptTexts.append(segText)
+                spans.append(SegmentSpan(start: Double(segment.start), end: Double(segment.end)))
                 for w in segWords {
                     let surface = w.word.trimmingCharacters(in: .whitespaces)
                     guard !surface.isEmpty else { continue }
@@ -185,7 +198,20 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             format: "chunk %.1fs → %d chars, %d scored words",
             Double(samples.count) / 16_000.0, text.count, words.count
         ))
-        return (text, words)
+        return (text, words, spans)
+    }
+
+    /// Whisper's language guess for a stretch of audio: ISO code and its
+    /// probability. One encoder pass (~0.7 s for large-v3), so callers pick
+    /// the stretches worth asking about.
+    func detectLanguage(samples: [Float]) async throws -> (code: String, probability: Double) {
+        guard isReady, let pipe else {
+            throw ASRError.modelLoadFailed(reason: "Whisper backend not loaded")
+        }
+        let gateStamp = await InferenceGate.shared.acquire()
+        defer { Task { await InferenceGate.shared.release(gateStamp) } }
+        let r = try await pipe.detectLangauge(audioArray: samples)
+        return (r.language, exp(Double(r.langProbs[r.language] ?? -.infinity)))
     }
 
     // MARK: - Text generation (not supported — Gemma's job)

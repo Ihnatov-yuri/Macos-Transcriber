@@ -493,6 +493,31 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     }
 }
 
+/// Whisper language detection over sliding windows of a file (experiment:
+/// can it find the English stretches inside a Ukrainian meeting?).
+@MainActor
+func cmdLangID(path: String, window: Double) async -> Int32 {
+    let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+    guard let samples = try? await AudioDecoder().decodeAll(file: url) else { print("decode failed"); return 1 }
+    do {
+        let pipe = try await WhisperKit(WhisperKitConfig(model: "large-v3", verbose: false, prewarm: true))
+        let hop = window / 2
+        var t = 0.0
+        while t + window <= Double(samples.count) / 16_000 {
+            let a = Int(t * 16_000), b = Int((t + window) * 16_000)
+            let slice = Array(samples[a..<b])
+            if (WhisperBackend.peakWindowRMS(slice) ?? 0) >= 0.01 {
+                let r = try await pipe.detectLangauge(audioArray: slice)
+                let top = r.langProbs.sorted { $0.value > $1.value }.prefix(3)
+                    .map { "\($0.key) \(String(format: "%.2f", $0.value))" }.joined(separator: ", ")
+                print(String(format: "%6.1f  %@  [%@]", t, r.language, top))
+            }
+            t += hop
+        }
+        return 0
+    } catch { print("\(error)"); return 1 }
+}
+
 /// Dry run of `TranscriptHygiene.applyVocabulary` over a text file, line by
 /// line, with the app's vocabulary — every changed line is printed.
 @MainActor
@@ -586,6 +611,9 @@ func main() async -> Int32 {
             engineA: args.count > 5 ? args[5] : nil,
             engineB: args.count > 6 ? args[6] : nil,
             language: args.count > 7 ? args[7] : "English")
+    case "langid":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdLangID(path: args[2], window: args.count > 3 ? Double(args[3]) ?? 4 : 4)
     case "vocab":
         guard args.count > 2 else { usage(); return 64 }
         return cmdVocab(path: args[2], language: args.count > 3 ? args[3] : "English")

@@ -174,10 +174,19 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         samples: [Float],
         languages: Set<String>
     ) async throws -> DetailedTranscription {
+        let timed = try await transcribeTimed(samples: samples, languages: languages)
+        return DetailedTranscription(text: timed.text, words: timed.words.map(\.word))
+    }
+
+    /// The same reading with each word's time in `samples` (seconds).
+    func transcribeTimed(
+        samples: [Float],
+        languages: Set<String>
+    ) async throws -> (text: String, words: [TimedWord]) {
         guard isReady, let manager else {
             throw ASRError.modelLoadFailed(reason: "Parakeet backend not loaded")
         }
-        guard samples.count >= 8_000 else { return DetailedTranscription(text: "", words: []) }
+        guard samples.count >= 8_000 else { return ("", []) }
         var state = try TdtDecoderState()
         // Shared hold: never overlaps LiteRT inference (see InferenceGate);
         // pass-through when no LiteRT engine is live.
@@ -188,7 +197,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             decoderState: &state,
             language: Self.languageHint(from: languages)
         )
-        let words = Self.scoredWords(from: result.tokenTimings ?? [])
+        let words = Self.timedWords(from: result.tokenTimings ?? [])
         if words.isEmpty && !result.text.isEmpty {
             AppLog.warn("parakeet", "no token timings for \(String(format: "%.1f", Double(samples.count) / 16_000))s chunk — ensemble falls back to text-level gate")
         }
@@ -199,7 +208,10 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         // happens, derive words from the (properly spaced) result text with
         // the chunk-level confidence.
         if words.count <= 1, result.text.split(separator: " ").count > 3 {
-            let fallback = result.text.split(whereSeparator: { $0.isWhitespace }).map { w in
+            let pieces = result.text.split(whereSeparator: { $0.isWhitespace })
+            // No timings either: spread the words evenly over the audio.
+            let step = Double(samples.count) / 16_000 / Double(max(1, pieces.count))
+            let fallback = pieces.enumerated().map { k, w in TimedWord(word:
                 ScoredWord(
                     surface: String(w),
                     norm: w.lowercased().filter { $0.isLetter || $0.isNumber },
@@ -211,20 +223,26 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
                     // Parakeet in every ROVER vote against Whisper's
                     // calibrated word probabilities.
                     confidence: result.confidence
-                )
+                ), start: Double(k) * step, end: Double(k + 1) * step)
             }
             if let sample = result.tokenTimings?.prefix(5).map(\.token) {
                 AppLog.warn("parakeet", "token timings lacked word markers — text-derived words at chunk confidence \(String(format: "%.2f", result.confidence)); raw tokens: \(sample)")
             }
-            return DetailedTranscription(text: result.text, words: fallback)
+            return (result.text, fallback)
         }
-        return DetailedTranscription(text: result.text, words: words)
+        return (result.text, words)
     }
 
     /// Group SentencePiece tokens ("▁" marks a word start) into words,
     /// carrying the weakest piece's confidence as the word's confidence.
     static func scoredWords(from timings: [TokenTiming]) -> [ScoredWord] {
-        var out: [ScoredWord] = []
+        timedWords(from: timings).map(\.word)
+    }
+
+    /// `scoredWords`, keeping each word's span (first piece's start to last
+    /// piece's end).
+    static func timedWords(from timings: [TokenTiming]) -> [TimedWord] {
+        var out: [TimedWord] = []
         for t in timings {
             let isWordStart = t.token.hasPrefix("▁") || t.token.hasPrefix(" ")
             // Strip the word-start marker in BOTH spellings: some decoder
@@ -235,14 +253,16 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
                 .trimmingCharacters(in: .whitespaces)
             guard !piece.isEmpty else { continue }
             if isWordStart || out.isEmpty {
-                out.append(ScoredWord(surface: piece, norm: "", confidence: t.confidence))
+                out.append(TimedWord(word: ScoredWord(surface: piece, norm: "", confidence: t.confidence),
+                                     start: t.startTime, end: t.endTime))
             } else {
-                out[out.count - 1].surface += piece
-                out[out.count - 1].confidence = min(out[out.count - 1].confidence, t.confidence)
+                out[out.count - 1].word.surface += piece
+                out[out.count - 1].word.confidence = min(out[out.count - 1].word.confidence, t.confidence)
+                out[out.count - 1].end = t.endTime
             }
         }
         for i in out.indices {
-            out[i].norm = out[i].surface.lowercased().filter { $0.isLetter || $0.isNumber }
+            out[i].word.norm = out[i].word.surface.lowercased().filter { $0.isLetter || $0.isNumber }
         }
         return out
     }

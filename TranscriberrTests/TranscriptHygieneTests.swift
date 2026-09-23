@@ -248,4 +248,33 @@ final class TranscriptHygieneTests: XCTestCase {
                                                   ["on", "one", "side"].map { w($0) }),
                        "on one side")
     }
+
+    // MARK: - Echo by timing
+
+    private func timed(_ text: String, from start: Double, step: Double = 0.4) -> [TimedWord] {
+        text.split(separator: " ").enumerated().map { k, t in
+            TimedWord(word: w(String(t)), start: start + Double(k) * step, end: start + Double(k) * step + step * 0.8)
+        }
+    }
+
+    func testEchoRunIsDroppedFromMic() {
+        let far = timed("how would you measure that ROI for a random project", from: 10)
+        // The mic heard the far side again (garbled: "power" for "that"), then
+        // the user answered.
+        let mic = timed("how would you measure power ROI for a random project", from: 10.05)
+            + timed("good question it can become expensive", from: 16)
+        let kept = EnsembleBackend.echoFiltered(mic, farSide: far).map(\.word.surface).joined(separator: " ")
+        XCTAssertEqual(kept, "good question it can become expensive")
+    }
+
+    func testEchoFilterKeepsSimultaneousShortReplies() {
+        // Both said "yes okay" at once: two matches is not an echo run.
+        let far = timed("yes okay so the next question", from: 5)
+        let mic = timed("yes okay", from: 5.1)
+        XCTAssertEqual(EnsembleBackend.echoFiltered(mic, farSide: far).count, 2)
+        // Same words, said two seconds later, are the user's own.
+        let later = timed("how would you measure", from: 13)
+        let far2 = timed("how would you measure", from: 10)
+        XCTAssertEqual(EnsembleBackend.echoFiltered(later, farSide: far2).count, 4)
+    }
 }

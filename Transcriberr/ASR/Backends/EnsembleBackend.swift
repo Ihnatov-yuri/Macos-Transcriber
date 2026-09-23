@@ -192,7 +192,15 @@ actor EnsembleBackend: ASRBackend {
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
             async let taskA = pa.transcribeDetailed(samples: samples, languages: languages)
             async let taskB = pb.transcribeDetailed(samples: samples, languages: languages)
-            if let a = try? await taskA, let b = try? await taskB {
+            // An engine that throws must leave a trace: a Whisper that failed
+            // every chunk once turned Super into silent Parakeet-only output.
+            let ra: Result<DetailedTranscription, Error>, rb: Result<DetailedTranscription, Error>
+            do { ra = .success(try await taskA) } catch { ra = .failure(error) }
+            do { rb = .success(try await taskB) } catch { rb = .failure(error) }
+            for (kind, r) in [(kindA, ra), (kindB, rb)] {
+                if case .failure(let e) = r { AppLog.warn("ensemble", "\(kind.rawValue) failed on this chunk: \(e.localizedDescription)") }
+            }
+            if case .success(let a) = ra, case .success(let b) = rb {
                 return await mergeDetailed(a, b, context: previousContext, languages: languages)
             }
             // fall through to the generic text path on error
@@ -474,7 +482,15 @@ actor EnsembleBackend: ASRBackend {
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
             async let taskA = detailed(pa, kind: kindA, samples: samples, languages: languages, window: window)
             async let taskB = detailed(pb, kind: kindB, samples: samples, languages: languages, window: window)
-            if let a = try? await taskA, let b = try? await taskB {
+            // An engine that throws must leave a trace: a Whisper that failed
+            // every chunk once turned Super into silent Parakeet-only output.
+            let ra: Result<DetailedTranscription, Error>, rb: Result<DetailedTranscription, Error>
+            do { ra = .success(try await taskA) } catch { ra = .failure(error) }
+            do { rb = .success(try await taskB) } catch { rb = .failure(error) }
+            for (kind, r) in [(kindA, ra), (kindB, rb)] {
+                if case .failure(let e) = r { AppLog.warn("ensemble", "\(kind.rawValue) failed on this chunk: \(e.localizedDescription)") }
+            }
+            if case .success(let a) = ra, case .success(let b) = rb {
                 if let ruled = TranscriptHygiene.phantomResolution(a.text, b.text) {
                     return RichChunk(text: Self.logPhantom(a.text, b.text, ruled), agreement: 1, textA: "", textB: "")
                 }

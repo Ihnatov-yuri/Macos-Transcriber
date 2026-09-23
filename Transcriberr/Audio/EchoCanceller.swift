@@ -39,25 +39,74 @@ enum EchoCanceller {
     // synthetic echo, against 4.0 dB on the meeting with no linear path.
     static let minLinearERLE: Double = 8
 
-    /// Start of the `span`-sample stretch of `ref` carrying the most energy.
-    /// The delay search needs the far side to actually be TALKING; picking
-    /// the window by energy rather than taking the first one is what keeps a
-    /// quiet lead-in from deciding the estimate.
-    static func loudestWindowStart(ref: [Float], count: Int, span: Int) -> Int {
-        guard count > span else { return 0 }
+    /// Starts of the `k` loudest, non-overlapping `span`-sample stretches of
+    /// `ref`, loudest first. The delay search needs the far side to actually
+    /// be TALKING; picking by energy rather than taking the first minute is
+    /// what keeps a quiet lead-in from deciding the estimate.
+    static func loudestWindowStarts(ref: [Float], count: Int, span: Int, k: Int) -> [Int] {
+        guard count > span else { return [0] }
         let step = 16_000                          // 1 s hop
-        var best = 0
-        var bestE: Double = -1
+        var scored: [(start: Int, energy: Float)] = []
         var start = 0
         while start + span <= count {
             var e: Float = 0
             ref.withUnsafeBufferPointer { rp in
                 vDSP_svesq(rp.baseAddress! + start, 1, &e, vDSP_Length(span))
             }
-            if Double(e) > bestE { bestE = Double(e); best = start }
+            scored.append((start, e))
             start += step
         }
-        return best
+        var picked: [Int] = []
+        for w in scored.sorted(by: { $0.energy > $1.energy }) where picked.count < k {
+            if picked.allSatisfy({ abs($0 - w.start) >= span }) { picked.append(w.start) }
+        }
+        return picked.isEmpty ? [0] : picked
+    }
+
+    /// Normalized cross-correlation peak between `mic` and `ref` over one
+    /// window (8× decimated), for lags 0…`maxDelaySamples`.
+    static func correlationPeak(mic: [Float], ref: [Float], start: Int, span: Int) -> (delay: Int, corr: Float) {
+        let dec = 8
+        func decimate(_ x: [Float]) -> [Float] {
+            var out: [Float] = []
+            out.reserveCapacity(span / dec + 1)
+            var i = start
+            let end = min(x.count, start + span)
+            while i < end { out.append(x[i]); i += dec }
+            return out
+        }
+        let md = decimate(mic), rd = decimate(ref)
+        let maxLagD = maxDelaySamples / dec
+        let len = min(md.count, rd.count) - maxLagD
+        var delay = 0
+        var bestCorr: Float = 0
+        guard len > 1000 else { return (0, 0) }
+        var refEnergy: Float = 0
+        rd.withUnsafeBufferPointer { rp in
+            vDSP_svesq(rp.baseAddress!, 1, &refEnergy, vDSP_Length(len))
+        }
+        let refNorm = refEnergy.squareRoot()
+        md.withUnsafeBufferPointer { mp in
+            rd.withUnsafeBufferPointer { rp in
+                var micEnergy: Float = 0
+                vDSP_svesq(mp.baseAddress!, 1, &micEnergy, vDSP_Length(len))
+                for lag in 0...maxLagD {
+                    var v: Float = 0
+                    vDSP_dotpr(rp.baseAddress!, 1, mp.baseAddress! + lag, 1, &v, vDSP_Length(len))
+                    // NORMALIZED. A raw dot product just tracks whichever
+                    // lag lines up with the loudest stretch of mic, and
+                    // leaves no way to tell "found the echo" from "found
+                    // nothing at all".
+                    let c = abs(v) / (refNorm * micEnergy.squareRoot() + 1e-9)
+                    if c > bestCorr { bestCorr = c; delay = lag * dec }
+                    if lag < maxLagD {          // slide the mic window on
+                        let drop = mp[lag], add = mp[lag + len]
+                        micEnergy += add * add - drop * drop
+                    }
+                }
+            }
+        }
+        return (delay, bestCorr)
     }
 
     static func cancel(mic: [Float], ref: [Float]) -> [Float] {
@@ -65,57 +114,26 @@ enum EchoCanceller {
         guard n > 16_000 else { return mic }
 
         // ---- 1. Bulk delay via cross-correlation (8× decimated, ≤60 s) ----
-        // Searched inside the LOUDEST 60 s of the reference, not the first
-        // 60 s. A call whose opening minute is digital silence — nobody has
-        // joined the meeting yet — gave the estimator nothing to lock onto,
-        // and the junk lag it returned parked the filter's 64 ms window
-        // thousands of samples away from the real echo path. ERLE then came
-        // out negative, the do-no-harm guard handed back the raw mic, and the
-        // far side reached the ASR as the user's own words.
-        let dec = 8
+        // Searched inside the LOUDEST stretches of the reference, not the
+        // first 60 s. A call whose opening minute is digital silence — nobody
+        // has joined the meeting yet — gave the estimator nothing to lock
+        // onto, and the junk lag it returned parked the filter's 64 ms window
+        // thousands of samples away from the real echo path.
+        // Several windows, not one: on a real 32-minute call the loudest
+        // minute of the far side read 0.065 — "no echo path", nothing
+        // cancelled — while 100-160 s held a 52 ms echo at 0.36. The best of
+        // the four loudest non-overlapping minutes decides.
         let span = min(n, 16_000 * 60)
-        let searchStart = loudestWindowStart(ref: ref, count: n, span: span)
-        func decimate(_ x: [Float], from: Int, count: Int) -> [Float] {
-            var out: [Float] = []
-            out.reserveCapacity(count / dec + 1)
-            var i = from
-            let end = from + count
-            while i < end { out.append(x[i]); i += dec }
-            return out
-        }
-        let md = decimate(mic, from: searchStart, count: span)
-        let rd = decimate(ref, from: searchStart, count: span)
-        let maxLagD = maxDelaySamples / dec
-        let len = md.count - maxLagD
+        var searchStart = 0
         var delay = 0
         var bestCorr: Float = 0
-        if len > 1000 {
-            var refEnergy: Float = 0
-            rd.withUnsafeBufferPointer { rp in
-                vDSP_svesq(rp.baseAddress!, 1, &refEnergy, vDSP_Length(len))
-            }
-            let refNorm = refEnergy.squareRoot()
-            md.withUnsafeBufferPointer { mp in
-                rd.withUnsafeBufferPointer { rp in
-                    var micEnergy: Float = 0
-                    vDSP_svesq(mp.baseAddress!, 1, &micEnergy, vDSP_Length(len))
-                    for lag in 0...maxLagD {
-                        var v: Float = 0
-                        vDSP_dotpr(rp.baseAddress!, 1, mp.baseAddress! + lag, 1, &v, vDSP_Length(len))
-                        // NORMALIZED. A raw dot product just tracks whichever
-                        // lag lines up with the loudest stretch of mic, and
-                        // leaves no way to tell "found the echo" from "found
-                        // nothing at all".
-                        let c = abs(v) / (refNorm * micEnergy.squareRoot() + 1e-9)
-                        if c > bestCorr { bestCorr = c; delay = lag * dec }
-                        if lag < maxLagD {          // slide the mic window on
-                            let drop = mp[lag], add = mp[lag + len]
-                            micEnergy += add * add - drop * drop
-                        }
-                    }
-                }
-            }
+        var tried: [String] = []
+        for start in loudestWindowStarts(ref: ref, count: n, span: span, k: 4) {
+            let peak = correlationPeak(mic: mic, ref: ref, start: start, span: span)
+            tried.append(String(format: "%.0fs:%.3f", Double(start) / 16_000, peak.corr))
+            if peak.corr > bestCorr { bestCorr = peak.corr; delay = peak.delay; searchStart = start }
         }
+        AppLog.info("aec", "delay search windows \(tried.joined(separator: " "))")
         // Mic and reference aren't related: headphones, or a mic the speakers
         // don't reach. Measured peaks — 0.32 on a real call recorded over
         // speakers and 1.0 on synthetic echo, against 0.03 for uncorrelated

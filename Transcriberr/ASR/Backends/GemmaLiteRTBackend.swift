@@ -155,8 +155,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         }
         // Cross-engine exclusivity: LiteRT's Metal path wedges when another
         // engine infers concurrently in-process (see InferenceGate).
-        let gateStamp = await InferenceGate.shared.acquire()
-        defer { Task { await InferenceGate.shared.release(gateStamp) } }
+        let gateStamp = await InferenceGate.shared.acquire(exclusive: true)
+        defer { Task { await InferenceGate.shared.release(gateStamp, exclusive: true) } }
 
         let sampler = try SamplerConfig(topK: 1, topP: 0.95, temperature: 0.1)
         let conversation = try await engine.createConversation(with: ConversationConfig(
@@ -245,8 +245,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         guard isReady, let engine else {
             throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
         }
-        let gateStamp = await InferenceGate.shared.acquire()
-        defer { Task { await InferenceGate.shared.release(gateStamp) } }
+        let gateStamp = await InferenceGate.shared.acquire(exclusive: true)
+        defer { Task { await InferenceGate.shared.release(gateStamp, exclusive: true) } }
         func attempt() async throws -> String {
             let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)
             let conversation = try await engine.createConversation(with: ConversationConfig(

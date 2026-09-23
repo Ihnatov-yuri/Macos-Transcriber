@@ -121,3 +121,80 @@ final class PipelineLogicTests: XCTestCase {
         XCTAssertEqual(cuts, cuts.sorted())
     }
 }
+
+/// The cross-engine gate: Whisper/Parakeet share it, LiteRT holds it alone.
+final class InferenceGateTests: XCTestCase {
+
+    private final class Order: @unchecked Sendable {
+        private let lock = NSLock()
+        private var events: [String] = []
+        func add(_ e: String) { lock.lock(); events.append(e); lock.unlock() }
+        var all: [String] { lock.lock(); defer { lock.unlock() }; return events }
+    }
+
+    private func settle() async throws { try await Task.sleep(nanoseconds: 50_000_000) }
+
+    func testPassThroughWithoutLiteRT() async {
+        let gate = InferenceGate()
+        let stamp = await gate.acquire(exclusive: true)
+        XCTAssertEqual(stamp, -1)
+    }
+
+    func testSharedHoldersRunTogetherAndExclusiveRunsAlone() async throws {
+        let gate = InferenceGate()
+        await gate.setLitertActive(true)
+        let s1 = await gate.acquire(), s2 = await gate.acquire()
+        XCTAssertGreaterThanOrEqual(s1, 0)
+        XCTAssertGreaterThanOrEqual(s2, 0)
+
+        let order = Order()
+        let exclusive = Task { let s = await gate.acquire(exclusive: true); order.add("X"); return s }
+        try await settle()
+        // A shared request behind a waiting exclusive one must not jump it.
+        let late = Task { let s = await gate.acquire(); order.add("S"); return s }
+        try await settle()
+        XCTAssertEqual(order.all, [])
+
+        await gate.release(s1)
+        try await settle()
+        XCTAssertEqual(order.all, [], "exclusive waits for the last shared holder")
+        await gate.release(s2)
+        let xs = await exclusive.value
+        try await settle()
+        XCTAssertEqual(order.all, ["X"], "shared waits while LiteRT holds the gate")
+        await gate.release(xs, exclusive: true)
+        _ = await late.value
+        XCTAssertEqual(order.all, ["X", "S"])
+    }
+
+    func testResetEvictsZombieAndIgnoresItsLateRelease() async throws {
+        let gate = InferenceGate()
+        await gate.setLitertActive(true)
+        let zombie = await gate.acquire(exclusive: true)
+        let w1 = Task { await gate.acquire() }, w2 = Task { await gate.acquire() }
+        try await settle()
+        await gate.reset()
+        let a = await w1.value, b = await w2.value
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a, zombie)
+
+        let order = Order()
+        let next = Task { _ = await gate.acquire(exclusive: true); order.add("X") }
+        try await settle()
+        await gate.release(zombie, exclusive: true)   // stale stamp: no effect
+        await gate.release(a)
+        try await settle()
+        XCTAssertEqual(order.all, [], "one shared holder is still running")
+        await gate.release(b)
+        await next.value
+        XCTAssertEqual(order.all, ["X"])
+    }
+
+    func testSilentChunkDetection() {
+        XCTAssertTrue(EnsembleBackend.isSilent([Float](repeating: 0, count: 16_000 * 26)))
+        // The quietest real chunk measured peaked at 0.020 RMS.
+        var quiet = [Float](repeating: 0, count: 16_000 * 26)
+        for i in 0..<16_000 { quiet[160_000 + i] = 0.02 * sinf(Float(i) * 0.3) * 1.414 }
+        XCTAssertFalse(EnsembleBackend.isSilent(quiet))
+    }
+}

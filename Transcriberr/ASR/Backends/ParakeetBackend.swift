@@ -83,8 +83,8 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         // LLM backends — Parakeet transcribes verbatim (translation happens
         // in post-processing via Gemma).
         var state = try TdtDecoderState()
-        // Serialized against a live LiteRT engine (see InferenceGate);
-        // pass-through otherwise.
+        // Shared hold: never overlaps LiteRT inference (see InferenceGate);
+        // pass-through when no LiteRT engine is live.
         let gateStamp = await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let result = try await manager.transcribe(
@@ -179,8 +179,8 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         }
         guard samples.count >= 8_000 else { return DetailedTranscription(text: "", words: []) }
         var state = try TdtDecoderState()
-        // Serialized against a live LiteRT engine (see InferenceGate);
-        // pass-through otherwise.
+        // Shared hold: never overlaps LiteRT inference (see InferenceGate);
+        // pass-through when no LiteRT engine is live.
         let gateStamp = await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let result = try await manager.transcribe(

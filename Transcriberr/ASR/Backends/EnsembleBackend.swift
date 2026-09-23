@@ -178,6 +178,7 @@ actor EnsembleBackend: ASRBackend {
         guard isReady, let engineA, let engineB else {
             throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
         }
+        if Self.isSilent(samples) { return "" }
         if gemmaBenched, let solo = soloEngine {
             return try await solo.transcribeChunk(
                 samples: samples, languages: languages, translateTo: nil,
@@ -246,6 +247,9 @@ actor EnsembleBackend: ASRBackend {
         guard isReady, let engineA, let engineB else {
             throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
         }
+        if Self.isSilent(samples) {
+            return RichChunk(text: "", agreement: 1, textA: "", textB: "")
+        }
         if gemmaBenched {
             return try await transcribeChunkSolo(samples: samples, languages: languages)
         }
@@ -296,6 +300,22 @@ actor EnsembleBackend: ASRBackend {
             text: preferA ? textA : textB,
             agreement: Self.tokenSimilarity(textA, textB),
             textA: textA, textB: textB)
+    }
+
+    /// Below this loudest-200-ms RMS a chunk is silence, and neither engine
+    /// runs on it. Split-track meetings are the case: each track is silent
+    /// while the other side talks — measured on a 42-min meeting, 22 of 98
+    /// system-audio chunks were digital zero — yet Whisper spent ~2.3 s per
+    /// chunk writing phantoms ("you") over them for the hygiene layer to
+    /// drop. The quietest chunk with real sound in it peaked at 0.020, four
+    /// times this; the phantom threshold (0.012) is kept for single lines.
+    static let silentChunkPeakRMS: Float = 0.005
+
+    static func isSilent(_ samples: [Float]) -> Bool {
+        let peak = WhisperBackend.peakWindowRMS(samples) ?? 0
+        guard peak < silentChunkPeakRMS else { return false }
+        AppLog.info("ensemble", String(format: "chunk %.1fs silent (peak RMS %.4f) — skipping both engines", Double(samples.count) / 16_000, peak))
+        return true
     }
 
     /// Single-engine escape hatch: a chunk whose audio wedges LiteRT twice

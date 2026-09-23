@@ -80,9 +80,9 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         // Cyrillic ("housekeeping" → "хаускіпінг") and dropped real speech.
         // The vocabulary acts in the word vote and the arbitration instead.
 
-        // While a LiteRT Gemma engine is live, heavy inference is serialized
-        // across engines — concurrent GPU work wedges LiteRT's native call
-        // (see InferenceGate). Pass-through when no Gemma is loaded.
+        // Shared hold: runs alongside other Whisper/Parakeet calls, but never
+        // while LiteRT Gemma infers — that pairing wedges LiteRT's native
+        // call (see InferenceGate). Pass-through when no Gemma is loaded.
         let gateStamp = await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)

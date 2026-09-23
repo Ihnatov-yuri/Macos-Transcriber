@@ -97,6 +97,10 @@ final class TranscriptionRunner: @unchecked Sendable {
         var hybridDiarize: Bool
         var expectedSpeakers: Int
         var expectedSpeakersExact: Bool
+        /// Background refinement (the Super run after a meeting's quick
+        /// draft): the visible transcript stays as it is until this run
+        /// finishes, then is replaced in one step — never half-streamed.
+        var keepVisibleUntilDone: Bool
 
         init(
             file: URL,
@@ -107,7 +111,8 @@ final class TranscriptionRunner: @unchecked Sendable {
             diarize: Bool = false,
             hybridDiarize: Bool = false,
             expectedSpeakers: Int = 0,
-            expectedSpeakersExact: Bool = false
+            expectedSpeakersExact: Bool = false,
+            keepVisibleUntilDone: Bool = false
         ) {
             self.file = file
             self.backend = backend
@@ -118,6 +123,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             self.hybridDiarize = hybridDiarize
             self.expectedSpeakers = expectedSpeakers
             self.expectedSpeakersExact = expectedSpeakersExact
+            self.keepVisibleUntilDone = keepVisibleUntilDone
         }
     }
 
@@ -331,9 +337,9 @@ final class TranscriptionRunner: @unchecked Sendable {
         // during the first pass so disputes can be arbitrated afterwards.
         final class RichBox: @unchecked Sendable {
             private let lock = NSLock()
-            private var map: [Int: (agreement: Double, textA: String, textB: String)] = [:]
-            func set(_ idx: Int, _ v: (Double, String, String)) { lock.lock(); map[idx] = v; lock.unlock() }
-            func all() -> [Int: (agreement: Double, textA: String, textB: String)] { lock.lock(); defer { lock.unlock() }; return map }
+            private var map: [Int: EnsembleBackend.RichChunk] = [:]
+            func set(_ idx: Int, _ v: EnsembleBackend.RichChunk) { lock.lock(); map[idx] = v; lock.unlock() }
+            func all() -> [Int: EnsembleBackend.RichChunk] { lock.lock(); defer { lock.unlock() }; return map }
         }
         let ensembleTwoPass = params.backend == .ensemble
             && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
@@ -375,7 +381,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                                 window: .init(track: micChunkIndices.contains(idx) ? 1 : 0,
                                               start: chunk.startSeconds, end: chunk.endSeconds),
                                 params: params, continuation: continuation)
-                            richBox.set(idx, (rich.agreement, rich.textA, rich.textB))
+                            richBox.set(idx, rich)
                             return (idx, rich.text)
                         }
                         return
@@ -541,6 +547,18 @@ final class TranscriptionRunner: @unchecked Sendable {
                 }
             }
             let rich = richBox.all()
+            // Gemma's rulings, by language (`ui.superGemmaRulings`: english
+            // (default) | all | off). Measured twice on the reference slices:
+            // in English they help a little (en-a 9.9 → 8.9% WER, 13.1 →
+            // 12.1% on the older build; en-b unchanged); in Ukrainian they do
+            // not (16.5 vs 16.7%, and uk-b 12.2 → 15.2% WORSE). A per-stretch
+            // "A or B" redesign was tried and lost in both: on 40 stretches
+            // the reference decides, Gemma chose right 21 times, the word
+            // vote 26. The brief above runs regardless — its guarded spelling
+            // fixes are separate.
+            let rulingsPolicy = UserDefaults.standard.string(forKey: "ui.superGemmaRulings") ?? "english"
+            let isEnglishRun = !params.languages.isEmpty && params.languages.allSatisfy { $0.lowercased() == "english" }
+            let gemmaRulings = rulingsPolicy == "all" || (rulingsPolicy == "english" && isEnglishRun)
             // Worst disagreements first, bounded: cross-family engine pairs
             // (Whisper+Gemma on Ukrainian) can dispute 70% of chunks — 22
             // unbounded sequential Gemma calls froze a run for tens of
@@ -548,7 +566,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             // Measured on the reference slices (2026-09-23): no rulings vs 10
             // vs unbounded moved WER by ±1.5 points either way per slice, net
             // ~0 — the cap is not what limits quality, so it stays.
-            let disputes = rich.filter { $0.value.agreement < 0.8
+            let disputes = !gemmaRulings ? [] : rich.filter { $0.value.agreement < 0.8
                 && !$0.value.textA.isEmpty && !$0.value.textB.isEmpty }
                 .sorted { $0.value.agreement < $1.value.agreement }
                 .prefix(10)

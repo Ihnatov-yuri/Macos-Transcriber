@@ -36,6 +36,7 @@ struct SettingsView: View {
 /// selectable as an EXPERIMENTAL audio engine (known to hallucinate).
 struct EnginesSettingsTab: View {
     @AppStorage("ui.meetingBrief") private var meetingBrief = true
+    @AppStorage("ui.superGemmaRulings") private var gemmaRulings = "english"
     @Environment(AppContainer.self) private var container
     @AppStorage("ui.myName") private var myName = ""
 
@@ -102,10 +103,21 @@ struct EnginesSettingsTab: View {
                     get: { container.uiPrefs.superMaxQuality },
                     set: { container.uiPrefs.superMaxQuality = $0 }
                 ))
+                Toggle("Refine meetings with Super in the background", isOn: Binding(
+                    get: { container.uiPrefs.meetingSuperFollowUp },
+                    set: { container.uiPrefs.meetingSuperFollowUp = $0 }
+                ))
+                Text("When a meeting recording stops, the default engine writes a quick draft you can read at once; Super then runs in the background and replaces it when it finishes. The draft stays in VERSIONS.")
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 Toggle("Gemma reads the whole transcript first (recording brief)", isOn: $meetingBrief)
                 Text("A few extra reads (about a minute per hour of recording) give Gemma the topic, the people and the names as spelled in this recording. Max-quality arbitration and the Clean / Context rewrite / Translate presets all use it, and a name spelled inconsistently is unified when the correction sounds the same.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-                Text("Both engines transcribe every chunk in parallel; disagreements are settled word-by-word by recognizer confidence. With Max quality on, chunks where the engines disagree (agreement < 0.8) get a second pass: Gemma rules with transcript context from both sides and your vocabulary.")
+                Picker("Gemma rules on disputed chunks", selection: $gemmaRulings) {
+                    Text("English runs (measured to help)").tag("english")
+                    Text("All languages").tag("all")
+                    Text("Never").tag("off")
+                }
+                Text("Both engines transcribe every chunk in parallel; disagreements are settled word by word by recognizer confidence. With Max quality on, the whole recording is also read at once (long-form Whisper, English stretches re-read in English, echo removed by timing). Gemma's rulings on disputed chunks helped in English and hurt in Ukrainian when measured against checked transcripts, so by default they run for English only.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Speaker turns") {

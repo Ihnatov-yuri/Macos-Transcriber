@@ -205,10 +205,18 @@ final class RecordModel {
                     languages: liveLanguages,
                     translateTo: nil
                 )
+                // Meetings: the quick draft first, then Super in the background.
+                let followUp: TranscriptionRunner.Params? =
+                    wasMeeting && params.backend != .ensemble && container.uiPrefs.meetingSuperFollowUp
+                    ? TranscriptionRunner.Params(
+                        file: url, backend: .ensemble, modelDirectory: nil,
+                        languages: liveLanguages, translateTo: nil,
+                        diarize: true, keepVisibleUntilDone: true)
+                    : nil
                 let jobManager = container.jobManager
                 Task { @MainActor [weak self] in
                     await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                        jobManager.enqueue(recording, params: params) { cont.resume() }
+                        jobManager.enqueue(recording, params: params, followUp: followUp) { cont.resume() }
                     }
                     let finalURL = await Self.finishPostProcessing(
                         container: container, recording: recording, mainURL: url, wasMeeting: wasMeeting)

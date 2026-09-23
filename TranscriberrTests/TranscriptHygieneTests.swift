@@ -277,4 +277,12 @@ final class TranscriptHygieneTests: XCTestCase {
         let far2 = timed("how would you measure", from: 10)
         XCTAssertEqual(EnsembleBackend.echoFiltered(later, farSide: far2).count, 4)
     }
+
+    // MARK: - Clean / verbatim
+
+    func testCleanStyleDropsHesitationsKeepsTicWords() {
+        XCTAssertEqual(TranscriptStyle.clean.apply("Ну, е, я думаю мм що типу так"), "Ну, я думаю що типу так")
+        XCTAssertEqual(TranscriptStyle.clean.apply("I was I was like, um, sure"), "I was like, sure")
+        XCTAssertEqual(TranscriptStyle.verbatim.apply("I was I was like, um, sure"), "I was I was like, um, sure")
+    }
 }

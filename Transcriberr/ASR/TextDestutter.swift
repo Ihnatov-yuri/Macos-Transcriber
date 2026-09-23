@@ -28,8 +28,11 @@ enum TextDestutter {
 
     /// Pure hesitation sounds — dropped outright before stutter collapse
     /// (which also lets "how it uh how it" collapse as a phrase echo).
+    /// Tic words ("like", "ну", "типу") are NOT here: they carry meaning,
+    /// and the verbatim view exists to study them.
     private static let fillers: Set<String> = [
         "uh", "um", "erm", "mm", "mhm", "hmm", "mmm",
+        "е", "ее", "еее", "ем", "мм", "ммм", "хм",
     ]
 
     private static func norm(_ t: Substring) -> String {
@@ -105,5 +108,20 @@ enum TextDestutter {
             }
         }
         return out.joined(separator: " ")
+    }
+}
+
+/// How transcript text is shown and served. The store always keeps what the
+/// engines heard; `clean` is a view over it — hesitation sounds and stutters
+/// collapsed by `TextDestutter` — for reading, `verbatim` for studying how
+/// someone speaks (tic words, restarts). Chosen in the transcript header,
+/// per call on the MCP tools.
+enum TranscriptStyle: String, CaseIterable, Sendable {
+    case clean, verbatim
+
+    static let defaultsKey = "ui.transcriptStyle"
+
+    func apply(_ text: String) -> String {
+        self == .clean ? TextDestutter.collapse(text) : text
     }
 }

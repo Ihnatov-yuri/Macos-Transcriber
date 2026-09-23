@@ -334,6 +334,21 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertGreaterThan(bothAfter, bothBefore * 0.1, "the user talking over the far side must survive")
     }
 
+    /// The delay search tries several loud minutes, not just the loudest:
+    /// they must be distinct (non-overlapping) and loudest first.
+    func testLoudestWindowStartsAreDistinctAndOrdered() {
+        let sr = 16_000
+        var ref = [Float](repeating: 0.001, count: sr * 300)
+        for i in (sr * 200)..<(sr * 260) { ref[i] = 0.5 }   // loudest minute
+        for i in (sr * 20)..<(sr * 80) { ref[i] = 0.3 }     // second
+        let starts = EchoCanceller.loudestWindowStarts(ref: ref, count: ref.count, span: sr * 60, k: 4)
+        XCTAssertEqual(starts.first, sr * 200)
+        XCTAssertTrue(starts.contains(sr * 20))
+        for (i, a) in starts.enumerated() {
+            for b in starts[(i + 1)...] { XCTAssertGreaterThanOrEqual(abs(a - b), sr * 60) }
+        }
+    }
+
     func testEchoCancellerDoesNoHarmWithoutEcho() {
         let sr = 16_000
         let n = sr * 5

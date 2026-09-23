@@ -31,6 +31,10 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                 prewarm: true
             )
             let kit = try await WhisperKit(config)
+            // Load now, once: `prewarm` leaves the models unloaded, and the
+            // first transcribe calls — three chunks at once — would each
+            // start loading them (see transcribeTimedSegments).
+            if kit.modelState != .loaded { try await kit.loadModels() }
             self.pipe = kit
             self.isReady = true
             AppLog.info("whisper", "ready")
@@ -108,7 +112,24 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         // call (see InferenceGate). Pass-through when no Gemma is loaded.
         let gateStamp = await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
-        let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
+        // Our own TranscribeTask with its own Progress, not `pipe.transcribe`.
+        // Chunks run three at a time on ONE WhisperKit (shared gate since
+        // v3.8.0), and WhisperKit is a plain class whose transcribe swaps a
+        // shared `progress` property at the end of every call: two calls
+        // finishing together released the same object twice — a SIGSEGV in
+        // swift_release_dealloc under runTranscribeTask, seen in a reference
+        // run on 2026-09-23. Everything else the task touches is read-only
+        // model state.
+        // What `transcribe` does first: models (and the tokenizer) load
+        // lazily on the first call after a prewarm.
+        if pipe.modelState != .loaded { try await pipe.loadModels() }
+        guard let tokenizer = pipe.tokenizer else { throw WhisperError.tokenizerUnavailable() }
+        let task = pipe.setupTranscribeTask(
+            currentTimings: pipe.currentTimings, progress: Progress(),
+            audioProcessor: pipe.audioProcessor, audioEncoder: pipe.audioEncoder,
+            featureExtractor: pipe.featureExtractor, segmentSeeker: pipe.segmentSeeker,
+            textDecoder: pipe.textDecoder, tokenizer: tokenizer)
+        let results = [try await task.run(audioArray: samples, decodeOptions: options, callback: nil)]
 
         let isUkrainian = languages.count == 1 && languages.first?.lowercased() == "ukrainian"
         let chunkSeconds = Double(samples.count) / 16_000

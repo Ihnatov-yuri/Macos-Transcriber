@@ -221,3 +221,22 @@ enum KBRender {
         return out
     }
 }
+
+extension KBSegment {
+    func styled(_ style: TranscriptStyle) -> KBSegment {
+        KBSegment(start: start, end: end, text: style.apply(text), speaker: speaker, speakerName: speakerName)
+    }
+}
+
+extension KBTranscript {
+    func styled(_ style: TranscriptStyle) -> KBTranscript {
+        KBTranscript(recording: recording, segments: segments.map { $0.styled(style) },
+                     totalSegments: totalSegments, offset: offset, truncated: truncated)
+    }
+}
+
+extension KBSearchHit {
+    func styled(_ style: TranscriptStyle) -> KBSearchHit {
+        KBSearchHit(recording: recording, matches: matches.map { $0.styled(style) }, titleMatched: titleMatched)
+    }
+}

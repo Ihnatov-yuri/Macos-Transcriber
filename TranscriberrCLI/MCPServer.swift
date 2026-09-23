@@ -114,7 +114,7 @@ final class MCPServer {
                     return toolError("'query' is required.")
                 }
                 text = KBRender.markdown(
-                    try kb.search(query, limit: limitArg(arguments, 20)),
+                    try kb.search(query, limit: limitArg(arguments, 20)).map { $0.styled(styleArg(arguments)) },
                     query: query)
 
             case "kb_get_transcript":
@@ -126,7 +126,7 @@ final class MCPServer {
                     startSeconds: doubleArg(arguments, "start_seconds"),
                     endSeconds: doubleArg(arguments, "end_seconds"),
                     offset: intArg(arguments, "offset", 0),
-                    limit: limitArg(arguments, 200)))
+                    limit: limitArg(arguments, 200)).styled(styleArg(arguments)))
 
             case "kb_get_outputs":
                 guard let id = arguments["id"] as? String, !id.isEmpty else {
@@ -164,6 +164,10 @@ final class MCPServer {
         min(max(intArg(args, "limit", def), 1), 1000)
     }
 
+    private func styleArg(_ args: [String: Any]) -> TranscriptStyle {
+        (args["style"] as? String).flatMap { TranscriptStyle(rawValue: $0.lowercased()) } ?? .clean
+    }
+
     private func doubleArg(_ args: [String: Any], _ key: String) -> Double? {
         (args[key] as? NSNumber)?.doubleValue ?? (args[key] as? String).flatMap(Double.init)
     }
@@ -196,6 +200,8 @@ final class MCPServer {
                 "properties": [
                     "query": ["type": "string", "description": "Text to find (case-insensitive)."],
                     "limit": ["type": "integer", "description": "Max recordings returned (default 20)."],
+                    "style": ["type": "string", "enum": ["clean", "verbatim"],
+                              "description": "clean (default): hesitation sounds (um, uh, е, мм) and stutters removed, for reading. verbatim: exactly as recognized, for analysing speech habits such as tic words and repeats."],
                 ],
                 "required": ["query"],
             ],
@@ -214,6 +220,8 @@ final class MCPServer {
                     "end_seconds": ["type": "number", "description": "Only segments starting at/before this time."],
                     "offset": ["type": "integer", "description": "Segment offset for pagination (default 0)."],
                     "limit": ["type": "integer", "description": "Max segments (default 200)."],
+                    "style": ["type": "string", "enum": ["clean", "verbatim"],
+                              "description": "clean (default): hesitation sounds (um, uh, е, мм) and stutters removed, for reading. verbatim: exactly as recognized, for analysing speech habits such as tic words and repeats."],
                 ],
                 "required": ["id"],
             ],

@@ -32,6 +32,8 @@ final class UIPrefs: @unchecked Sendable {
     var vocabLanguages: Set<String>    { didSet { defaults.set(Array(vocabLanguages), forKey: Key.vocabLanguages) } }
     var showTimestamps: Bool           { didSet { defaults.set(showTimestamps, forKey: Key.showTimestamps) } }
     var proseMode: Bool                { didSet { defaults.set(proseMode, forKey: Key.proseMode) } }
+    /// Transcript text as read (clean) or as heard (verbatim) — a view only.
+    var transcriptStyle: TranscriptStyle { didSet { defaults.set(transcriptStyle.rawValue, forKey: TranscriptStyle.defaultsKey) } }
     var defaultBackend: BackendFactory.Kind { didSet { defaults.set(defaultBackend.rawValue, forKey: Key.defaultBackend) } }
     var autoTranscribe: Bool           { didSet { defaults.set(autoTranscribe, forKey: Key.autoTranscribe) } }
     var liveEnabled: Bool              { didSet { defaults.set(liveEnabled, forKey: Key.liveEnabled) } }
@@ -47,6 +49,9 @@ final class UIPrefs: @unchecked Sendable {
     /// Super merge: sequential chunks WITH preceding-transcript context for
     /// Gemma arbitration (max quality) instead of the 3-wide pipeline (speed).
     var superMaxQuality: Bool { didSet { defaults.set(superMaxQuality, forKey: Key.superMaxQuality) } }
+    /// After a meeting's quick auto-transcription, refine it with Super in
+    /// the background (the quick draft stays readable meanwhile).
+    var meetingSuperFollowUp: Bool { didSet { defaults.set(meetingSuperFollowUp, forKey: "ui.meetingSuperFollowUp") } }
     /// Sub-engines for the "Super" dual-ASR merge (local only).
     var ensembleEngineA: BackendFactory.Kind { didSet { defaults.set(ensembleEngineA.rawValue, forKey: Key.ensembleEngineA) } }
     var ensembleEngineB: BackendFactory.Kind { didSet { defaults.set(ensembleEngineB.rawValue, forKey: Key.ensembleEngineB) } }
@@ -57,6 +62,8 @@ final class UIPrefs: @unchecked Sendable {
         vocabLanguages = Set((defaults.array(forKey: Key.vocabLanguages) as? [String]) ?? [])
         showTimestamps = (defaults.object(forKey: Key.showTimestamps) as? Bool) ?? true
         proseMode = defaults.bool(forKey: Key.proseMode)
+        meetingSuperFollowUp = (defaults.object(forKey: "ui.meetingSuperFollowUp") as? Bool) ?? true
+        transcriptStyle = defaults.string(forKey: TranscriptStyle.defaultsKey).flatMap(TranscriptStyle.init) ?? .clean
         defaultBackend = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.defaultBackend) ?? "") ?? .parakeet
         autoTranscribe = (defaults.object(forKey: Key.autoTranscribe) as? Bool) ?? true
         liveEnabled = (defaults.object(forKey: Key.liveEnabled) as? Bool) ?? true

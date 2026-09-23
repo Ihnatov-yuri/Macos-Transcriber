@@ -40,18 +40,14 @@ The runner then trims the recap repeat at the seam, drops a line that echoes the
 
 Code: `EnsembleBackend.transcribeChunkRich`, `EnsembleBackend.roverMerge`, `WhisperBackend.transcribeDetailed`, `InferenceGate`.
 
-## 03 · Pass 2: Gemma reads first, then rules
+## 03 · Pass 2: Gemma reads, and rules in English
 
-This pass runs only when **Max quality** is on (Settings). It exists because most chunks agree and never need context. Running pass 1 flat out and spending the slow judgment afterwards, where the engines actually fought, is faster and better informed than asking Gemma chunk by chunk.
+This pass runs only when **Max quality** is on (Settings).
 
 1. **Read the whole thing.** Gemma reads the voted transcript in sections of about 3,000 tokens and writes a brief: topic, people, and names as spelled in this recording. It may also propose spelling fixes, which are kept only if they pass the guards in `MeetingBrief.swift` (the replacement already appears in the transcript, the two words sound alike, and so on). Larger reads were measured to hang LiteRT.
-2. **Pick disputes.** Chunks with agreement below 0.8, the worst 10 at most.
-3. **Gemma rules.** For each disputed chunk it sees both raw readings, the transcript before and after the chunk, your vocabulary, and the brief. It is told to choose between the readings and never to invent.
-4. **Splice.** The ruling replaces the chunk's text. If a ruling takes more than 120 s, the chunk keeps its word vote.
+2. **Rulings, English runs only by default** (Settings → "Gemma rules on disputed chunks": English / all / never). Chunks with agreement below 0.8, the worst 10, go to Gemma with both readings, the text around them, your vocabulary and the brief; its ruling replaces the chunk.
 
-Measured on the reference slices, pass 2 is close to neutral: no rulings against the usual ten moved WER by up to 1.5 points per slice, in both directions, net about zero; ruling on every dispute changed nothing measurable. The cap is not what limits quality.
-
-With **Max quality off** there is no pass 2. A chunk with agreement below 0.5 goes to Gemma during pass 1, with only the text before it as context.
+What was measured. Of 581 logged rulings, 52% were Whisper's text verbatim, 9% Parakeet's, 16% one of them with a character or two changed, 23% new text: a small model asked to rewrite a chunk mostly copies an input. On the reference set that helps a little in English (en-a 9.9 → 8.9% WER, and 13.1 → 12.1% on an older build; en-b unchanged) and not in Ukrainian (uk-a 16.5 vs 16.7%, uk-b 12.2% without rulings against 15.2% with). A redesign that asked Gemma only "A or B" per disputed stretch was tried and lost in both languages: on the 40 stretches where the reference shows the right reading, Gemma chose right 21 times, a coin flip, preferring Parakeet's Russian-leaning garble to Whisper's Ukrainian; the word vote chose right 26 times. The limit is the model, not the prompt.
 
 Code: `TranscriptionRunner.run` (max-quality second pass), `MeetingBriefBuilder`, `EnsembleBackend.arbitrate`.
 

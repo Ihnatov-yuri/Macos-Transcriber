@@ -30,6 +30,8 @@ How Super turns two engines and a referee into one transcript, stage by stage: *
 
 Records your **microphone and system audio** (Zoom/Teams/Meet participants, tapped digitally via a CoreAudio process tap) on one drift-compensated clock. Saves the mix plus raw per-source tracks; transcription runs **split-track**: your voice is ground-truth "you" (named from Settings → Engines → My name), diarization only untangles the others, and an **offline NLMS echo canceller** subtracts the far side's room echo from your mic (measured: −11.8 dB on echo, −0.2 dB on speech). A capture gate keeps playback echo-free; sentence-level scrubs catch the rest.
 
+When a meeting recording stops, your default engine writes a **quick draft** you can read at once, and **Super refines it in the background**: the draft stays on screen until Super finishes, then is replaced in one step (the draft stays in VERSIONS). Settings → Engines → "Refine meetings with Super in the background".
+
 ## Dictation
 
 Hold a modifier key in **any app**, talk, release — the text lands at the cursor. Parakeet decodes the whole passage in a fraction of a second on the Neural Engine, so there is no streaming lag and full-context accuracy. Everything the transcription path learned is reused:
@@ -56,6 +58,7 @@ Upgrading from an older build: remove Transcriberr from the Accessibility list (
 
 - **Versioned transcripts** — every engine run is snapshotted; compare engines side-by-side and restore any version. Transcripts are never lost on re-runs (rescue snapshots + lazy wipe + launch healing).
 - **Post-processing presets** — Summary, **Minutes** (decisions + action items by owner), Clean, Translate & Polish, Context-aware Rewrite; all editable, all running locally through Gemma. A deterministic destutter pass collapses stutters ("for for for"), phrase echoes, and hesitation fillers before the model sees the text.
+- **Clean or verbatim** — the transcript header switches between clean reading text (hesitation sounds like um/uh/е/мм and stutters removed) and exactly what was heard, for studying tic words and restarts. The store always keeps the verbatim text; the MCP tools `kb_get_transcript` and `kb_search` take `style: "clean" | "verbatim"` (default clean).
 - **Per-language vocabulary** — authoritative spellings for names/products (global + per-language lists) injected into ASR prompts and every preset.
 - **Live transcription** while recording, with waveform.
 - **Per-recording run settings** — engine, languages, diarization, expected speakers, translate; independent per recording.

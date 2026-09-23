@@ -29,3 +29,4 @@ Recordings/
 *.log
 *.profraw
 .claude/
+__pycache__/

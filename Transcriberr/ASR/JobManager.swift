@@ -24,6 +24,9 @@ final class TranscriptionJobManager: @unchecked Sendable {
         var fraction: Double
         var failed: Bool
         var failureReason: String?
+        /// A background refinement: the transcript on screen is the finished
+        /// draft, not this run's output.
+        var background = false
     }
 
     private(set) var statuses: [UUID: Status] = [:]
@@ -38,6 +41,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
     /// haven't advanced the fraction yet) — so cancelling right after
     /// pressing Run removed the status row but let the job keep running.
     private var currentRecordingId: UUID?
+    /// Run queued for a recording once its current job finishes cleanly —
+    /// the Super refinement after a meeting's quick draft. In memory only:
+    /// if the app quits mid-draft, the draft resumes and the refinement is
+    /// simply not done (the user can press Run).
+    private var followUps: [UUID: TranscriptionRunner.Params] = [:]
 
     /// Optional auto-titler. We keep it as a weak indirection so AppContainer
     /// can wire it up after construction without a retain cycle.
@@ -127,9 +135,13 @@ final class TranscriptionJobManager: @unchecked Sendable {
     /// in the background without racing this job's reads. It also fires if
     /// the job never gets that far (fails/cancels before decode, or is
     /// dropped from the queue), so a waiter can never hang forever.
-    func enqueue(_ recording: Recording, params: TranscriptionRunner.Params, onSourceConsumed: (() -> Void)? = nil) {
+    func enqueue(_ recording: Recording, params: TranscriptionRunner.Params,
+                 followUp: TranscriptionRunner.Params? = nil, onSourceConsumed: (() -> Void)? = nil) {
+        // An explicit run replaces any refinement still waiting for this one.
+        followUps[recording.id] = followUp
         statuses[recording.id] = Status(
-            id: recording.id, stage: "Queued…", fraction: 0, failed: false, failureReason: nil
+            id: recording.id, stage: params.keepVisibleUntilDone ? "Super refinement queued…" : "Queued…",
+            fraction: 0, failed: false, failureReason: nil, background: params.keepVisibleUntilDone
         )
         queue.append((recording, params, onSourceConsumed))
         repository.savePendingTask(for: recording, params: params)
@@ -182,6 +194,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
 
     func cancel(_ recordingId: UUID) {
         for entry in queue where entry.0.id == recordingId { entry.2?() }
+        followUps.removeValue(forKey: recordingId)
         queue.removeAll { $0.0.id == recordingId }
         repository.removePendingTask(recordingId)
         if currentRecordingId == recordingId {
@@ -218,6 +231,14 @@ final class TranscriptionJobManager: @unchecked Sendable {
             UserDefaults.standard.removeObject(forKey: Self.runningKey)
             if UserDefaults.standard.string(forKey: Self.retriedKey) == recordingId.uuidString {
                 UserDefaults.standard.removeObject(forKey: Self.retriedKey)
+            }
+            // Queued here — after this job's pending row is gone and before
+            // `defer` drains — so the refinement's own row survives a restart.
+            if let self, let next = self.followUps.removeValue(forKey: recordingId),
+               self.statuses[recordingId]?.failed == false,
+               !recording.isDeleted, recording.modelContext != nil {
+                AppLog.info("job", "draft done — queuing \(next.backend.rawValue) refinement in the background")
+                self.enqueue(recording, params: next)
             }
         }
     }
@@ -322,10 +343,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 case .stage(let text, let fraction):
                     statuses[recording.id] = Status(
                         id: recording.id,
-                        stage: text,
+                        stage: params.keepVisibleUntilDone ? "Super: \(text)" : text,
                         fraction: fraction >= 0 ? fraction : (statuses[recording.id]?.fraction ?? 0),
                         failed: false,
-                        failureReason: nil
+                        failureReason: nil,
+                        background: params.keepVisibleUntilDone
                     )
                 case .sourceConsumed:
                     fireSourceConsumed()
@@ -336,6 +358,13 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // run actually produces output. An interrupted run that
                     // never got this far leaves the previous transcript
                     // completely untouched (no heal needed).
+                    if params.keepVisibleUntilDone {
+                        allSegments.append(contentsOf: raws.map { raw in
+                            Segment(startSeconds: raw.startSeconds, endSeconds: raw.endSeconds, text: raw.text,
+                                    speaker: raw.speakerKey, speakerName: raw.speakerName)
+                        })
+                        continue
+                    }
                     if !wipedOldTranscript {
                         try? repository.clearSegments(of: recording)
                         wipedOldTranscript = true
@@ -368,6 +397,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
                             speakerName: raw.speakerName
                         )
                     }
+                    if params.keepVisibleUntilDone {
+                        allSegments.removeAll { $0.startSeconds >= start && $0.endSeconds <= end }
+                        allSegments.append(contentsOf: segs)
+                        continue
+                    }
                     do {
                         try repository.replaceSegmentsInRange(start, end, with: segs, for: recording)
                         allSegments.removeAll { $0.startSeconds >= start && $0.endSeconds <= end }
@@ -397,9 +431,27 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // payload is the authoritative transcript — replace the
                     // live-appended rows with it whenever it differs.
                     stampRunMetadata()
-                    let differs = finalRaws.count != allSegments.count
+                    if params.keepVisibleUntilDone {
+                        // Nothing of this run is on screen yet: swap it in whole.
+                        let segs = finalRaws.isEmpty
+                            ? allSegments.sorted { $0.startSeconds < $1.startSeconds }.map {
+                                Segment(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds, text: $0.text,
+                                        speaker: $0.speaker, speakerName: $0.speakerName) }
+                            : finalRaws.map { raw in
+                                Segment(startSeconds: raw.startSeconds, endSeconds: raw.endSeconds, text: raw.text,
+                                        speaker: raw.speakerKey, speakerName: raw.speakerName) }
+                        do {
+                            try repository.clearSegments(of: recording)
+                            try repository.appendSegments(segs, to: recording)
+                            allSegments = segs
+                            AppLog.info("job", "background run replaced the draft with \(segs.count) segments")
+                        } catch {
+                            AppLog.warn("job", "background replace failed: \(error.localizedDescription)")
+                        }
+                    }
+                    let differs = !params.keepVisibleUntilDone && (finalRaws.count != allSegments.count
                         || finalRaws.contains { $0.speakerKey != nil || $0.speakerName != nil }
-                        || zip(finalRaws, allSegments).contains { $0.text != $1.text }
+                        || zip(finalRaws, allSegments).contains { $0.text != $1.text })
                     if !finalRaws.isEmpty && differs {
                         let segs = finalRaws.map { raw in
                             Segment(

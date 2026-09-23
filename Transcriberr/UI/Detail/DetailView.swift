@@ -12,6 +12,7 @@ struct DetailView: View {
     @State private var tab: Tab = .transcript
     @State private var proseMode = false
     @State private var showTimestamps = true
+    @State private var transcriptStyle: TranscriptStyle = .clean
     @State private var fullscreen = false
     /// Height of the detail pane, to cap the header (see `content`).
     @State private var paneHeight: CGFloat = 800
@@ -62,6 +63,7 @@ struct DetailView: View {
                 tab = .transcript
                 proseMode = container.uiPrefs.proseMode
                 showTimestamps = container.uiPrefs.showTimestamps
+                transcriptStyle = container.uiPrefs.transcriptStyle
             }
         }
     }
@@ -201,10 +203,11 @@ struct DetailView: View {
         let body = recording.segments
             .sorted { $0.startSeconds < $1.startSeconds }
             .map { seg -> String in
+                let text = transcriptStyle.apply(seg.text)
                 if let name = seg.speakerName ?? seg.speaker {
-                    return "\(name): \(seg.text)"
+                    return "\(name): \(text)"
                 }
-                return seg.text
+                return text
             }
             .joined(separator: "\n")
         NSPasteboard.general.clearContents()
@@ -215,10 +218,11 @@ struct DetailView: View {
         let body = recording.segments
             .sorted { $0.startSeconds < $1.startSeconds }
             .map { seg -> String in
+                let text = transcriptStyle.apply(seg.text)
                 if let name = seg.speakerName ?? seg.speaker {
-                    return "\(name): \(seg.text)"
+                    return "\(name): \(text)"
                 }
-                return seg.text
+                return text
             }
             .joined(separator: "\n")
         presentSharePicker(items: [body])
@@ -768,6 +772,16 @@ struct DetailView: View {
                         Text(proseMode ? "Cards" : "Prose").uiLabel(9, color: AppColor.ink2)
                     }
                     TapButton {
+                        transcriptStyle = transcriptStyle == .clean ? .verbatim : .clean
+                        container.uiPrefs.transcriptStyle = transcriptStyle
+                    } label: {
+                        // Names the mode you would switch TO, like Cards/Prose.
+                        Text(transcriptStyle == .clean ? "Verbatim" : "Clean").uiLabel(9, color: AppColor.ink2)
+                    }
+                    .help(transcriptStyle == .clean
+                          ? "Showing clean text (no um/uh, no stutters). Switch to exactly what was heard."
+                          : "Showing verbatim text. Switch to clean reading text.")
+                    TapButton {
                         showTimestamps.toggle()
                         container.uiPrefs.showTimestamps = showTimestamps
                     } label: {
@@ -795,8 +809,10 @@ struct DetailView: View {
                 player: model.container.audioPlayer,
                 proseMode: proseMode,
                 showTimestamps: showTimestamps,
+                style: transcriptStyle,
                 isRunning: model.isRunning,
                 runStage: model.status?.stage,
+                backgroundRun: model.status?.background ?? false,
                 onEditSegment: { editingSegment = $0 },
                 speakerColor: { [order = uniqueSpeakers().map(\.key)] key in
                     // Precomputed ONCE per render — calling uniqueSpeakers()
@@ -935,8 +951,10 @@ struct TranscriptPane: View {
     let player: AudioPlayerController
     let proseMode: Bool
     let showTimestamps: Bool
+    let style: TranscriptStyle
     var isRunning: Bool = false
     var runStage: String? = nil
+    var backgroundRun: Bool = false
     var onEditSegment: (Segment) -> Void = { _ in }
     var speakerColor: (String) -> Color = { _ in SpeakerPalette.colors[0] }
 
@@ -1009,7 +1027,9 @@ struct TranscriptPane: View {
                 // glance looks like a bug report.
                 HStack(spacing: 8) {
                     PulseDot(diameter: 5)
-                    Text("Live draft — speakers, echo cleanup and turn merging apply when the run finishes")
+                    Text(backgroundRun
+                         ? "Quick draft — Super is refining this in the background and will replace it when done"
+                         : "Live draft — speakers, echo cleanup and turn merging apply when the run finishes")
                         .uiLabel(9, color: AppColor.ink2)
                     Spacer()
                 }
@@ -1065,10 +1085,10 @@ struct TranscriptPane: View {
         for seg in segs {
             let name = seg.speakerName ?? seg.speaker
             if let name, name != prev {
-                lines.append("\n\(name): \(seg.text)")
+                lines.append("\n\(name): \(style.apply(seg.text))")
                 prev = name
             } else {
-                lines.append(seg.text)
+                lines.append(style.apply(seg.text))
             }
         }
         return lines.joined(separator: " ")
@@ -1095,7 +1115,7 @@ struct TranscriptPane: View {
                         Text(name).uiLabel(9, color: AppColor.accentOnLight)
                     }
                 }
-                Text(seg.text)
+                Text(style.apply(seg.text))
                     .font(AppFont.text(15))
                     .foregroundStyle(AppColor.ink)
                     .textSelection(.enabled)

@@ -240,7 +240,7 @@ actor EnsembleBackend: ASRBackend {
     /// First pass of max-quality Super: transcribe A∥B and VOTE-merge only —
     /// no inline Gemma. Disputed chunks (low agreement) are arbitrated later
     /// by the runner with context from BOTH sides of the finished transcript.
-    // MARK: - Long-form Whisper
+    // MARK: - Timeline (whole-track readings)
 
     /// Where a chunk sits: which track (0 = system audio or the whole file,
     /// 1 = the echo-cancelled mic) and its span on the shared timeline.
@@ -252,6 +252,9 @@ actor EnsembleBackend: ASRBackend {
 
     /// Whisper's reading of each whole track, words timed on the timeline.
     private var longForm: [Int: [TimedWord]] = [:]
+    /// What the far side said (system track, both engines, timed): the
+    /// reference the mic track's words are checked against for echo.
+    private var farSide: [TimedWord] = []
 
     /// On for every language but English. Measured on the reference slices
     /// with everything else equal: Ukrainian 23.0 → 21.5% and 19.7 → 15.5%
@@ -262,50 +265,196 @@ actor EnsembleBackend: ASRBackend {
         return !languages.isEmpty && !languages.contains { $0.lowercased() == "english" }
     }
 
-    /// On a 28 s chunk WhisperKit decodes one 30 s window, then seeks to the
-    /// last segment it finished and decodes the few seconds left as a
-    /// SECOND window padded with ~26 s of zeros: the words before every cut
-    /// are read from a scrap with nothing after it, and the stock lines over
-    /// that padding are the phantoms timed at 39-56 s in the log. Over a
-    /// whole track the same loop always has real audio ahead. Measured on
-    /// Ukrainian reference slices (system track, Whisper alone): 25.5% →
-    /// 17.0% and 17.1% → 11.5% WER; English unchanged (9.1/9.4, 4.8/4.8).
-    /// Only the two-pass (max quality) path uses it.
-    func prepareLongForm(tracks: [(id: Int, samples: [Float])], languages: Set<String>) async {
+    /// Read whole tracks once, before pass 1, onto the shared timeline.
+    ///
+    /// Whisper (non-English): on a 28 s chunk WhisperKit decodes one 30 s
+    /// window, then seeks to the last segment it finished and decodes the
+    /// few seconds left as a SECOND window padded with ~26 s of zeros — the
+    /// words before every cut are read from a scrap with nothing after it.
+    /// Over a whole track the loop always has real audio ahead. Ukrainian
+    /// reference slices, Whisper alone: 25.5 → 17.0% and 17.1 → 11.5% WER;
+    /// English unchanged. Then English stretches forced through Ukrainian
+    /// are re-read in English (`repairLanguage`).
+    ///
+    /// Parakeet (split-track meetings): a whole-track reading of the far
+    /// side (seconds of ANE time) is the reference for removing echo from
+    /// the mic by timing (`echoFiltered`), and of the mic the second
+    /// opinion that points `repairLanguage` at suspect stretches.
+    func prepareTimeline(tracks: [(id: Int, samples: [Float])], languages: Set<String>, splitTracks: Bool) async {
         longForm = [:]
-        guard Self.longFormEnabled(languages: languages) else { return }
+        farSide = []
         let whisper = (kindA == .whisper ? engineA : kindB == .whisper ? engineB : nil) as? WhisperBackend
-        guard let whisper else { return }
+        let parakeet = [(kindA, engineA), (kindB, engineB)]
+            .first { $0.0 == .parakeet || $0.0 == .parakeetV2 }?.1 as? ParakeetBackend
+        let useWhisper = Self.longFormEnabled(languages: languages) && whisper != nil
         let t0 = Date()
-        await withTaskGroup(of: (Int, [TimedWord]?).self) { group in
+        var whisperTracks: [Int: (words: [TimedWord], segments: [WhisperBackend.SegmentSpan])] = [:]
+        var parakeetTracks: [Int: [TimedWord]] = [:]
+        await withTaskGroup(of: (Int, Bool, [TimedWord], [WhisperBackend.SegmentSpan]).self) { group in
             for t in tracks {
-                group.addTask { (t.id, try? await whisper.transcribeTimed(samples: t.samples, languages: languages).words) }
+                if useWhisper, let whisper {
+                    group.addTask {
+                        let r = try? await whisper.transcribeTimedSegments(samples: t.samples, languages: languages)
+                        return (t.id, true, r?.words ?? [], r?.segments ?? [])
+                    }
+                }
+                if splitTracks, let parakeet {
+                    group.addTask {
+                        let r = try? await parakeet.transcribeTimed(samples: t.samples, languages: languages)
+                        return (t.id, false, r?.words ?? [], [])
+                    }
+                }
             }
-            for await (id, words) in group {
-                if let words { longForm[id] = words }
+            for await (id, isWhisper, words, segments) in group {
+                if isWhisper { whisperTracks[id] = (words, segments) } else { parakeetTracks[id] = words }
             }
         }
-        AppLog.info("ensemble", String(format: "long-form Whisper: %d tracks, %d words, %.1fs",
+        for (id, w) in whisperTracks {
+            var words = w.words
+            if let whisper, let samples = tracks.first(where: { $0.id == id })?.samples {
+                words = await Self.repairLanguage(words: words, segments: w.segments,
+                                                  secondOpinion: parakeetTracks[id] ?? [],
+                                                  samples: samples, whisper: whisper)
+            }
+            longForm[id] = words
+        }
+        if splitTracks {
+            farSide = ((whisperTracks[0]?.words ?? []) + (parakeetTracks[0] ?? [])).sorted { $0.start < $1.start }
+        }
+        AppLog.info("ensemble", String(format: "timeline: whisper %d tracks / %d words, parakeet %d tracks, far side %d words, %.1fs",
                                        longForm.count, longForm.values.map(\.count).reduce(0, +),
-                                       Date().timeIntervalSince(t0)))
+                                       parakeetTracks.count, farSide.count, Date().timeIntervalSince(t0)))
+    }
+
+    /// Whisper forced to Ukrainian TRANSLATES English speech ("After four
+    /// interviews they realized that" → "чотири інтерв'ю вони зрозуміли")
+    /// or spells it in Cyrillic — 15% of the Ukrainian slices' remaining
+    /// errors. Whisper's language detection spots those stretches reliably
+    /// (log-prob −0.01 for that sentence), but costs an encoder pass each,
+    /// so it is asked only where the two engines fall apart on a segment —
+    /// what a translation looks like next to Parakeet's phonetic guess
+    /// ("Авто 4 інтерв'ю"). An English verdict re-reads the segment in
+    /// English and splices it in by time.
+    static func repairLanguage(
+        words: [TimedWord], segments: [WhisperBackend.SegmentSpan], secondOpinion: [TimedWord],
+        samples: [Float], whisper: WhisperBackend
+    ) async -> [TimedWord] {
+        guard !secondOpinion.isEmpty else { return words }
+        var out = words
+        var checked = 0, repaired = 0
+        for seg in segments where seg.end - seg.start >= 1.2 {
+            let inSeg = { (w: TimedWord) in (w.start + w.end) / 2 >= seg.start && (w.start + w.end) / 2 < seg.end }
+            let mine = out.filter(inSeg)
+            guard mine.count >= 3, !mine.allSatisfy({ isLatinWord($0.word.norm) }) else { continue }
+            let theirs = secondOpinion.filter {
+                ($0.start + $0.end) / 2 >= seg.start - 0.3 && ($0.start + $0.end) / 2 < seg.end + 0.3
+            }
+            guard diceSimilarity(mine.map(\.word.norm), theirs.map(\.word.norm)) < 0.4 else { continue }
+            let a = max(0, Int((seg.start - 0.2) * 16_000)), b = min(samples.count, Int((seg.end + 0.2) * 16_000))
+            guard b - a >= 16_000 else { continue }
+            let audio = Array(samples[a..<b])
+            checked += 1
+            guard let lang = try? await whisper.detectLanguage(samples: audio),
+                  lang.code == "en", lang.probability >= 0.5,
+                  let english = try? await whisper.transcribeTimed(samples: audio, languages: ["English"]),
+                  !english.words.isEmpty
+            else { continue }
+            let offset = Double(a) / 16_000
+            let spliced = english.words.map { TimedWord(word: $0.word, start: $0.start + offset, end: $0.end + offset) }
+            AppLog.info("ensemble", String(format: "language repair @%.1fs (en %.2f): \"%@\" → \"%@\"",
+                                           seg.start, lang.probability,
+                                           joinSurfaces(mine.map(\.word.surface)).prefix(60) as CVarArg,
+                                           english.text.prefix(60) as CVarArg))
+            out.removeAll(where: inSeg)
+            out.append(contentsOf: spliced)
+            out.sort { $0.start < $1.start }
+            repaired += 1
+        }
+        if checked > 0 { AppLog.info("ensemble", "language repair: \(checked) segments checked, \(repaired) re-read in English") }
+        return out
+    }
+
+    /// Mic words that are the far side's words heard again. The tracks share
+    /// one clock and the speaker→mic path is 30-50 ms (measured on every
+    /// reference slice), so an echoed word sits at the SAME time as its
+    /// original on the system track. One matching word proves nothing — two
+    /// people say "yes" at once — so a word only goes as part of a run: at
+    /// least `minRun` matches with at most one unmatched (garbled) word
+    /// between neighbours, and the garbled ones inside the run go too. This
+    /// catches the copies the sentence-level echo scrub cannot: degraded
+    /// ones ("measure the power of our iPhone 4" for "measure that ROI"),
+    /// and ones mixed into the same line as the user's own words.
+    static func echoFiltered(_ words: [TimedWord], farSide: [TimedWord],
+                             tolerance: Double = 0.6, minRun: Int = 3) -> [TimedWord] {
+        guard !words.isEmpty, !farSide.isEmpty else { return words }
+        let matched: [Bool] = words.map { w in
+            let mid = (w.start + w.end) / 2
+            // farSide is sorted by start: binary search the tolerance window.
+            var lo = 0, hi = farSide.count
+            while lo < hi { let m = (lo + hi) / 2; if farSide[m].start < mid - tolerance - 2 { lo = m + 1 } else { hi = m } }
+            var k = lo
+            while k < farSide.count, farSide[k].start <= mid + tolerance {
+                let f = farSide[k]
+                if !w.word.norm.isEmpty, f.word.norm == w.word.norm, abs((f.start + f.end) / 2 - mid) <= tolerance { return true }
+                k += 1
+            }
+            return false
+        }
+        var drop = Set<Int>()
+        var i = 0
+        while i < words.count {
+            guard matched[i] else { i += 1; continue }
+            var last = i, count = 1, j = i + 1
+            while j < words.count, j - last <= 2 {
+                if matched[j] { last = j; count += 1 }
+                j += 1
+            }
+            if count >= minRun { drop.formUnion(i...last) }
+            i = last + 1
+        }
+        return words.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
     }
 
     /// The long-form words whose midpoint falls inside the window.
-    private func longFormReading(_ window: ChunkWindow?) -> DetailedTranscription? {
+    private func longFormWords(_ window: ChunkWindow?) -> [TimedWord]? {
         guard let window, let words = longForm[window.track] else { return nil }
-        let inside = words.filter {
+        return words.filter {
             let mid = ($0.start + $0.end) / 2
             return mid >= window.start && mid < window.end
-        }.map(\.word)
-        return DetailedTranscription(text: Self.joinSurfaces(inside.map(\.surface)), words: inside)
+        }
     }
 
     private func detailed(
         _ engine: DetailedTranscribing, kind: BackendFactory.Kind,
         samples: [Float], languages: Set<String>, window: ChunkWindow?
     ) async throws -> DetailedTranscription {
-        if kind == .whisper, let cached = longFormReading(window) { return cached }
-        return try await engine.transcribeDetailed(samples: samples, languages: languages)
+        var timed: [TimedWord]
+        if kind == .whisper, let cached = longFormWords(window) {
+            timed = cached
+        } else if let window, window.track == 1, !farSide.isEmpty {
+            // Mic chunk of a split-track meeting: time the words on the
+            // shared clock so echo can be matched against the far side.
+            if let w = engine as? WhisperBackend {
+                timed = try await w.transcribeTimed(samples: samples, languages: languages).words
+            } else if let p = engine as? ParakeetBackend {
+                timed = try await p.transcribeTimed(samples: samples, languages: languages).words
+            } else {
+                return try await engine.transcribeDetailed(samples: samples, languages: languages)
+            }
+            timed = timed.map { TimedWord(word: $0.word, start: $0.start + window.start, end: $0.end + window.start) }
+        } else {
+            return try await engine.transcribeDetailed(samples: samples, languages: languages)
+        }
+        if let window, window.track == 1, !farSide.isEmpty {
+            let kept = Self.echoFiltered(timed, farSide: farSide)
+            if kept.count < timed.count {
+                AppLog.info("ensemble", String(format: "echo by timing: %@ dropped %d of %d mic words @%.0fs",
+                                               kind.rawValue, timed.count - kept.count, timed.count, window.start))
+            }
+            timed = kept
+        }
+        let words = timed.map(\.word)
+        return DetailedTranscription(text: Self.joinSurfaces(words.map(\.surface)), words: words)
     }
 
     func transcribeChunkRich(

@@ -201,8 +201,13 @@ final class TranscriptionRunner: @unchecked Sendable {
         let duration: Double
         var micChunkIndices: Set<Int> = []
         var cleanedMic: [Float]?
-        let longFormWhisper = params.backend == .ensemble && EnsembleBackend.longFormEnabled(languages: params.languages)
-            && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+        // Whole-track readings before pass 1 (see EnsembleBackend.prepareTimeline):
+        // long-form Whisper for non-English, the far side's timeline for
+        // echo-by-timing in split-track meetings. Max quality path only.
+        let prepareTimeline = params.backend == .ensemble && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+            && (EnsembleBackend.longFormEnabled(languages: params.languages)
+                || (AudioCompressor.sidecarURL(for: params.file, kind: "mic") != nil
+                    && AudioCompressor.sidecarURL(for: params.file, kind: "sys") != nil))
         do {
             if splitTracks, let micURL, let sysURL {
                 async let micTask = decoder.decodeAll(file: micURL)
@@ -214,7 +219,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // an engine, and the user's speech survives crosstalk.
                 continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
                 let prepared = await Self.cancelEchoAndChunk(
-                    mic: &rawMic, sys: sysSamples, decoder: decoder, keepCleanedMic: longFormWhisper)
+                    mic: &rawMic, sys: sysSamples, decoder: decoder, keepCleanedMic: prepareTimeline)
                 cleanedMic = prepared.cleanedMic
                 chunks = prepared.chunks
                 micChunkIndices = prepared.micChunkIndices
@@ -276,11 +281,11 @@ final class TranscriptionRunner: @unchecked Sendable {
             throw error
         }
 
-        if longFormWhisper, let ens = backend as? EnsembleBackend {
-            continuation.yield(.stage(text: "Whisper reading the whole recording…", fraction: 0.15))
+        if prepareTimeline, let ens = backend as? EnsembleBackend {
+            continuation.yield(.stage(text: "Reading the whole recording…", fraction: 0.15))
             var tracks: [(id: Int, samples: [Float])] = [(0, samples)]
             if let cleanedMic { tracks.append((1, cleanedMic)) }
-            await ens.prepareLongForm(tracks: tracks, languages: params.languages)
+            await ens.prepareTimeline(tracks: tracks, languages: params.languages, splitTracks: splitTracks)
             cleanedMic = nil
         }
 

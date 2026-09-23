@@ -34,6 +34,10 @@ enum EchoCanceller {
     // slices where 3 lost 21 (and 0.5-step + 3 lost 58), for ~the same echo.
     static let nlpNearEndRatio: Float = 1.5
     static let nlpFloor: Float = 0        // echo-only frames go to silence
+    // Below this the suppressor is working from noise. Median per-second
+    // linear ERLE measured: 18.7-19.5 dB on three real calls and 22.7 dB on
+    // synthetic echo, against 4.0 dB on the meeting with no linear path.
+    static let minLinearERLE: Double = 8
 
     /// Start of the `span`-sample stretch of `ref` carrying the most energy.
     /// The delay search needs the far side to actually be TALKING; picking
@@ -199,6 +203,38 @@ enum EchoCanceller {
             }
         }
         }
+        // The suppressor decides from the filter's echo PREDICTION. When the
+        // linear stage explains next to nothing, there is no linear echo path
+        // (see `minLinearERLE`) and that prediction is noise: muting on it deleted the
+        // user's own words. Hand back the raw mic instead; the far side's
+        // words are then removed downstream by timing
+        // (`EnsembleBackend.echoFiltered`) — that slice: 19.9 → 16.7% WER.
+        // Measured as the MEDIAN over 1 s blocks where the far side talks,
+        // not over the whole file: the user's own speech is (rightly) never
+        // cancelled, so a few seconds of doubletalk dragged a whole-file
+        // figure for a textbook echo down to 2.8 dB.
+        do {
+            let block = 16_000
+            var blockERLE: [Double] = []
+            var b = delay
+            while b + block <= n {
+                var m = 0.0, o = 0.0, farActive = 0
+                for i in b..<(b + block) {
+                    m += Double(mic[i] * mic[i]); o += Double(out[i] * out[i])
+                    if abs(ref[max(0, i - delay)]) > 0.01 { farActive += 1 }
+                }
+                if farActive > block / 4, m > 1e-6 { blockERLE.append(10 * log10(m / max(o, 1e-12))) }
+                b += block
+            }
+            let linearERLE = blockERLE.isEmpty ? 0 : blockERLE.sorted()[blockERLE.count / 2]
+            AppLog.info("aec", String(format: "linear stage: median %.1f dB over %d far-end seconds", linearERLE, blockERLE.count))
+            if !blockERLE.isEmpty, linearERLE < minLinearERLE {
+                AppLog.info("aec", String(format: "linear stage removed only %.1f dB (median of %d far-end seconds, corr %.3f) — no usable echo path, keeping raw mic for echo-by-timing",
+                                          linearERLE, blockERLE.count, bestCorr))
+                return mic
+            }
+        }
+
         // ---- 3. Residual echo suppressor ----
         // The linear filter alone is not enough for ASR. Measured on a real
         // call: 11 dB of echo removed, and Parakeet still transcribed the far

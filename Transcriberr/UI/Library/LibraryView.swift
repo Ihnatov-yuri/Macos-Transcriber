@@ -164,12 +164,13 @@ struct LibraryView: View {
     // MARK: - Metric strip
 
     private var metricStrip: some View {
-        HStack(spacing: 0) {
-            metricCell(value: "\(all.count)", label: "Recs")
+        let recs = library
+        return HStack(spacing: 0) {
+            metricCell(value: "\(recs.count)", label: "Recs")
             VRule().frame(height: 60)
-            metricCell(value: formatHM(all.reduce(0) { $0 + $1.durationSeconds }), label: "Total")
+            metricCell(value: formatHM(recs.reduce(0) { $0 + $1.durationSeconds }), label: "Total")
             VRule().frame(height: 60)
-            let langs = Set(all.compactMap { $0.sourceLanguage }).count
+            let langs = Set(recs.compactMap { $0.sourceLanguage }).count
             metricCell(value: "\(langs)", label: "Langs")
         }
         .frame(height: 72)
@@ -383,9 +384,12 @@ struct LibraryView: View {
     private var filtered: [Recording] {
         // Folder → tag → search: search always operates within the active
         // folder/tag scope.
-        var rows = all
+        var rows: [Recording]
         if let folderID = selectedFolderID {
-            rows = rows.filter { $0.folder?.id == folderID }
+            rows = all.filter { $0.folder?.id == folderID }
+        } else {
+            // "All" means recordings: dictation history has its own folder.
+            rows = library
         }
         if let tagID = selectedTagID {
             rows = rows.filter { rec in rec.tags.contains { $0.id == tagID } }
@@ -397,11 +401,16 @@ struct LibraryView: View {
         }
     }
 
+    /// Everything except dictation history (see `Folder.isDictation`).
+    private var library: [Recording] {
+        all.filter { $0.folder?.isDictation != true }
+    }
+
     private func countSummary() -> String {
-        switch all.count {
+        switch library.count {
         case 0: return "No recordings yet. Tap + Import or open the Record tab."
         case 1: return "1 recording on disk."
-        default: return "\(all.count) recordings on disk."
+        default: return "\(library.count) recordings on disk."
         }
     }
 

@@ -193,6 +193,11 @@ final class Folder {
         self.sortOrder = sortOrder
         self.createdAtMillis = createdAtMillis
     }
+
+    /// Where dictation history lands. Kept out of "All" in the Library:
+    /// passages are many and short, and drown the recordings.
+    static let dictationName = "Dictation"
+    var isDictation: Bool { name.caseInsensitiveCompare(Self.dictationName) == .orderedSame }
 }
 
 /// Free-form tag; many-to-many with Recording. Same repository-enforced

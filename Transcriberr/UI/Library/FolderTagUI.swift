@@ -23,7 +23,7 @@ struct FolderStrip: View {
             chip(label: "All", selected: selectedFolderID == nil) {
                 selectedFolderID = nil
             }
-            ForEach(folders, id: \.id) { folder in
+            ForEach(folders.filter { !$0.isDictation }, id: \.id) { folder in
                 chip(label: "\(folder.name) (\(folder.recordings.count))",
                      selected: selectedFolderID == folder.id) {
                     selectedFolderID = folder.id
@@ -42,6 +42,15 @@ struct FolderStrip: View {
             chip(label: "+ New", selected: false, muted: true) {
                 folderName = ""
                 newFolderPrompt = true
+            }
+            // Dictation history: out of "All", reachable here, set apart
+            // at the end. No rename/delete menu — dictation looks it up by name.
+            if let history = folders.first(where: \.isDictation) {
+                chip(label: "Dictation history (\(history.recordings.count))",
+                     selected: selectedFolderID == history.id,
+                     muted: selectedFolderID != history.id) {
+                    selectedFolderID = history.id
+                }
             }
         }
         .alert("New Folder", isPresented: $newFolderPrompt) {

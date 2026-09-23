@@ -55,6 +55,9 @@ final class UtteranceCapture: @unchecked Sendable {
     /// Whether the voice-processing unit currently exists on the engine.
     private var voiceProcessingActive = false
     private var configObserver: NSObjectProtocol?
+    /// The audio route changed while idle; the engine's input node still
+    /// describes the OLD device format, so the next tap would be refused.
+    private var engineStale = false
     // Diagnostics (ioQueue): how much the tap actually delivered.
     private var tapCalls = 0
     private var tapFrames = 0
@@ -198,7 +201,16 @@ final class UtteranceCapture: @unchecked Sendable {
     /// tap keeps delivering instead of silently starving.
     @MainActor
     private func handleConfigurationChange() {
-        guard isRunning else { return }
+        guard isRunning else {
+            // Idle — typically another app (a call) switching the mic's
+            // sample rate. The prewarmed engine keeps the old format, and
+            // every later press failed with "Failed to create tap due to
+            // format mismatch" until the app was restarted (seen: 44.1 kHz
+            // after a meeting app took the mic). Rebuild on the next start.
+            engineStale = true
+            AppLog.info("dictation", "audio configuration changed while idle — engine will be rebuilt on next start")
+            return
+        }
         AppLog.warn("dictation", "audio configuration changed mid-session — rebuilding tap and restarting")
         // Restarting alone was not enough. The tap and the converter were
         // both built from the PREVIOUS native format; after a device switch
@@ -253,6 +265,26 @@ final class UtteranceCapture: @unchecked Sendable {
     @MainActor
     func start() async throws {
         guard !isRunning else { return }
+        if engineStale {
+            engineStale = false
+            releaseEngine()
+        }
+        do {
+            try await startOnce()
+        } catch CaptureError.noInput(let reason)
+                    where reason.hasPrefix("Couldn't install audio tap") || reason.hasPrefix("Audio engine failed to start") {
+            // A format change nobody announced (no configuration-change
+            // notification reached us) looks exactly like this. A fresh
+            // engine reads the device as it is now. Once — a second failure
+            // is a real problem and goes to the user.
+            AppLog.warn("dictation", "\(reason) — rebuilding the audio engine and retrying once")
+            releaseEngine()
+            try await startOnce()
+        }
+    }
+
+    @MainActor
+    private func startOnce() async throws {
         let t0 = Date()
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: break

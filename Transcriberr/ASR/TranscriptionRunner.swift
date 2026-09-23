@@ -156,14 +156,16 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// two-hour meeting); each copy now dies as soon as its successor
     /// exists, and the peak is three.
     private nonisolated static func cancelEchoAndChunk(
-        mic: inout [Float], sys: [Float], decoder: AudioDecoder
-    ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double) {
+        mic: inout [Float], sys: [Float], decoder: AudioDecoder, keepCleanedMic: Bool = false
+    ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double, cleanedMic: [Float]?) {
         let micChunks: [AudioDecoder.Chunk]
         let micDur: Double
+        var keptMic: [Float]?
         do {
             let cleanedMic = EchoCanceller.cancel(mic: mic, ref: sys)
             mic = []
             (micChunks, micDur) = decoder.chunk(samples: cleanedMic)
+            if keepCleanedMic { keptMic = cleanedMic }
         }
         let (sysChunks, sysDur) = decoder.chunk(samples: sys)
         let tagged = (micChunks.map { ($0, true) } + sysChunks.map { ($0, false) })
@@ -171,7 +173,8 @@ final class TranscriptionRunner: @unchecked Sendable {
         return (
             tagged.map(\.0),
             Set(tagged.enumerated().compactMap { $1.1 ? $0 : nil }),
-            max(micDur, sysDur)
+            max(micDur, sysDur),
+            keptMic
         )
     }
 
@@ -197,6 +200,9 @@ final class TranscriptionRunner: @unchecked Sendable {
         let chunks: [AudioDecoder.Chunk]
         let duration: Double
         var micChunkIndices: Set<Int> = []
+        var cleanedMic: [Float]?
+        let longFormWhisper = params.backend == .ensemble && EnsembleBackend.longFormEnabled(languages: params.languages)
+            && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
         do {
             if splitTracks, let micURL, let sysURL {
                 async let micTask = decoder.decodeAll(file: micURL)
@@ -208,7 +214,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // an engine, and the user's speech survives crosstalk.
                 continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
                 let prepared = await Self.cancelEchoAndChunk(
-                    mic: &rawMic, sys: sysSamples, decoder: decoder)
+                    mic: &rawMic, sys: sysSamples, decoder: decoder, keepCleanedMic: longFormWhisper)
+                cleanedMic = prepared.cleanedMic
                 chunks = prepared.chunks
                 micChunkIndices = prepared.micChunkIndices
                 samples = sysSamples          // diarization sees only the others
@@ -267,6 +274,14 @@ final class TranscriptionRunner: @unchecked Sendable {
         } catch {
             AppLog.error("runner", "backend load failed: \(error.localizedDescription)")
             throw error
+        }
+
+        if longFormWhisper, let ens = backend as? EnsembleBackend {
+            continuation.yield(.stage(text: "Whisper reading the whole recording…", fraction: 0.15))
+            var tracks: [(id: Int, samples: [Float])] = [(0, samples)]
+            if let cleanedMic { tracks.append((1, cleanedMic)) }
+            await ens.prepareLongForm(tracks: tracks, languages: params.languages)
+            cleanedMic = nil
         }
 
         // ---------- chunk loop ----------
@@ -352,6 +367,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                         group.addTask { [self] in
                             let rich = try await richChunkWithRetry(
                                 ens: ens, samples: chunk.samples,
+                                window: .init(track: micChunkIndices.contains(idx) ? 1 : 0,
+                                              start: chunk.startSeconds, end: chunk.endSeconds),
                                 params: params, continuation: continuation)
                             richBox.set(idx, (rich.agreement, rich.textA, rich.textB))
                             return (idx, rich.text)
@@ -523,6 +540,9 @@ final class TranscriptionRunner: @unchecked Sendable {
             // (Whisper+Gemma on Ukrainian) can dispute 70% of chunks — 22
             // unbounded sequential Gemma calls froze a run for tens of
             // minutes. Spend the expensive judgment where it matters most.
+            // Measured on the reference slices (2026-09-23): no rulings vs 10
+            // vs unbounded moved WER by ±1.5 points either way per slice, net
+            // ~0 — the cap is not what limits quality, so it stays.
             let disputes = rich.filter { $0.value.agreement < 0.8
                 && !$0.value.textA.isEmpty && !$0.value.textB.isEmpty }
                 .sorted { $0.value.agreement < $1.value.agreement }
@@ -613,6 +633,19 @@ final class TranscriptionRunner: @unchecked Sendable {
                 s.text = MeetingBriefBuilder.apply(spellingFixes, to: seg.text)
                 return s
             }
+        }
+        // The user's spellings, for names both engines wrote the same wrong
+        // way — the vote never sees those (see applyVocabulary).
+        let vocabularyTerms = TranscriptHygiene.vocabularyTerms(languages: params.languages)
+        if !vocabularyTerms.isEmpty {
+            let current = allSegments
+            allSegments = await Task.detached {
+                current.map { seg in
+                    var s = seg
+                    s.text = TranscriptHygiene.applyVocabulary(seg.text, terms: vocabularyTerms)
+                    return s
+                }
+            }.value
         }
 
         let myNameSetting = (UserDefaults.standard.string(forKey: "ui.myName") ?? "")
@@ -1103,6 +1136,7 @@ final class TranscriptionRunner: @unchecked Sendable {
     private func richChunkWithRetry(
         ens: EnsembleBackend,
         samples: [Float],
+        window: EnsembleBackend.ChunkWindow? = nil,
         params: Params,
         continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
     ) async throws -> EnsembleBackend.RichChunk {
@@ -1110,7 +1144,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         do {
             return try await withChunkTimeout(seconds: timeout) {
                 try await ens.transcribeChunkRich(
-                    samples: samples, languages: params.languages)
+                    samples: samples, languages: params.languages, window: window)
             }
         } catch ASRError.chunkTimeout {
             continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
@@ -1119,7 +1153,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             do {
                 return try await withChunkTimeout(seconds: timeout) {
                     try await ens.transcribeChunkRich(
-                        samples: samples, languages: params.languages)
+                        samples: samples, languages: params.languages, window: window)
                 }
             } catch ASRError.chunkTimeout {
                 AppLog.error("runner", "rich chunk wedged twice — degrading to single engine")

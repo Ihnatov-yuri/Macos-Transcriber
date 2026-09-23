@@ -8,11 +8,15 @@ Super runs two speech engines over every chunk of audio, merges their readings w
 
 A meeting recording has two tracks. The **mic track** is you, so anything on it is labelled "ME" without guessing. It first goes through an NLMS echo canceller that subtracts the far side's voice leaking from your speakers. The **system track** is everyone else, captured by the audio tap. Only the system track goes to the diarizer, which works out who among the others is speaking.
 
+The echo canceller is an NLMS filter (step 0.1) followed by a suppressor that mutes 20 ms frames the filter can fully explain as echo. Until v3.9.0 the step was 0.5: under heavy crosstalk the filter diverged (its output came out 7.3 dB louder than the raw mic on one Ukrainian meeting), the suppressor then worked from a garbage echo estimate, and it muted the user's own words: 54 of 404 lost on one 5-minute slice. At step 0.1 and a suppressor threshold of 1.5 (was 3), the same slices lose 8.
+
 The chunker cuts each track into chunks of at most 28 s, cutting in silence where it can. Each chunk after the first repeats the last second of the one before it (the "recap"), so a word spoken across a cut is never lost. The mic and system chunks share one timeline.
 
 The **engine pair** comes from Detail → RUN → MERGE A / MERGE B. The default is Parakeet v3 with Parakeet v2. Parakeet v2 only knows English, so in a non-English run it is replaced by Whisper large-v3, which then leads the pair. The referee is the local text engine, Gemma 4 on LiteRT, used in text mode only (its audio mode is not trusted).
 
-Code: `TranscriptionRunner.run`, `AudioDecoder.chunk`, `EnsembleBackend.resolvePair`.
+**Long-form Whisper (every language but English, Max quality).** Before pass 1, Whisper reads each whole track once, and each chunk takes the Whisper words timed inside it; Parakeet still runs per chunk. The reason is WhisperKit's window loop: on a 28 s chunk it decodes one 30 s window, then seeks to the last segment it finished and decodes the few seconds left as a second window padded with ~26 s of zeros. The words before every cut are read from a scrap with nothing after it (and the stock lines written over that padding are the phantoms timed at 39-56 s in old logs). Over a whole track the same loop always has real audio ahead. On the Ukrainian reference slices this took Super from 23.0% to 21.5% and from 19.7% to 15.5% WER; in English it cost 0.6-0.8 points, so English stays chunked.
+
+Code: `TranscriptionRunner.run`, `AudioDecoder.chunk`, `EnsembleBackend.resolvePair`, `EnsembleBackend.prepareLongForm`.
 
 ## 02 · Pass 1: every chunk, three in flight
 
@@ -22,7 +26,7 @@ Three chunks are in progress at any time. For each chunk:
 2. **Both engines, in parallel.** Each returns its text plus a confidence for every word. Whisper already drops subtitle sign-offs, and the stock lines it writes over the zero padding it adds to reach 30 s.
 3. **Phantom check.** If one engine heard only a stock line ("Thank you", "Дякую") and the other heard silence, the line is dropped.
 4. **Agreement.** A Dice score over the two word lists (1.0 means the same words).
-5. **Word vote (ROVER).** The two word sequences are aligned, and every place they differ is decided by the rules in the diagram. The same word takes the trusted engine's spelling and punctuation. A word from your vocabulary wins. A Latin-script word from the trusted engine beats a native-script guess from the weak one. Otherwise the choice goes by confidence times a per-language prior (0.5 for an engine that is weak in this language). Stray extra words from the weak engine are dropped unless there are three or more in a row. The vote is pure CPU and takes milliseconds.
+5. **Word vote (ROVER).** The two word sequences are aligned, and every place they differ is decided by the rules in the diagram. The same word takes the trusted engine's spelling and punctuation. A word from your vocabulary wins. A Latin-script word from the trusted engine beats a native-script guess from the weak one. Otherwise the choice goes by confidence times a per-language prior (0.5 for an engine that is weak in this language). Stray extra words from the weak engine are dropped unless there are three or more in a row. With equal priors (English), a word only one engine heard is dropped when it repeats its neighbour or the phrase beside it ("I was I was"), or is one engine's split of the word the other wrote whole ("Kim Kim KimKim", "cheaper lm LLM", "R ROI"). Before that rule Super scored worse than Whisper alone in English (12.5% vs 10.6%, 8.1% vs 5.8% WER); after it, better (8.9%, 5.3%). The vote is pure CPU and takes milliseconds.
 
 The runner then trims the recap repeat at the seam, drops a line that echoes the previous one, shows the voted text live, and stores the raw text from each engine plus the agreement score for pass 2.
 
@@ -39,13 +43,15 @@ This pass runs only when **Max quality** is on (Settings). It exists because mos
 3. **Gemma rules.** For each disputed chunk it sees both raw readings, the transcript before and after the chunk, your vocabulary, and the brief. It is told to choose between the readings and never to invent.
 4. **Splice.** The ruling replaces the chunk's text. If a ruling takes more than 120 s, the chunk keeps its word vote.
 
+Measured on the reference slices, pass 2 is close to neutral: no rulings against the usual ten moved WER by up to 1.5 points per slice, in both directions, net about zero; ruling on every dispute changed nothing measurable. The cap is not what limits quality.
+
 With **Max quality off** there is no pass 2. A chunk with agreement below 0.5 goes to Gemma during pass 1, with only the text before it as context.
 
 Code: `TranscriptionRunner.run` (max-quality second pass), `MeetingBriefBuilder`, `EnsembleBackend.arbitrate`.
 
 ## 04 · Finalize
 
-The brief's guarded spelling fixes are applied. The echo scrub then finds lines from the system track that were heard again on your mic and keeps one copy. Speakers are assigned: mic lines are you, the diarizer's regions label the others, and names are picked up from the conversation. The result is saved as a new version of the transcript.
+The brief's guarded spelling fixes are applied. Then the user's vocabulary: a name split by a space ("Kim Kim", "master card", "Web RTC") is joined into the vocabulary spelling, and a capitalized non-word within one sound of exactly one coined term ("Kinkim" → "KimKim") is respelled. The vote only consults the vocabulary where the engines disagree, so a name both wrote the same wrong way never reached it before; over the library this made 60 changes, all correct. The spell checker is asked about words as written, since it only knows proper nouns capitalized ("Indian", not "indian"). The echo scrub then finds lines from the system track that were heard again on your mic and keeps one copy. Speakers are assigned: mic lines are you, the diarizer's regions label the others, and names are picked up from the conversation. The result is saved as a new version of the transcript.
 
 Code: `TranscriptionRunner.finalizeSegments`.
 
@@ -57,4 +63,4 @@ Every chunk has a 120 s limit. After a timeout the engine is rebuilt and the chu
 
 On a 42-minute split-track meeting (v3.7.0), pass 1 took about 96% of the run and pass 2 about a minute. In v3.8.0 the engines overlap, silent chunks are skipped, and the low-confidence refine pass no longer runs for Super (its re-runs never changed the text). On a 6-minute slice this cut the run from 241 s to 183 s with the same words. Three Whisper large-v3 calls at once give about 1.5×, not 3×, because they compete for the same Neural Engine and GPU.
 
-To measure a change on a real recording, see [Real-world regression check](../README.md#real-world-regression-check).
+To measure a change on a real recording, see [Real-world regression check](../README.md#real-world-regression-check); to score it against checked text, see [Reference set](../README.md#reference-set-word-error-rate).

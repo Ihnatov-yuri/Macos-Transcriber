@@ -165,4 +165,144 @@ enum TranscriptHygiene {
         guard best > 0, best < pieces.count else { return next }
         return pieces.dropFirst(best).joined(separator: " ")
     }
+
+    // MARK: - Vocabulary spellings
+
+    /// The user's vocabulary with its casing (global + the run's languages).
+    static func vocabularyTerms(languages: Set<String>) -> [String] {
+        let d = UserDefaults.standard
+        var raw = d.string(forKey: "prompt.vocabulary") ?? ""
+        if let js = d.string(forKey: "prompt.vocabulary.byLang"),
+           let map = try? JSONDecoder().decode([String: String].self, from: Data(js.utf8)) {
+            for lang in languages { raw += "," + (map[lang] ?? "") }
+        }
+        var seen = Set<String>()
+        return raw.split(whereSeparator: { $0 == "," || $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    /// Put the user's own spelling on names the engines wrote differently.
+    /// The word vote only consults the vocabulary where the two engines
+    /// DISAGREE; when both write "Kim Kim" (49 times in this user's
+    /// library), nothing downstream ever sees it. Deterministic and narrow —
+    /// a sound-alike match on its own rewrote "this" into "Thomas" and
+    /// "like" into "Alex" in a dry run over the library, so:
+    ///   - JOINED: 2-3 tokens separated by a single space whose letters,
+    ///     concatenated, are exactly a multi-letter term ("Kim Kim" →
+    ///     "KimKim", "Web RTC" → "WebRTC"). The letters must match exactly,
+    ///     so this never changes what was heard, only how it is written.
+    ///   - NEAR MISS: one capitalized token of ≥ 4 letters, in the term's
+    ///     script and starting with the term's letter, that is not a
+    ///     dictionary word (as written — "Indian" is one, "indian" is not)
+    ///     and not itself a term, whose sound skeleton is as long as exactly
+    ///     ONE coined term's and differs in one place ("Kinkim" → "KimKim").
+    ///     Ties ("Blitzy": "Blits"/"Blitsy") change nothing, and neither do
+    ///     the term's own inflections or possessive ("Нідерландах",
+    ///     "MasterCard's"). Measured over the library before these guards:
+    ///     "LinkedIn" → "London", "Europhone" → "Grafana".
+    static func applyVocabulary(
+        _ text: String, terms: [String],
+        isDictionaryWord: (String) -> Bool = { MeetingBriefBuilder.isDictionaryWord($0, asWritten: true) }
+    ) -> String {
+        guard !terms.isEmpty, !text.isEmpty else { return text }
+        let termSet = Set(terms.map { $0.lowercased() })
+        func letters(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        // Terms written as one token ("KimKim", "WebRTC", "LLMs4EU").
+        var joinable: [String: String] = [:]
+        for t in terms where !t.contains(" ") && letters(t).count >= 4 { joinable[letters(t)] = t }
+        // Near-miss targets are coined terms only (KimKim, LLMs4EU, Kaiko).
+        // A term that is itself a word or a common name ("Victor",
+        // "Nicole") would pull in different people — "Victoria", "Nicola".
+        // An inner capital or a digit makes a term coined by construction —
+        // and the spell checker waves such words through ("KimKim",
+        // "LLMs4EU" both "pass"), so it cannot be asked.
+        let coined = { (t: String) in t.dropFirst().contains { $0.isUppercase || $0.isNumber } }
+        let nearTargets = terms.filter {
+            !$0.contains(" ") && MeetingBriefBuilder.skeleton($0).count >= 4 && (coined($0) || !isDictionaryWord($0))
+        }
+
+        // Tokens keep their exact surrounding text so rewriting is lossless.
+        let ns = text as NSString
+        guard let re = try? NSRegularExpression(pattern: "[\\p{L}\\p{N}]+(?:['’ʼ][\\p{L}\\p{N}]+)*") else { return text }
+        let tokens = re.matches(in: text, range: NSRange(location: 0, length: ns.length)).map(\.range)
+        guard !tokens.isEmpty else { return text }
+        var out = ""
+        var cursor = 0
+        var i = 0
+        while i < tokens.count {
+            let r = tokens[i]
+            // JOINED: longest run first.
+            var joined: (count: Int, term: String)?
+            for n in stride(from: 3, through: 2, by: -1) where i + n <= tokens.count {
+                let run = tokens[i..<(i + n)]
+                let spaced = zip(run, run.dropFirst()).allSatisfy { a, b in
+                    ns.substring(with: NSRange(location: a.upperBound, length: b.location - a.upperBound)) == " "
+                }
+                guard spaced else { continue }
+                let key = run.map { letters(ns.substring(with: $0)) }.joined()
+                if let term = joinable[key] { joined = (n, term); break }
+            }
+            if var j = joined {
+                // The word vote can keep BOTH engines' forms side by side
+                // ("Kim Kim KimKim" — one engine split the name, the other
+                // did not). The spelled-out copy is the same word: keep one.
+                let after = i + j.count
+                if after < tokens.count,
+                   ns.substring(with: tokens[after]) == j.term,
+                   ns.substring(with: NSRange(location: tokens[after - 1].upperBound,
+                                              length: tokens[after].location - tokens[after - 1].upperBound)) == " " {
+                    j.count += 1
+                }
+                let last = tokens[i + j.count - 1]
+                out += ns.substring(with: NSRange(location: cursor, length: r.location - cursor)) + j.term
+                cursor = last.upperBound
+                AppLog.info("vocab", "joined \"\(ns.substring(with: NSRange(location: r.location, length: last.upperBound - r.location)))\" → \(j.term)")
+                i += j.count
+                continue
+            }
+            let word = ns.substring(with: r)
+            if let fix = nearMissTerm(for: word, targets: nearTargets, termSet: termSet, isDictionaryWord: isDictionaryWord) {
+                out += ns.substring(with: NSRange(location: cursor, length: r.location - cursor)) + fix
+                cursor = r.upperBound
+                AppLog.info("vocab", "respelled \"\(word)\" → \(fix)")
+            }
+            i += 1
+        }
+        out += ns.substring(from: cursor)
+        return out
+    }
+
+    private static func nearMissTerm(
+        for word: String, targets: [String], termSet: Set<String>,
+        isDictionaryWord: (String) -> Bool
+    ) -> String? {
+        guard word.count >= 4, word.first?.isUppercase == true,
+              !termSet.contains(word.lowercased()) else { return nil }
+        let cyrillic = { (s: String) in s.unicodeScalars.contains { (0x400...0x52F).contains($0.value) } }
+        let key = Array(MeetingBriefBuilder.skeleton(word))
+        guard key.count >= 4 else { return nil }
+        let lower = Array(word.lowercased())
+        var best: [String] = []
+        var bestDistance = Int.max
+        for t in targets where cyrillic(t) == cyrillic(word) {
+            let tl = Array(t.lowercased())
+            guard tl.first == lower.first else { continue }
+            // An inflection or possessive of the term is the term, used right.
+            let shared = zip(lower, tl).prefix { $0 == $1 }.count
+            guard shared < tl.count - 2 else { continue }
+            let tk = Array(MeetingBriefBuilder.skeleton(t))
+            guard tk.count == key.count else { continue }
+            let d = MeetingBriefBuilder.editDistance(key, tk)
+            guard d <= 1 else { continue }
+            // Break skeleton ties on the spelled letters.
+            let spelled = MeetingBriefBuilder.editDistance(Array(word.lowercased()), Array(t.lowercased()))
+            let score = d * 100 + spelled
+            if score < bestDistance { bestDistance = score; best = [t] }
+            else if score == bestDistance { best.append(t) }
+        }
+        guard best.count == 1, let term = best.first, term != word else { return nil }
+        // Last, because it is the slow check (system spell checker).
+        return isDictionaryWord(word) ? nil : term
+    }
 }

@@ -37,6 +37,13 @@ struct ScoredWord: Sendable {
     var confidence: Float
 }
 
+/// A scored word with its time in the audio it was read from (seconds).
+struct TimedWord: Sendable {
+    var word: ScoredWord
+    var start: Double
+    var end: Double
+}
+
 struct DetailedTranscription: Sendable {
     let text: String
     let words: [ScoredWord]

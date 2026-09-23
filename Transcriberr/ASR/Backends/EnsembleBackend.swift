@@ -240,9 +240,78 @@ actor EnsembleBackend: ASRBackend {
     /// First pass of max-quality Super: transcribe A∥B and VOTE-merge only —
     /// no inline Gemma. Disputed chunks (low agreement) are arbitrated later
     /// by the runner with context from BOTH sides of the finished transcript.
+    // MARK: - Long-form Whisper
+
+    /// Where a chunk sits: which track (0 = system audio or the whole file,
+    /// 1 = the echo-cancelled mic) and its span on the shared timeline.
+    struct ChunkWindow: Sendable {
+        let track: Int
+        let start: Double
+        let end: Double
+    }
+
+    /// Whisper's reading of each whole track, words timed on the timeline.
+    private var longForm: [Int: [TimedWord]] = [:]
+
+    /// On for every language but English. Measured on the reference slices
+    /// with everything else equal: Ukrainian 23.0 → 21.5% and 19.7 → 15.5%
+    /// WER, English 8.9 → 9.7% and 5.3 → 5.9% (Whisper alone showed the same
+    /// split: no gain in English). `ensemble.whisperLongForm` overrides.
+    static func longFormEnabled(languages: Set<String>) -> Bool {
+        if let forced = UserDefaults.standard.object(forKey: "ensemble.whisperLongForm") as? Bool { return forced }
+        return !languages.isEmpty && !languages.contains { $0.lowercased() == "english" }
+    }
+
+    /// On a 28 s chunk WhisperKit decodes one 30 s window, then seeks to the
+    /// last segment it finished and decodes the few seconds left as a
+    /// SECOND window padded with ~26 s of zeros: the words before every cut
+    /// are read from a scrap with nothing after it, and the stock lines over
+    /// that padding are the phantoms timed at 39-56 s in the log. Over a
+    /// whole track the same loop always has real audio ahead. Measured on
+    /// Ukrainian reference slices (system track, Whisper alone): 25.5% →
+    /// 17.0% and 17.1% → 11.5% WER; English unchanged (9.1/9.4, 4.8/4.8).
+    /// Only the two-pass (max quality) path uses it.
+    func prepareLongForm(tracks: [(id: Int, samples: [Float])], languages: Set<String>) async {
+        longForm = [:]
+        guard Self.longFormEnabled(languages: languages) else { return }
+        let whisper = (kindA == .whisper ? engineA : kindB == .whisper ? engineB : nil) as? WhisperBackend
+        guard let whisper else { return }
+        let t0 = Date()
+        await withTaskGroup(of: (Int, [TimedWord]?).self) { group in
+            for t in tracks {
+                group.addTask { (t.id, try? await whisper.transcribeTimed(samples: t.samples, languages: languages).words) }
+            }
+            for await (id, words) in group {
+                if let words { longForm[id] = words }
+            }
+        }
+        AppLog.info("ensemble", String(format: "long-form Whisper: %d tracks, %d words, %.1fs",
+                                       longForm.count, longForm.values.map(\.count).reduce(0, +),
+                                       Date().timeIntervalSince(t0)))
+    }
+
+    /// The long-form words whose midpoint falls inside the window.
+    private func longFormReading(_ window: ChunkWindow?) -> DetailedTranscription? {
+        guard let window, let words = longForm[window.track] else { return nil }
+        let inside = words.filter {
+            let mid = ($0.start + $0.end) / 2
+            return mid >= window.start && mid < window.end
+        }.map(\.word)
+        return DetailedTranscription(text: Self.joinSurfaces(inside.map(\.surface)), words: inside)
+    }
+
+    private func detailed(
+        _ engine: DetailedTranscribing, kind: BackendFactory.Kind,
+        samples: [Float], languages: Set<String>, window: ChunkWindow?
+    ) async throws -> DetailedTranscription {
+        if kind == .whisper, let cached = longFormReading(window) { return cached }
+        return try await engine.transcribeDetailed(samples: samples, languages: languages)
+    }
+
     func transcribeChunkRich(
         samples: [Float],
-        languages: Set<String>
+        languages: Set<String>,
+        window: ChunkWindow? = nil
     ) async throws -> RichChunk {
         guard isReady, let engineA, let engineB else {
             throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
@@ -254,8 +323,8 @@ actor EnsembleBackend: ASRBackend {
             return try await transcribeChunkSolo(samples: samples, languages: languages)
         }
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
-            async let taskA = pa.transcribeDetailed(samples: samples, languages: languages)
-            async let taskB = pb.transcribeDetailed(samples: samples, languages: languages)
+            async let taskA = detailed(pa, kind: kindA, samples: samples, languages: languages, window: window)
+            async let taskB = detailed(pb, kind: kindB, samples: samples, languages: languages, window: window)
             if let a = try? await taskA, let b = try? await taskB {
                 if let ruled = TranscriptHygiene.phantomResolution(a.text, b.text) {
                     return RichChunk(text: Self.logPhantom(a.text, b.text, ruled), agreement: 1, textA: "", textB: "")
@@ -444,7 +513,7 @@ actor EnsembleBackend: ASRBackend {
         let insertionFloor: Float = 0.55
         var i = n, j = m
         // source: 0 = aligned pair, 1 = only engine A had it, 2 = only engine B
-        var reversed: [(surface: String, source: Int)] = []
+        var reversed: [(surface: String, source: Int, norm: String)] = []
         while i > 0 || j > 0 {
             if i > 0, j > 0,
                dp[i][j] == dp[i-1][j-1] + (a[i-1].norm == b[j-1].norm ? 0 : 1)
@@ -458,11 +527,11 @@ actor EnsembleBackend: ASRBackend {
                     // With no trusted engine (equal priors) it stays what it
                     // was: the more confident reading.
                     let takeA = priorA != priorB ? priorA > priorB : wa.confidence >= wb.confidence
-                    reversed.append((takeA ? wa.surface : wb.surface, 0))
+                    reversed.append((takeA ? wa.surface : wb.surface, 0, wa.norm))
                 } else if vocabulary.contains(wa.norm) != vocabulary.contains(wb.norm) {
                     // One reading is a spelling the user has declared
                     // authoritative — that settles it.
-                    reversed.append((vocabulary.contains(wa.norm) ? wa.surface : wb.surface, 0))
+                    reversed.append(vocabulary.contains(wa.norm) ? (wa.surface, 0, wa.norm) : (wb.surface, 0, wb.norm))
                 } else if priorA != priorB,
                           Self.isLatinWord(priorA > priorB ? wa.norm : wb.norm),
                           !Self.isLatinWord(priorA > priorB ? wb.norm : wa.norm) {
@@ -472,18 +541,18 @@ actor EnsembleBackend: ASRBackend {
                     // phonetic guess ("Долин місяць"). The weak engine cannot
                     // emit Latin at all in this language, so its confidence
                     // says nothing here.
-                    reversed.append((priorA > priorB ? wa.surface : wb.surface, 0))
+                    reversed.append(priorA > priorB ? (wa.surface, 0, wa.norm) : (wb.surface, 0, wb.norm))
                 } else {
                     // Substitution → higher prior-weighted confidence wins.
-                    reversed.append((wa.confidence * priorA >= wb.confidence * priorB
-                                     ? wa.surface : wb.surface, 0))
+                    reversed.append(wa.confidence * priorA >= wb.confidence * priorB
+                                    ? (wa.surface, 0, wa.norm) : (wb.surface, 0, wb.norm))
                 }
                 i -= 1; j -= 1
             } else if i > 0, dp[i][j] == dp[i-1][j] + 1 {
-                if a[i-1].confidence >= insertionFloor { reversed.append((a[i-1].surface, 1)) }
+                if a[i-1].confidence >= insertionFloor { reversed.append((a[i-1].surface, 1, a[i-1].norm)) }
                 i -= 1
             } else {
-                if b[j-1].confidence >= insertionFloor { reversed.append((b[j-1].surface, 2)) }
+                if b[j-1].confidence >= insertionFloor { reversed.append((b[j-1].surface, 2, b[j-1].norm)) }
                 j -= 1
             }
         }
@@ -502,7 +571,69 @@ actor EnsembleBackend: ASRBackend {
                 if end - k < 3 { words.removeSubrange(k..<end) } else { k = end }
             }
         }
-        return joinSurfaces(words.map(\.surface))
+        return joinSurfaces(dropEchoInsertions(words).map(\.surface))
+    }
+
+    /// With equal priors (English: Whisper + Parakeet) every word only one
+    /// engine heard survives the vote, and on the reference slices those
+    /// were mostly the SAME word again: a stutter the other engine cleaned
+    /// up ("i was i was", "the the"), or one engine's split of a word the
+    /// other wrote whole ("Kim Kim KimKim", "cheaper lm LLM", "R ROI"). Super
+    /// scored WORSE than Whisper alone on both English slices because of
+    /// them (12.5% vs 10.6%, 8.1% vs 5.8% WER). Drop a one-engine word that
+    ///   - repeats its neighbour (or, as a run, the phrase beside it), or
+    ///   - is a ≤ 3-letter piece at the start or end of its neighbour, or
+    ///   - with the one-engine words next to it spells its neighbour.
+    /// A real word only one engine caught ("Sorry for interrupting") is
+    /// none of these and stays.
+    /// Short words that really do stand next to a longer one sharing their
+    /// letters ("on one side", "to today's") — never read as a fragment.
+    static let functionWords: Set<String> = [
+        "a", "i", "an", "in", "on", "to", "is", "it", "at", "as", "be", "we", "he", "me", "my", "of",
+        "or", "so", "do", "no", "go", "up", "us", "if", "the", "and", "for", "you", "are", "not", "but",
+        "all", "one", "can", "had", "was", "his", "her", "its", "our", "out", "too", "two", "how", "who",
+        "why", "new", "now", "way", "get", "got", "has", "did", "any", "few", "own", "see", "use",
+        "і", "й", "в", "у", "з", "на", "та", "а", "що", "це", "не", "як", "до", "за", "по", "ти", "я",
+        "ми", "ви", "він", "їх", "там", "так", "ще", "вже", "від", "без", "при", "про",
+    ]
+
+    static func dropEchoInsertions(
+        _ words: [(surface: String, source: Int, norm: String)]
+    ) -> [(surface: String, source: Int, norm: String)] {
+        guard words.count > 1 else { return words }
+        var drop = Set<Int>()
+        var k = 0
+        while k < words.count {
+            guard words[k].source != 0 else { k += 1; continue }
+            var end = k
+            while end < words.count, words[end].source == words[k].source { end += 1 }
+            let run = Array(k..<end)
+            let neighbours = [k - 1, end].filter { words.indices.contains($0) }.map { words[$0].norm }
+            let runNorms = run.map { words[$0].norm }
+            let joined = runNorms.joined()
+            // A repeated phrase: the run says again what sits right before
+            // or right after it ("I was I was sure").
+            let r = run.count
+            let before = k - r >= 0 ? words[(k - r)..<k].map(\.norm) : []
+            let after = end + r <= words.count ? words[end..<(end + r)].map(\.norm) : []
+            if r > 1, before == runNorms || after == runNorms || neighbours.contains(joined) {
+                drop.formUnion(run)
+            } else {
+                for idx in run {
+                    let w = words[idx].norm
+                    guard !w.isEmpty else { continue }
+                    let near = [idx - 1, idx + 1].filter { words.indices.contains($0) && !drop.contains($0) }
+                        .map { words[$0].norm }
+                    if near.contains(w)
+                        || (w.count <= 3 && !Self.functionWords.contains(w)
+                            && near.contains { $0.count > w.count && ($0.hasPrefix(w) || $0.hasSuffix(w)) }) {
+                        drop.insert(idx)
+                    }
+                }
+            }
+            k = end
+        }
+        return words.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
     }
 
     /// Join word surfaces defensively: trim stray engine whitespace (double

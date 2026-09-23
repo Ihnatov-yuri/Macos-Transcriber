@@ -127,3 +127,25 @@ word loops, script drift — next to the same counts for the transcript the app
 stored for that time window, plus an order-insensitive content-retention
 figure. Slices and outputs go to `$TMPDIR`; recordings are private and never
 belong in the repo.
+
+### Reference set (word error rate)
+
+Retention against the stored transcript only says a build matches the old
+one. To say it is *right*, score it against checked text:
+
+```
+scripts/eval-set.sh <label> [backend] [engineA] [engineB] [slice ...]
+```
+
+The set lives outside the repo, in `~/Documents/Transcriberr-eval` (override
+with `TRANSCRIBERR_EVAL`): 5-minute slices of real split-track meetings, two
+English and two Ukrainian, each with `ref.mic.txt` (what you said) and
+`ref.sys.txt` (what everyone else said) in clean verbatim — no fillers,
+stutters or false starts. Each slice runs through the full pipeline, `ME`
+lines are scored against the mic reference and the rest against the system
+reference, so a speaker mix-up costs words on both sides. Results stay in
+`<slice>/runs/<label>/` for comparing builds; `scripts/eval_wer.py --show`
+lists every error. Two runs of the same build agree to ~0.2 WER points.
+The references were written by adjudicating four engine readings (Whisper
+and Parakeet, chunked and long-form) with context, not by listening — a
+word all four engines got wrong can still be wrong in the reference.

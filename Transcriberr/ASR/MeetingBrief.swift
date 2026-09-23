@@ -267,7 +267,7 @@ enum MeetingBriefBuilder {
     ///     the user's authoritative spellings.
     static func acceptedFixes(
         _ fixes: [MeetingBrief.Fix], transcript: String, vocabulary: String, terms: [String] = [],
-        isDictionaryWord: (String) -> Bool = MeetingBriefBuilder.isDictionaryWord
+        isDictionaryWord: (String) -> Bool = { MeetingBriefBuilder.isDictionaryWord($0) }
     ) -> [MeetingBrief.Fix] {
         let attested = Set(terms.map { $0.lowercased() })
         let vocab = Set(vocabulary.split(whereSeparator: { $0 == "," || $0.isNewline })
@@ -309,15 +309,18 @@ enum MeetingBriefBuilder {
     }()
 
     /// Known to the system spell checker in any of the app's languages.
-    static func isDictionaryWord(_ word: String) -> Bool {
+    /// Lowercased by default; `asWritten` also accepts proper nouns, which
+    /// the checker only knows capitalized ("indian" fails, "Indian" passes).
+    static func isDictionaryWord(_ word: String, asWritten: Bool = false) -> Bool {
         // NSSpellChecker is AppKit: main thread only. Callers sit on an
         // actor or a detached task; the main thread is never blocked on
         // them (they are awaited), so a sync hop cannot deadlock.
         if !Thread.isMainThread {
-            return DispatchQueue.main.sync { isDictionaryWord(word) }
+            return DispatchQueue.main.sync { isDictionaryWord(word, asWritten: asWritten) }
         }
+        if asWritten, word != word.lowercased(), isDictionaryWord(word) { return true }
         let checker = NSSpellChecker.shared
-        let w = word.lowercased()
+        let w = asWritten ? word : word.lowercased()
         // A checker passes any word outside its own script as "no error",
         // so only ask the dictionaries that could know the word.
         let cyrillic = w.unicodeScalars.contains { (0x400...0x52F).contains($0.value) }
@@ -393,7 +396,7 @@ enum MeetingBriefBuilder {
         return d <= max(1, longest / 4) && d < longest
     }
 
-    private static func editDistance(_ a: [Character], _ b: [Character]) -> Int {
+    static func editDistance(_ a: [Character], _ b: [Character]) -> Int {
         if a.isEmpty { return b.count }
         if b.isEmpty { return a.count }
         var prev = Array(0...b.count)

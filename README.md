@@ -20,6 +20,10 @@ Companion to [Transcriber-Android](https://github.com/Ihnatov-yuri) — same sid
 | **Super** | Any two of the above + Gemma arbitration | mixed | Maximum quality: word-confidence ROVER merge; disputed chunks arbitrated in a second pass with two-sided transcript context + vocabulary. Silence consensus drops a line only one engine "heard"; agreed words keep the trusted engine's casing and punctuation; vocabulary spellings settle a disputed word; the English-only engine is swapped out of a non-English run. Before arbitrating, Gemma reads the whole transcript in 3k-token sections and hands every ruling a recording brief (topic, people, names as spelled). Both engines and three chunks run at once — only Gemma holds the inference gate alone — and silent chunks (the quiet track of a split-track meeting) skip both engines |
 | Cloud (optional) | OpenAI / Anthropic / Gemini | API | Off by default; requires keys |
 
+How Super turns two engines and a referee into one transcript, stage by stage: **[docs/super-mode.md](docs/super-mode.md)**.
+
+[![Super architecture](docs/img/super.svg)](docs/super-mode.md)
+
 **Diarization** is always available on every engine: FluidAudio pyannote (community-1) CoreML pre-pass, word-level speaker attribution via token timings, speaker-turn coalescing (gap tunable in Settings), and automatic speaker-name inference from the conversation itself ("Hi, I'm Nicole…"). Names you assign persist across re-runs and versions.
 
 ## Meeting mode

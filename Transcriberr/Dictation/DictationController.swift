@@ -1034,9 +1034,8 @@ final class DictationController: @unchecked Sendable {
         try repository.save(recording)
         let segment = Segment(startSeconds: 0, endSeconds: seconds, text: text)
         try repository.appendSegments([segment], to: recording)
-        let folder = try repository.folders().first {
-            $0.name.caseInsensitiveCompare("Dictation") == .orderedSame
-        } ?? (try repository.createFolder(named: "Dictation"))
+        let folder = try repository.folders().first(where: \.isDictation)
+            ?? (try repository.createFolder(named: Folder.dictationName))
         try repository.move(recording, to: folder)
         try repository.snapshotVersion(
             of: recording, engineId: settings.engine.rawValue, engineLabel: versionLabel)

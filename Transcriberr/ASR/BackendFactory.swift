@@ -156,11 +156,10 @@ final class BackendFactory: @unchecked Sendable {
     /// Two reasons this has to happen when the queue goes idle. The bundle is
     /// 3-5 GB of resident memory that nothing else was ever going to reclaim
     /// — `releaseLocalBackends` has no call site at all. And LiteRT's
-    /// presence latches `InferenceGate.litertActive`, which serializes EVERY
-    /// engine's inference process-wide; leaving it latched turned the
-    /// documented three-chunks-in-flight pipeline into a single file for the
-    /// rest of the session, for Parakeet runs and live captions that never
-    /// touched Gemma at all.
+    /// presence latches `InferenceGate.litertActive`; since the gate became
+    /// a readers-writer lock that no longer serializes the other engines
+    /// against each other, but it still costs every inference call an actor
+    /// hop for the rest of the session.
     /// Idle housekeeping: skip while a preset, auto-title or dictation polish
     /// is generating. Returns false when it skipped.
     func releaseLiteRTIfIdle() async -> Bool {

@@ -47,12 +47,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
     /// AppContainer points this at `BackendFactory.releaseLiteRT`.
     ///
     /// Why the queue owns this: auto-titling a run loads the LiteRT text
-    /// engine, and LiteRT's mere presence latches `InferenceGate`, which
-    /// serializes inference for EVERY engine process-wide. Nothing ever
-    /// released it — `releaseLocalBackends` has no call site — so one
-    /// auto-titled run silently collapsed the three-chunks-in-flight
-    /// pipeline to one for the rest of the session, on later runs that never
-    /// touched Gemma at all. The delay is long enough that back-to-back runs
+    /// engine: 3-5 GB resident, and it latches `InferenceGate`. Nothing
+    /// ever released it — `releaseLocalBackends` has no call site. (Before
+    /// the gate became a readers-writer lock, that latch collapsed the
+    /// three-chunks-in-flight pipeline to one for the rest of the session.)
+    /// The delay is long enough that back-to-back runs
     /// and a preset fired straight after a run keep the engine warm.
     var onIdle: (() async -> Bool)?
     /// Suspends until nothing is rewriting this recording's audio files (mix

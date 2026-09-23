@@ -588,7 +588,13 @@ final class TranscriptionRunner: @unchecked Sendable {
         }
 
         // ---------- second pass on low-confidence chunks ----------
-        if !lowConfidenceChunks.isEmpty {
+        // Not for Super: the refine re-run hands the chunk neighbor context,
+        // which acoustic sub-engines ignore, so it recomputes the same text
+        // (measured: 10 of 10 re-runs "did not improve 0.60 → 0.60", ~25 s
+        // of a run). Super's second opinion is the arbitration pass above.
+        if params.backend == .ensemble, !lowConfidenceChunks.isEmpty {
+            AppLog.info("runner", "skipping refinement of \(lowConfidenceChunks.count) chunks — Super re-runs are deterministic")
+        } else if !lowConfidenceChunks.isEmpty {
             allSegments = try await refineLowConfidence(
                 lowConfidenceChunks,
                 allSegments: allSegments,

@@ -18,12 +18,21 @@ import Accelerate
 ///     intelligible, and an ASR will happily transcribe that as the user.
 enum EchoCanceller {
     static let taps = 1024                 // 64 ms echo tail @16 kHz
+    /// NLMS step. 0.5 diverged under heavy crosstalk — measured on a
+    /// Ukrainian split-track meeting: the filter's output came out 7.3 dB
+    /// LOUDER than the raw mic, so the suppressor below, fed a garbage echo
+    /// estimate, muted the user's own words (43 of 404 lost to one slice).
+    /// 0.1: that meeting +9.9 dB, the English ones 4.7 / 13.8 dB (was 4.8 / 11.2).
+    static let stepSize: Float = 0.1
     static let maxDelaySamples = 4000      // up to 250 ms output latency + air
     static let delayGuard = 256            // 16 ms of slack ahead of the estimate
     static let warmupSamples = 16_000 * 5  // far-end audio before doubletalk gating
     static let minCorrelation: Float = 0.1 // below this there is no echo path
     static let nlpFrame = 320              // 20 ms suppressor decision window
-    static let nlpNearEndRatio: Float = 3  // residual/predicted echo meaning "user is here too"
+    // Residual/predicted echo meaning "user is here too". Was 3: with the
+    // step fixed, 1.5 lost 12 of the user's words across the reference
+    // slices where 3 lost 21 (and 0.5-step + 3 lost 58), for ~the same echo.
+    static let nlpNearEndRatio: Float = 1.5
     static let nlpFloor: Float = 0        // echo-only frames go to silence
 
     /// Start of the `span`-sample stretch of `ref` carrying the most energy.
@@ -139,7 +148,7 @@ enum EchoCanceller {
         if head.count < 2 * taps {
             head.append(contentsOf: repeatElement(0, count: 2 * taps - head.count))
         }
-        let mu: Float = 0.5
+        let mu = stepSize
         // The doubletalk test only applies once the filter has seen
         // `warmupSamples` of far-end audio. It compares the residual against
         // the filter's OWN prediction, so before convergence it can't tell

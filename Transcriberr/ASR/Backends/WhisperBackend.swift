@@ -63,10 +63,22 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         samples: [Float],
         languages: Set<String>
     ) async throws -> DetailedTranscription {
+        let timed = try await transcribeTimed(samples: samples, languages: languages)
+        return DetailedTranscription(text: timed.text, words: timed.words.map(\.word))
+    }
+
+    /// The same reading with each word's time in `samples` (seconds). Given
+    /// a whole track, WhisperKit runs its own long-form loop: every 30 s
+    /// window starts at the last segment it finished, so no word is ever
+    /// read from a cut-off scrap (see `EnsembleBackend.prepareLongForm`).
+    func transcribeTimed(
+        samples: [Float],
+        languages: Set<String>
+    ) async throws -> (text: String, words: [TimedWord]) {
         guard isReady, let pipe else {
             throw ASRError.modelLoadFailed(reason: "Whisper backend not loaded")
         }
-        guard samples.count >= 8_000 else { return DetailedTranscription(text: "", words: []) }
+        guard samples.count >= 8_000 else { return ("", []) }
 
         var options = DecodingOptions()
         options.task = .transcribe
@@ -89,7 +101,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
 
         let isUkrainian = languages.count == 1 && languages.first?.lowercased() == "ukrainian"
         let chunkSeconds = Double(samples.count) / 16_000
-        var words: [ScoredWord] = []
+        var words: [TimedWord] = []
         var keptTexts: [String] = []
         for result in results {
             for segment in result.segments {
@@ -149,18 +161,21 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                     // "більш-менш") and a clock colon ("10:00") arrive as
                     // separate fragments "'ятаєш" / "-менш" / ":00".
                     // Re-attach them, or the merge join renders "більш -менш".
-                    if EnsembleBackend.attachesToPrevious(surface, previous: words.last?.surface) {
+                    if EnsembleBackend.attachesToPrevious(surface, previous: words.last?.word.surface) {
                         let i = words.count - 1
-                        words[i].surface += surface
-                        words[i].norm = words[i].surface.lowercased()
+                        words[i].word.surface += surface
+                        words[i].word.norm = words[i].word.surface.lowercased()
                             .filter { $0.isLetter || $0.isNumber }
-                        words[i].confidence = min(words[i].confidence, w.probability)
+                        words[i].word.confidence = min(words[i].word.confidence, w.probability)
+                        words[i].end = Double(w.end)
                         continue
                     }
-                    words.append(ScoredWord(
-                        surface: surface,
-                        norm: surface.lowercased().filter { $0.isLetter || $0.isNumber },
-                        confidence: w.probability
+                    words.append(TimedWord(
+                        word: ScoredWord(
+                            surface: surface,
+                            norm: surface.lowercased().filter { $0.isLetter || $0.isNumber },
+                            confidence: w.probability),
+                        start: Double(w.start), end: Double(w.end)
                     ))
                 }
             }
@@ -170,7 +185,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             format: "chunk %.1fs → %d chars, %d scored words",
             Double(samples.count) / 16_000.0, text.count, words.count
         ))
-        return DetailedTranscription(text: text, words: words)
+        return (text, words)
     }
 
     // MARK: - Text generation (not supported — Gemma's job)

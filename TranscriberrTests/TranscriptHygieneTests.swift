@@ -184,4 +184,68 @@ final class TranscriptHygieneTests: XCTestCase {
         pair = EnsembleBackend.resolvePair(.parakeet, .parakeetV2, languages: ["English"])
         XCTAssertEqual(pair.0, .parakeet); XCTAssertEqual(pair.1, .parakeetV2)
     }
+
+    // MARK: - Vocabulary spellings
+
+    /// A stand-in dictionary: the real one is the system spell checker.
+    private func vocab(_ text: String, _ terms: [String] = ["KimKim", "WebRTC", "MasterCard", "Kim",
+                                                          "Blits", "Blitsy", "Victor", "Нідерланди"],
+                       words: Set<String> = ["Victoria", "Indian", "LinkedIn", "Нідерландах"]) -> String {
+        TranscriptHygiene.applyVocabulary(text, terms: terms, isDictionaryWord: { words.contains($0) })
+    }
+
+    func testJoinsSplitTerms() {
+        XCTAssertEqual(vocab("I worked at Kim Kim for years."), "I worked at KimKim for years.")
+        XCTAssertEqual(vocab("we use Web RTC, and master card."), "we use WebRTC, and MasterCard.")
+        // Both engines' forms kept side by side by the vote: one copy.
+        XCTAssertEqual(vocab("at Kim Kim KimKim what I"), "at KimKim what I")
+        // Punctuation between the parts is two words, not a split name.
+        XCTAssertEqual(vocab("Kim, Kim, listen"), "Kim, Kim, listen")
+    }
+
+    func testRespellsNearMissOfCoinedTerm() {
+        XCTAssertEqual(vocab("at KymKym and Kinkim"), "at KimKim and KimKim")
+    }
+
+    func testLeavesWordsNamesAndInflectionsAlone() {
+        // Differs from a term only in its ending: read as a form of it.
+        XCTAssertEqual(vocab("the Blitzy team"), "the Blitzy team")
+        // Real words and other people's names.
+        XCTAssertEqual(vocab("Victoria and an Indian team on LinkedIn"),
+                       "Victoria and an Indian team on LinkedIn")
+        // The term's own case ending and possessive.
+        XCTAssertEqual(vocab("живу в Нідерландах"), "живу в Нідерландах")
+        XCTAssertEqual(vocab("MasterCard's rules"), "MasterCard's rules")
+        // Lowercase words are never respelled.
+        XCTAssertEqual(vocab("kimkom went"), "kimkom went")
+    }
+
+    // MARK: - One-engine duplicates in the vote
+
+    private func w(_ s: String, _ c: Float = 0.9) -> ScoredWord {
+        ScoredWord(surface: s, norm: s.lowercased().filter { $0.isLetter || $0.isNumber }, confidence: c)
+    }
+
+    func testVoteDropsStuttersAndSplitPieces() {
+        // Parakeet keeps the stutter Whisper cleaned up.
+        XCTAssertEqual(EnsembleBackend.roverMerge(["I", "was", "sure"].map { w($0) },
+                                                  ["I", "was", "I", "was", "sure"].map { w($0) }),
+                       "I was sure")
+        // One engine's split of the other's word.
+        XCTAssertEqual(EnsembleBackend.roverMerge(["cheaper", "LLM"].map { w($0) },
+                                                  ["cheaper", "lm", "LLM"].map { w($0) }),
+                       "cheaper LLM")
+        XCTAssertEqual(EnsembleBackend.roverMerge(["that", "ROI"].map { w($0) },
+                                                  ["that", "R", "ROI"].map { w($0) }),
+                       "that ROI")
+    }
+
+    func testVoteKeepsRealOneEngineWords() {
+        XCTAssertEqual(EnsembleBackend.roverMerge(["for", "interrupting"].map { w($0) },
+                                                  ["Sorry", "for", "interrupting"].map { w($0) }),
+                       "Sorry for interrupting")
+        XCTAssertEqual(EnsembleBackend.roverMerge(["one", "side"].map { w($0) },
+                                                  ["on", "one", "side"].map { w($0) }),
+                       "on one side")
+    }
 }

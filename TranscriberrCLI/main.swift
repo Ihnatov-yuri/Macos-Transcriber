@@ -27,6 +27,9 @@ func usage() {
       transcriberrcli decode <file>        decode to 16k mono Float32 and chunk it
       transcriberrcli noisesup <file>      run the offline noise-suppression pass
       transcriberrcli transcribe <file>    Parakeet v3 ASR on any audio file (downloads models on first run)
+      transcriberrcli vocab <file.txt> [Language]
+                                            dry-run the vocabulary spelling pass on a transcript
+                                            (app vocabulary; prints every change)
       transcriberrcli kb <subcommand>      query the knowledge base (read-only) — `kb help` for details
       transcriberrcli mcp                  serve the knowledge base over MCP (stdio, for LLM clients)
       transcriberrcli restore-backups [--dry-run]
@@ -446,6 +449,13 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
         UserDefaults.standard.set(engineA ?? "whisper-large-v3", forKey: "ensemble.engineA")
         UserDefaults.standard.set(engineB ?? "gemma4-litert", forKey: "ensemble.engineB")
         UserDefaults.standard.set(true, forKey: "ui.superMaxQuality")
+        // A/B switch for scripts/eval-set.sh: TRANSCRIBERR_LONGFORM=1/0
+        // forces long-form Whisper on/off; unset = the language default.
+        switch ProcessInfo.processInfo.environment["TRANSCRIBERR_LONGFORM"] {
+        case "1": UserDefaults.standard.set(true, forKey: "ensemble.whisperLongForm")
+        case "0": UserDefaults.standard.set(false, forKey: "ensemble.whisperLongForm")
+        default: UserDefaults.standard.removeObject(forKey: "ensemble.whisperLongForm")
+        }
     }
     // The CLI has its own defaults domain; borrow the app's vocabulary so a
     // headless run biases and votes exactly as the app would.
@@ -471,7 +481,7 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
                 print("### DONE \(String(format: "%.0f", Date().timeIntervalSince(t0)))s \(segs.count) segments")
                 for s in segs {
                     let k = s.speakerName ?? s.speakerKey ?? "?"
-                    print("\(String(format: "%.1f", s.startSeconds))\t\(k)\t\(s.text)")
+                    print("\(String(format: "%.1f", s.startSeconds))\t\(k)\t\(s.text)\t\(s.speakerKey ?? "")")
                 }
             default: break
             }
@@ -483,9 +493,31 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     }
 }
 
+/// Dry run of `TranscriptHygiene.applyVocabulary` over a text file, line by
+/// line, with the app's vocabulary — every changed line is printed.
+@MainActor
+func cmdVocab(path: String, language: String) -> Int32 {
+    let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else { print("cannot read \(path)"); return 1 }
+    if let app = UserDefaults(suiteName: "nl.ihnatov.Transcriberr") {
+        for key in ["prompt.vocabulary", "prompt.vocabulary.byLang"] {
+            if let v = app.string(forKey: key) { UserDefaults.standard.set(v, forKey: key) }
+        }
+    }
+    let terms = TranscriptHygiene.vocabularyTerms(languages: [language])
+    var changed = 0
+    for line in text.components(separatedBy: "\n") {
+        let fixed = TranscriptHygiene.applyVocabulary(line, terms: terms)
+        if fixed != line { changed += 1; print("- \(line)\n+ \(fixed)") }
+    }
+    print("### \(changed) lines changed, \(terms.count) terms")
+    return 0
+}
+
 /// Offline echo-cancellation check over a meeting's track pair.
 @MainActor
 func cmdAEC(base: String) async -> Int32 {
+
     let baseURL = URL(fileURLWithPath: NSString(string: base).expandingTildeInPath)
     guard let mic = AudioCompressor.sidecarURL(for: baseURL, kind: "mic"),
           let sys = AudioCompressor.sidecarURL(for: baseURL, kind: "sys") else {
@@ -554,6 +586,9 @@ func main() async -> Int32 {
             engineA: args.count > 5 ? args[5] : nil,
             engineB: args.count > 6 ? args[6] : nil,
             language: args.count > 7 ? args[7] : "English")
+    case "vocab":
+        guard args.count > 2 else { usage(); return 64 }
+        return cmdVocab(path: args[2], language: args.count > 3 ? args[3] : "English")
     case "brief":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdBrief(path: args[2])

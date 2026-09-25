@@ -15,8 +15,17 @@ enum TranscriptHygiene {
     static func normWords(_ text: String) -> [String] {
         text.lowercased()
             .split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "'" || $0 == "’" || $0 == "ʼ") })
-            .map { $0.filter { $0.isLetter || $0.isNumber } }
+            .map { wordKey($0) }
             .filter { !$0.isEmpty }
+    }
+
+    /// The comparison key of one word: lowercased letters and digits only.
+    /// U+02BC "ʼ", the Ukrainian apostrophe, is a modifier LETTER (Lm) to
+    /// Swift, so a plain letter filter kept it while dropping "'" and "’":
+    /// "памʼятаєш" and "пам'ятаєш" voted, matched echo and trimmed seams as
+    /// two different words. Every engine's `norm` goes through here.
+    static func wordKey<S: StringProtocol>(_ s: S) -> String {
+        s.lowercased().filter { ($0.isLetter || $0.isNumber) && $0 != "ʼ" }
     }
 
     // MARK: - Phantom phrases
@@ -207,7 +216,7 @@ enum TranscriptHygiene {
     ) -> String {
         guard !terms.isEmpty, !text.isEmpty else { return text }
         let termSet = Set(terms.map { $0.lowercased() })
-        func letters(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        func letters(_ s: String) -> String { wordKey(s) }
         // Terms written as one token ("KimKim", "WebRTC", "LLMs4EU").
         var joinable: [String: String] = [:]
         for t in terms where !t.contains(" ") && letters(t).count >= 4 { joinable[letters(t)] = t }

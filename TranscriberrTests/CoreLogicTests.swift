@@ -44,6 +44,17 @@ final class CoreLogicTests: XCTestCase {
             "Дякую за увагу.")
     }
 
+    func testCommaSeparatedAnswersSurvive() {
+        // A yes/no said twice with a comma is an answer, not a stutter —
+        // the same pair the seam trim keeps.
+        XCTAssertEqual(TextDestutter.collapseLine("Так, так, я пам'ятаю."), "Так, так, я пам'ятаю.")
+        XCTAssertEqual(TextDestutter.collapseLine("Ні, ні, не треба."), "Ні, ні, не треба.")
+        XCTAssertEqual(TextDestutter.collapseLine("Nee, nee, dat klopt niet."), "Nee, nee, dat klopt niet.")
+        // Without the comma, or three times over, it still collapses.
+        XCTAssertEqual(TextDestutter.collapseLine("І так так далі."), "І так далі.")
+        XCTAssertEqual(TextDestutter.collapseLine("Так, так, так, так."), "Так, так.")
+    }
+
     // MARK: - Boundary echo trim (the "schedule" crawl)
 
     func testBoundaryCrawlTrimmed() {
@@ -220,7 +231,10 @@ final class CoreLogicTests: XCTestCase {
         var rng: UInt64 = 42
         func rand() -> Float {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
-            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3
+            // Zero-mean: a 0.15 DC offset outweighed the noise ~17:1 in
+            // power, and the filter cancelled a constant at ANY lag — the
+            // test passed with the delay estimate forced wrong.
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
         }
         let n = sr * 12
         var sys = [Float](repeating: 0, count: n)
@@ -255,7 +269,9 @@ final class CoreLogicTests: XCTestCase {
         var rng: UInt64 = 99
         func rand() -> Float {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
-            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3
+            // Zero-mean (see testEchoCancellerHandlesLargeDelay): with a DC
+            // offset the test passed even with the delay estimate wrong.
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
         }
         let lead = sr * 70          // 70 s of nothing, longer than the search span
         let n = lead + sr * 30
@@ -279,7 +295,9 @@ final class CoreLogicTests: XCTestCase {
         var rng: UInt64 = 11
         func rand() -> Float {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
-            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3
+            // Zero-mean (see testEchoCancellerHandlesLargeDelay): with a DC
+            // offset the test passed even with the delay estimate wrong.
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
         }
         let n = sr * 10
         var sys = [Float](repeating: 0, count: n)

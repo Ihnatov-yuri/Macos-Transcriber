@@ -49,6 +49,16 @@ func cmdMigrateAudio(dryRun: Bool) async -> Int32 {
 
     for rec in wavRecordings {
         let mainURL = URL(fileURLWithPath: rec.audioPath)
+        // Two rows can share a base name (call.wav imported next to
+        // call.m4a before imports uniquified on the base): transcoding
+        // would replace the other row's .m4a and the self-heal below would
+        // point both rows at one file. Leave this one as WAV instead.
+        let targetM4A = mainURL.deletingPathExtension().appendingPathExtension("m4a")
+        if let owner = allRecordings.first(where: { $0 !== rec && $0.audioPath == targetM4A.path }) {
+            print("[migrate]   ✗ '\(rec.title)' — \(targetM4A.lastPathComponent) already belongs to '\(owner.title)', skipping (rename one of them first)")
+            failed += 1
+            continue
+        }
         guard FileManager.default.fileExists(atPath: mainURL.path) else {
             // Self-heal: the WAV may already have been migrated (its DB
             // update lost for some reason — e.g. a previous run against a

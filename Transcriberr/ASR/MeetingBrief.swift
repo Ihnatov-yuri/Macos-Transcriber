@@ -295,8 +295,12 @@ enum MeetingBriefBuilder {
             guard capitalized || !fromWords.allSatisfy({ isDictionaryWord(String($0)) })
             else { reject(f, "dictionary word"); continue }
             guard capitalized || hits <= 6 else { reject(f, "common word (\(hits)×)"); continue }
-            // No chains: a replacement that another fix would rewrite again.
-            guard !out.contains(where: { $0.from.lowercased() == f.to.lowercased() }) else { reject(f, "chain"); continue }
+            // No chains, either way round: a replacement that another fix
+            // would rewrite again, or a fix of what another fix just wrote
+            // ("Мьюз → Muse" then "Muse → Mews" turned every Мьюз into Mews).
+            guard !out.contains(where: {
+                $0.from.lowercased() == f.to.lowercased() || $0.to.lowercased() == f.from.lowercased()
+            }) else { reject(f, "chain"); continue }
             out.append(f)
             if out.count == 15 { break }
         }

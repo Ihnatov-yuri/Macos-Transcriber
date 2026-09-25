@@ -81,6 +81,7 @@ final class DictationController: @unchecked Sendable {
         let paneLength: Int       // characters appended to the pane
         let app: String?          // bundle id of the app pasted into
         let at: Date
+        var secret = false         // pasted into a password field
     }
     private var lastInsertion: LastInsertion?
     /// Where the current session's text is going — captured at begin().
@@ -550,7 +551,8 @@ final class DictationController: @unchecked Sendable {
             while let self, !Task.isCancelled, session == self.sessionID, self.phase == .listening {
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 guard session == self.sessionID, self.phase == .listening, self.capture.isRunning,
-                      self.capture.hasVoiceSinceDrain, !self.previewInFlight, self.pendingPasses == 0
+                      self.capture.hasVoiceSinceDrain, !self.previewInFlight, self.pendingPasses == 0,
+                      !self.context.isSecure   // never show a password on screen
                 else { continue }
                 let samples = self.capture.snapshot()
                 guard samples.count >= 16_000 else { continue }
@@ -823,6 +825,11 @@ final class DictationController: @unchecked Sendable {
             text = cleaned
         } catch {
             AppLog.error("dictation", "recognition failed: \(error.localizedDescription)")
+            if case ASRError.chunkTimeout = error {
+                // The abandoned call never releases its gate hold, and left
+                // in place it blocks the next Gemma call forever.
+                await InferenceGate.shared.evictShared(owner: backend.id, olderThan: 30, interactiveOnly: true)
+            }
             lastError = error.localizedDescription
             if final { finalMessage("Recognition failed: \(error.localizedDescription)") }
             return
@@ -833,14 +840,20 @@ final class DictationController: @unchecked Sendable {
             return
         }
 
-        lastText = text
+        // A password field only switched the mode to verbatim, and the
+        // passage then went everywhere a normal one goes: the HUD, name
+        // suggestions, and with history on a Recording row, the JSON
+        // backups and the knowledge base served over MCP. It is pasted and
+        // nothing else.
+        let secret = passage.context.isSecure
+        lastText = secret ? String(repeating: "•", count: min(text.count, 12)) : text
         previewText = ""
         sessionCount += 1
         let outcome = deliver(text, passage: passage)
         if final { deliveredSessions.remove(passage.session) } else { deliveredSessions.insert(passage.session) }
-        suggestNames(from: text)
+        if !secret { suggestNames(from: text) }
 
-        if settings.keepHistory {
+        if settings.keepHistory, !secret {
             saveHistory(samples: raw, seconds: seconds, text: text)
         }
 
@@ -876,7 +889,8 @@ final class DictationController: @unchecked Sendable {
             let before = paneText.count
             paneText = DictationText.join(existing: paneText, new: text)
             lastInsertion = LastInsertion(target: .pane, inserted: text,
-                                          paneLength: paneText.count - before, app: nil, at: Date())
+                                          paneLength: paneText.count - before, app: nil, at: Date(),
+                                          secret: passage.context.isSecure)
             return .paneAppended
         }
         if phase == .transcribing {
@@ -907,7 +921,8 @@ final class DictationController: @unchecked Sendable {
         case .pasted:
             lastInsertion = LastInsertion(
                 target: .frontmostApp, inserted: payload, paneLength: 0,
-                app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, at: Date())
+                app: NSWorkspace.shared.frontmostApplication?.bundleIdentifier, at: Date(),
+                secret: passage.context.isSecure)
             return .pasted
         case .copiedOnly:
             // Nothing is lost: the pane keeps a copy.
@@ -942,7 +957,8 @@ final class DictationController: @unchecked Sendable {
         }
         lastInsertion = nil
         AppLog.info("dictation", "scratch that → \(removed ? "removed \(last.inserted.count) chars" : "not possible")")
-        lastText = removed ? "Scratched: “\(last.inserted.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))…”" : ""
+        let shown = last.secret ? "•••" : String(last.inserted.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        lastText = removed ? "Scratched: “\(shown)…”" : ""
         if final { finalMessage(removed ? "Removed the last passage" : "Couldn't remove the last passage") }
     }
 

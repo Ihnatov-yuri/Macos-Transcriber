@@ -440,17 +440,26 @@ struct LibraryView: View {
         // of a same-named file) would silently replace an EARLIER recording's
         // audio on disk, leaving two library rows playing the same file.
         // Uniquify with " (n)" instead.
+        // Uniqueness is on the BASE name, not the full file name: everything
+        // downstream keys off the base — the .txt/.srt/.json sidecars
+        // TranscriptExporter writes, the .mic/.sys stems, and the WAV→.m4a
+        // transcode (which replaces an existing .m4a) — so importing
+        // call.wav next to call.m4a would have the two rows overwrite each
+        // other's transcript files and, on compression, audio. Compared
+        // case-insensitively because the default APFS volume is.
         var dest = dir.appendingPathComponent(src.lastPathComponent)
         if src.path != dest.path {
             let base = src.deletingPathExtension().lastPathComponent
             let ext = src.pathExtension
+            let takenBases = Set(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+                .map { ($0 as NSString).deletingPathExtension.lowercased() })
+            var name = base
             var n = 2
-            while FileManager.default.fileExists(atPath: dest.path) {
-                var name = "\(base) (\(n))"
-                if !ext.isEmpty { name += ".\(ext)" }
-                dest = dir.appendingPathComponent(name)
+            while takenBases.contains(name.lowercased()) {
+                name = "\(base) (\(n))"
                 n += 1
             }
+            dest = dir.appendingPathComponent(ext.isEmpty ? name : "\(name).\(ext)")
         }
 
         // Picking a file that already sits in Recordings (one "Reveal in

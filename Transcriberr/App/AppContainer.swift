@@ -164,6 +164,10 @@ final class AppContainer: @unchecked Sendable {
             guard let self else { return }
             let healed = self.repository.healEmptyTranscripts()
             if healed > 0 { AppLog.info("app", "restored \(healed) transcript(s) from versions") }
+            // Before resuming runs: a row left pointing at a WAV the
+            // compressor already deleted would be dropped as "audio missing".
+            let repointed = self.repository.healMissingAudioPaths()
+            if repointed > 0 { AppLog.info("app", "repointed \(repointed) recording(s) at their compressed audio") }
             // Not under the unit-test host: it opens the user's real store.
             if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
                 self.jobManager.resumePendingTasks()
@@ -191,12 +195,18 @@ final class AppContainer: @unchecked Sendable {
         segments: [Segment],
         params: TranscriptionRunner.Params
     ) async {
+        // Spawned as its own task after the run: the recording (and its
+        // segments, by cascade) can already be gone by the time this starts.
+        guard !recording.isDeleted, recording.modelContext != nil else { return }
         let sample = segments
             .sorted { $0.startSeconds < $1.startSeconds }
             .prefix(20)
             .map(\.text)
             .joined(separator: " ")
         guard sample.count > 30 else { return }
+        // Captured before the (possibly model-loading) await: a title the
+        // user types while Gemma thinks must win over the generated one.
+        let titleBefore = recording.title
 
         // Titles are text generation — run on the configured text engine.
         let kind = uiPrefs.textEngine.supportsTextGeneration ? uiPrefs.textEngine : .gemmaLiteRT
@@ -213,6 +223,15 @@ final class AppContainer: @unchecked Sendable {
             let trimmed = title
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'.“”"))
+            // The recording may have been deleted while the engine loaded
+            // and generated — writing into a deleted model is a SwiftData
+            // crash (same guard as JobManager's), and so is the backup
+            // rewrite below reading one.
+            guard !recording.isDeleted, recording.modelContext != nil else { return }
+            guard recording.title == titleBefore else {
+                AppLog.info("app", "auto-title skipped — the title changed while it was generated")
+                return
+            }
             if trimmed.count >= 3 && trimmed.count < 90 {
                 recording.title = trimmed
                 try? recording.modelContext?.save()

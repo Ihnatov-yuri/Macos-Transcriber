@@ -67,4 +67,29 @@ final class AudioPlayerControllerTests: XCTestCase {
         XCTAssertTrue(player.isPlaying)
         XCTAssertEqual(player.currentTime, 0, "play from the end replays from the start")
     }
+
+    /// The streaming extractor must still deliver the full 200-bucket,
+    /// normalised waveform the player bar draws.
+    func testWaveformLoadsFullBucketCount() async throws {
+        let url = try makeWav(seconds: 3)
+        let player = AudioPlayerController()
+        player.load(url: url)
+        for _ in 0..<50 where player.waveform.isEmpty {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertEqual(player.waveform.count, 200)
+        XCTAssertEqual(player.waveform.max() ?? 0, 1, accuracy: 1e-6, "peaks are normalised to 1")
+    }
+
+    /// A cancelled extraction (another file loaded) gives up instead of
+    /// decoding the rest of the file.
+    func testCancelledPeakExtractionReturnsEmpty() async throws {
+        let url = try makeWav(seconds: 2)
+        let task = Task.detached { () -> [Float] in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await WaveformLoader.extractPeaks(from: url, buckets: 200)
+        }
+        let peaks = await task.value
+        XCTAssertTrue(peaks.isEmpty)
+    }
 }

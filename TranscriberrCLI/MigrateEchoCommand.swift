@@ -63,7 +63,7 @@ func cmdMigrateEcho(dryRun: Bool) async -> Int32 {
             continue
         }
         guard let rebuiltURL = await MeetingMixRebuilder.rebuildMix(mainURL: mainURL) else {
-            print("[migrate-echo]   ✗ '\(rec.title)' — rebuild failed, left as-is (see ~/Library/Logs/Transcriberr)")
+            print("[migrate-echo]   ✗ '\(rec.title)' — not rebuilt (failed, or echo not cancellable), left as-is (see ~/Library/Logs/Transcriberr)")
             failed += 1
             continue
         }

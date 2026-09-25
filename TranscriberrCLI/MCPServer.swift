@@ -11,7 +11,12 @@ import Foundation
 //
 // Register with:  claude mcp add transcriberr -- <path>/transcriberrcli mcp
 
-private let mcpProtocolFallback = "2025-06-18"
+/// Protocol revisions this server speaks, newest first. `initialize` used
+/// to echo whatever the client asked for, claiming revisions it has never
+/// seen; the spec says to answer with a version we support (the client's
+/// if it is one of them, else our latest) and let the client decide.
+private let mcpSupportedProtocols = ["2025-06-18", "2025-03-26", "2024-11-05"]
+private let mcpProtocolFallback = mcpSupportedProtocols[0]
 
 func runMCPServer() -> Int32 {
     let server = MCPServer()
@@ -65,12 +70,16 @@ final class MCPServer {
 
         switch method {
         case "initialize":
-            let requested = params["protocolVersion"] as? String ?? mcpProtocolFallback
+            let requested = params["protocolVersion"] as? String
+            let negotiated = requested.flatMap { mcpSupportedProtocols.contains($0) ? $0 : nil }
+                ?? mcpProtocolFallback
+            // The CLI's embedded Info.plist carries $(MARKETING_VERSION); the
+            // old "2.3.0" fallback went stale ten releases ago.
             reply(id, result: [
-                "protocolVersion": requested,
+                "protocolVersion": negotiated,
                 "capabilities": ["tools": [String: Any]()],
                 "serverInfo": ["name": "transcriberr",
-                               "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "2.3.0"],
+                               "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"],
             ])
         case "ping":
             reply(id, result: [:])

@@ -233,6 +233,11 @@ final class PendingTask {
     var hybridDiarize: Bool
     var waitForCharger: Bool       // kept for parity; unused on Mac
     var queuedAtMillis: Int64
+    /// A background Super refinement (Params.keepVisibleUntilDone). Without
+    /// it, a refinement interrupted by a quit resumed as an ordinary run and
+    /// streamed over the readable draft. Optional so the store migrates
+    /// lightweight — rows written by older builds read as nil (foreground).
+    var keepVisibleUntilDone: Bool?
 
     init(
         recordingId: UUID,
@@ -243,7 +248,8 @@ final class PendingTask {
         expectedSpeakers: Int = 0,
         hybridDiarize: Bool = false,
         waitForCharger: Bool = false,
-        queuedAtMillis: Int64 = Int64(Date().timeIntervalSince1970 * 1000)
+        queuedAtMillis: Int64 = Int64(Date().timeIntervalSince1970 * 1000),
+        keepVisibleUntilDone: Bool? = nil
     ) {
         self.recordingId = recordingId
         self.backend = backend
@@ -254,5 +260,6 @@ final class PendingTask {
         self.hybridDiarize = hybridDiarize
         self.waitForCharger = waitForCharger
         self.queuedAtMillis = queuedAtMillis
+        self.keepVisibleUntilDone = keepVisibleUntilDone
     }
 }

@@ -18,6 +18,10 @@ final class AudioPlayerController: @unchecked Sendable {
 
     /// Lazy-build peak amplitude buckets for the waveform scrubber (200 buckets).
     private(set) var waveform: [Float] = []
+    /// The in-flight peak extraction, cancelled when another file loads —
+    /// clicking through a few long meetings used to leave one full decode
+    /// per click running to the end, each result then thrown away.
+    @ObservationIgnored private var waveformTask: Task<Void, Never>?
 
     func load(url: URL) {
         teardown()
@@ -63,7 +67,7 @@ final class AudioPlayerController: @unchecked Sendable {
         }
         // Background waveform extraction. The array updates SwiftUI once the
         // peaks are ready — until then the player bar shows the plain track.
-        Task.detached(priority: .utility) { [weak self] in
+        waveformTask = Task.detached(priority: .utility) { [weak self] in
             let peaks = await WaveformLoader.extractPeaks(from: url, buckets: 200)
             await MainActor.run {
                 guard let self, self.player.map(ObjectIdentifier.init) == loaded else { return }
@@ -90,6 +94,8 @@ final class AudioPlayerController: @unchecked Sendable {
     }
 
     private func teardown() {
+        waveformTask?.cancel()
+        waveformTask = nil
         if let p = player, let obs = timeObserver { p.removeTimeObserver(obs) }
         timeObserver = nil
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }

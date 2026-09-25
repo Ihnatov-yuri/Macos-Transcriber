@@ -319,6 +319,7 @@ final class WavRecorder: @unchecked Sendable {
                 }
             }
         } catch {
+            discardPartialFile(url)
             await setState(.failed(reason: "Couldn't install audio tap: \(error.localizedDescription)"))
             AppLog.error("recorder", "installTap threw: \(error.localizedDescription)")
             throw RecorderError.noInput
@@ -332,10 +333,7 @@ final class WavRecorder: @unchecked Sendable {
             try ExceptionTrap.run { self.engine.prepare() }
         } catch {
             try? ExceptionTrap.run { input.removeTap(onBus: 0) }
-            ioQueue.sync {
-                self.audioFile = nil
-                self.converter = nil
-            }
+            discardPartialFile(url)
             await setState(.failed(reason: "Audio engine failed to prepare: \(error.localizedDescription)"))
             AppLog.error("recorder", "engine.prepare threw: \(error.localizedDescription)")
             throw RecorderError.noInput
@@ -358,10 +356,7 @@ final class WavRecorder: @unchecked Sendable {
         }
         if let startError {
             try? ExceptionTrap.run { input.removeTap(onBus: 0) }
-            ioQueue.sync {
-                self.audioFile = nil
-                self.converter = nil
-            }
+            discardPartialFile(url)
             await setState(.failed(reason: "AVAudioEngine.start failed: \(startError.localizedDescription)"))
             AppLog.error("recorder", "engine.start failed: \(startError.localizedDescription)")
             throw startError
@@ -375,6 +370,20 @@ final class WavRecorder: @unchecked Sendable {
             startTickTask()
             observeConfigurationChanges()
         }
+    }
+
+    /// A start that fails after the output file is open must not leave it
+    /// behind: `openFileURL` is only set on success, so no row and no Stop
+    /// ever references it — a header-only Recording_*.wav in the library
+    /// folder per failed start, forever. Closes the file on ioQueue first
+    /// (a tap buffer already queued then finds no file) and deletes it; same
+    /// cleanup MeetingRecorder's `startCapture` does for its three files.
+    private func discardPartialFile(_ url: URL) {
+        ioQueue.sync {
+            self.audioFile = nil
+            self.converter = nil
+        }
+        try? FileManager.default.removeItem(at: url)
     }
 
     // MARK: - Device changes

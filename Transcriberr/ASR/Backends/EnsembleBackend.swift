@@ -118,30 +118,34 @@ actor EnsembleBackend: ASRBackend {
         isReady = true
     }
 
-    /// A wedged chunk means (in practice) the LiteRT sub-engine hung —
-    /// recover the sub-engines individually instead of releasing the whole
-    /// ensemble under concurrently running chunks.
+    /// Recover from a wedged chunk: ask each engine (A, B and the arbiter,
+    /// each once) to heal, and each rebuilds only if one of its own native
+    /// calls is stuck. The ensemble cannot tell which engine hung, but each
+    /// engine can.
+    ///
+    /// The first version rebuilt every LiteRT engine it found and returned.
+    /// The Gemma arbiter is loaded on every Super run, so a Whisper call
+    /// that hung in pass 1 (where Gemma does nothing) reloaded the idle
+    /// Gemma, reset the gate under the running chunks, and retried on the
+    /// same hung Whisper: 240 s per wedge, and benching never kicked in
+    /// because Gemma was not a sub-engine.
     func recoverWedge(modelPath: URL?) async throws {
-        var healedLiteRT = false
-        if let g = engineA as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil); healedLiteRT = true }
-        if let g = engineB as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil); healedLiteRT = true }
-        if let g = arbiter as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil); healedLiteRT = true }
-        guard !healedLiteRT else { return }
-        // No LiteRT anywhere in this pair — the DEFAULT case, Parakeet v3 +
-        // v2. This method used to return having done nothing at all, so a
-        // wedged chunk cost 120 s, was "recovered" by a no-op, retried on the
-        // same wedged engine for another 120 s, and then had its audio
-        // dropped from the transcript — four minutes per affected chunk.
-        // Fall back to the protocol's own rebuild.
-        AppLog.warn("ensemble", "wedge recovery: rebuilding sub-engines (no LiteRT in this pair)")
-        if let a = engineA {
-            await a.release()
-            try await a.load(modelPath: nil)
+        var seen = Set<ObjectIdentifier>()
+        var subEngineError: Error?
+        for engine in [engineA, engineB, arbiter].compactMap({ $0 }) {
+            guard seen.insert(ObjectIdentifier(engine)).inserted else { continue }
+            do { try await engine.recoverWedge(modelPath: nil) } catch {
+                AppLog.warn("ensemble", "wedge recovery of \(engine.id) failed: \(error.localizedDescription)")
+                let isSubEngine = engine === engineA || engine === engineB
+                if isSubEngine {
+                    if subEngineError == nil { subEngineError = error }
+                } else {
+                    // Without an arbiter the merge keeps the voted text.
+                    arbiter = nil
+                }
+            }
         }
-        if let b = engineB {
-            await b.release()
-            try await b.load(modelPath: nil)
-        }
+        if let subEngineError { throw subEngineError }
     }
 
     /// The non-Gemma sub-engine (falls back to A when neither is Gemma).

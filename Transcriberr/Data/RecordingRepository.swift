@@ -629,6 +629,11 @@ final class RecordingRepository: @unchecked Sendable {
             await postProcessTracker.markIdle(second.id)
             try? delete(first)
             try? delete(second)
+            // Both halves were saved, so both have backup files; without
+            // this `restore-backups` brought them back as empty rows over
+            // deleted audio (merge's rollback got the same fix in v3.2.6).
+            BackupService.removeBackups(for: first.id)
+            BackupService.removeBackups(for: second.id)
             for url in [urlA, urlB] {
                 for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
                     try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension(ext))

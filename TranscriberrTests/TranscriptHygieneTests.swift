@@ -158,6 +158,15 @@ final class TranscriptHygieneTests: XCTestCase {
         XCTAssertGreaterThan(WhisperBackend.peakWindowRMS(samples, from: 5, to: 5) ?? 0, 0.4)
     }
 
+    func testPeakWindowRMSStopsAtTheLineEnd() {
+        // A phantom "Дякую." timed 4.0-4.4 s over silence, real speech from
+        // 4.5 s. Rounding the end up to a whole second measured to 5.0 s and
+        // heard the speech.
+        var samples = [Float](repeating: 0, count: 10 * 16_000)
+        for i in (9 * 16_000 / 2)..<(10 * 16_000) { samples[i] = 0.5 }
+        XCTAssertLessThan(WhisperBackend.peakWindowRMS(samples, from: 4.0, to: 4.4) ?? 1, 0.001)
+    }
+
     func testSubtitleSignOffIsAlwaysRejected() {
         XCTAssertEqual(WhisperBackend.rejectReason(
             text: "Дякую за перегляд!", avgLogprob: -0.05, noSpeechProb: 0, chunkSeconds: 26), "subtitle sign-off")

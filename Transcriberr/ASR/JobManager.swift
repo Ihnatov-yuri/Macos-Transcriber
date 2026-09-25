@@ -68,6 +68,10 @@ final class TranscriptionJobManager: @unchecked Sendable {
     var waitForAudio: ((UUID) async -> Void)?
     static let idleReleaseSeconds: UInt64 = 120
     private var idleTask: Task<Void, Never>?
+    /// Held while the queue has work: a Super run on a long meeting takes
+    /// most of an hour with nobody touching the Mac, and idle sleep stopped
+    /// it halfway. (The assertion existed from the start; nothing held it.)
+    private let keepAwake = IdleAssertion()
 
     init(runner: TranscriptionRunner, repository: RecordingRepository) {
         self.runner = runner
@@ -210,9 +214,13 @@ final class TranscriptionJobManager: @unchecked Sendable {
 
     private func drain() {
         guard currentJob == nil, !queue.isEmpty else {
-            if currentJob == nil, queue.isEmpty { scheduleIdleRelease() }
+            if currentJob == nil, queue.isEmpty {
+                keepAwake.release()
+                scheduleIdleRelease()
+            }
             return
         }
+        keepAwake.acquire(reason: "Transcribing a recording")
         let (recording, params, onSourceConsumed) = queue.removeFirst()
         let recordingId = recording.id
         currentRecordingId = recordingId

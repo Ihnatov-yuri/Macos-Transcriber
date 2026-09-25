@@ -110,8 +110,25 @@ enum EchoCanceller {
     }
 
     static func cancel(mic: [Float], ref: [Float]) -> [Float] {
+        cancelDetailed(mic: mic, ref: ref).samples
+    }
+
+    /// What `cancel` did with the mic track.
+    enum Outcome: Equatable {
+        /// Echo subtracted; the samples are the cleaned mic.
+        case cancelled
+        /// No echo to remove (headphones, no echo path, nothing subtracted,
+        /// or too short to tell); the samples are the original mic.
+        case noEcho
+        /// An echo path exists but the linear filter could not remove it;
+        /// the samples are the original mic, WITH its echo. Mixing them
+        /// back with the far side plays the far side twice.
+        case echoKept
+    }
+
+    static func cancelDetailed(mic: [Float], ref: [Float]) -> (samples: [Float], outcome: Outcome) {
         let n = min(mic.count, ref.count)
-        guard n > 16_000 else { return mic }
+        guard n > 16_000 else { return (mic, .noEcho) }
 
         // ---- 1. Bulk delay via cross-correlation (8× decimated, ≤60 s) ----
         // Searched inside the LOUDEST stretches of the reference, not the
@@ -144,7 +161,7 @@ enum EchoCanceller {
         // it, which the energy check at the end would wave straight through.
         guard bestCorr >= minCorrelation else {
             AppLog.info("aec", String(format: "no echo path (peak correlation %.3f) — keeping original mic track", bestCorr))
-            return mic
+            return (mic, .noEcho)
         }
 
         // The taps reach only FORWARD from `delay`, covering lags
@@ -249,7 +266,7 @@ enum EchoCanceller {
             if !blockERLE.isEmpty, linearERLE < minLinearERLE {
                 AppLog.info("aec", String(format: "linear stage removed only %.1f dB (median of %d far-end seconds, corr %.3f) — no usable echo path, keeping raw mic for echo-by-timing",
                                           linearERLE, blockERLE.count, bestCorr))
-                return mic
+                return (mic, .echoKept)
             }
         }
 
@@ -307,8 +324,8 @@ enum EchoCanceller {
         // original rather than inject filter noise.
         guard erle > 0.5 else {
             AppLog.info("aec", "no echo to cancel — keeping original mic track")
-            return mic
+            return (mic, .noEcho)
         }
-        return out
+        return (out, .cancelled)
     }
 }

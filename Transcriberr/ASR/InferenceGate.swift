@@ -23,12 +23,13 @@ import Foundation
 /// Waiting exclusive requests block new shared ones, so a Gemma call
 /// between pipelined chunks is not starved by a stream of Whisper calls.
 ///
-/// The gate is generation-stamped like GemmaLiteRTBackend's engine lock:
-/// a wedged native call never runs its release, so `reset()` (called from
-/// wedge recovery) evicts the zombie holders and admits the next waiters
-/// by the same rules — never an exclusive holder next to anything else,
-/// which would recreate the very concurrency the gate exists to prevent.
-/// Recovery paths need the same care as happy paths.
+/// Every hold carries its own token: a wedged native call never runs its
+/// release, so wedge recovery evicts that holder alone (`evictExclusive`
+/// for LiteRT, `evictShared(owner:)` for a rebuilt Whisper or Parakeet)
+/// and admits the next waiters by the same rules. Never an exclusive
+/// holder next to anything else, which would recreate the very
+/// concurrency the gate exists to prevent. Recovery paths need the same
+/// care as happy paths.
 ///
 /// Dictation runs next to background jobs and must not queue behind them
 /// (v3.12.1). Super's whole-track Whisper reading holds a shared slot for
@@ -48,6 +49,11 @@ import Foundation
 actor InferenceGate {
     static let shared = InferenceGate()
 
+    /// A native call running longer than this is taken for wedged by wedge
+    /// recovery. Healthy calls on a 28 s chunk finish in seconds; the
+    /// runner only declares a wedge after 120 s.
+    static let stuckCallAge: TimeInterval = 60
+
     /// Foreground work (dictation): served ahead of background waiters.
     @TaskLocal static var interactive = false
     /// How long a request may wait before giving up with `Busy`; nil waits.
@@ -62,39 +68,55 @@ actor InferenceGate {
         let id: Int
         let exclusive: Bool
         let interactive: Bool
+        let owner: String?
         let continuation: CheckedContinuation<Int, Error>
     }
 
-    private var exclusiveHeld = false
-    private var sharedHolders = 0
+    /// Every holder has its own token. The first version kept a bare count
+    /// and a generation stamp, and recovery zeroed the count: the Whisper
+    /// and Parakeet calls still running on other chunks lost their hold, and
+    /// the next Gemma call was admitted next to them, the very pairing the
+    /// gate exists to prevent. Tokens let recovery evict exactly the hung
+    /// holder and keep counting the live ones.
+    private var exclusiveHolder: Int?
+    /// Shared holders by token: the engine that holds each and when it was
+    /// admitted (for `evictShared(owner:olderThan:)`).
+    private struct SharedHold {
+        let owner: String?
+        let since: Date
+    }
+    private var sharedHolders: [Int: SharedHold] = [:]
     private var waiters: [Waiter] = []
-    private var generation = 0
+    private var nextToken = 0
     private var nextWaiterId = 0
 
     /// True while any GemmaLiteRTBackend holds a live engine. When false,
-    /// `acquire()` is a no-op pass-through — pairs without Gemma keep full
-    /// cross-engine parallelism.
+    /// `acquire()` never waits, so pairs without Gemma keep full
+    /// cross-engine parallelism. Shared holds are still counted while it is
+    /// false: a Whisper chunk admitted before Gemma loaded is still running
+    /// when it does, and Gemma must wait for it.
     private(set) var litertActive = false
 
     func setLitertActive(_ on: Bool) {
         litertActive = on
-        if !on { reset() }
+        if !on { evictExclusive() }
     }
 
-    /// Returns a stamp to pass to `release`. `exclusive` is for LiteRT
-    /// only; every other engine shares. Waiters are resumed with the
-    /// generation current at hand-off time, so a reset while queued still
-    /// yields a valid stamp. A stale stamp releases nothing.
+    /// Returns a token to pass to `release`. `exclusive` is for LiteRT
+    /// only; every other engine shares and names itself as `owner`. A
+    /// token that was evicted releases nothing.
     ///
     /// Throws `CancellationError` when the calling task is cancelled while
     /// queued, and `Busy` once `patience` runs out; neither holds the gate.
-    func acquire(exclusive: Bool = false) async throws -> Int {
-        guard litertActive else { return -1 }
+    func acquire(exclusive: Bool = false, owner: String? = nil) async throws -> Int {
+        guard litertActive else {
+            if exclusive { return -1 }
+            return admit(exclusive: false, owner: owner)
+        }
         let interactive = Self.interactive
         if canAdmit(exclusive: exclusive),
            waiters.isEmpty || (interactive && !waiters.contains { $0.interactive }) {
-            admit(exclusive: exclusive)
-            return generation
+            return admit(exclusive: exclusive, owner: owner)
         }
         let id = nextWaiterId
         nextWaiterId += 1
@@ -110,7 +132,8 @@ actor InferenceGate {
                 // lands after this check is handled by `drop` below, which
                 // can only run once the waiter is queued.
                 if Task.isCancelled { c.resume(throwing: CancellationError()); return }
-                let waiter = Waiter(id: id, exclusive: exclusive, interactive: interactive, continuation: c)
+                let waiter = Waiter(id: id, exclusive: exclusive, interactive: interactive,
+                                    owner: owner, continuation: c)
                 if interactive {
                     // Behind earlier interactive requests, ahead of the rest.
                     let at = waiters.firstIndex { !$0.interactive } ?? waiters.endIndex
@@ -125,24 +148,31 @@ actor InferenceGate {
         }
     }
 
-    func release(_ stamp: Int, exclusive: Bool = false) {
-        guard stamp == generation else { return }
+    func release(_ token: Int, exclusive: Bool = false) {
         if exclusive {
-            guard exclusiveHeld else { return }
-            exclusiveHeld = false
+            guard token >= 0, exclusiveHolder == token else { return }
+            exclusiveHolder = nil
         } else {
-            guard sharedHolders > 0 else { return }
-            sharedHolders -= 1
+            guard sharedHolders.removeValue(forKey: token) != nil else { return }
         }
         admitWaiters()
     }
 
-    /// Evict zombie holders (a wedged native call): invalidate their stamps
-    /// and admit queued waiters under the normal rules.
-    func reset() {
-        generation += 1
-        exclusiveHeld = false
-        sharedHolders = 0
+    /// Evict the exclusive holder (a wedged LiteRT call never runs its
+    /// release). Shared holders keep their hold: they are other engines'
+    /// calls, still running.
+    func evictExclusive() {
+        exclusiveHolder = nil
+        admitWaiters()
+    }
+
+    /// Evict one engine's shared holds that are older than `age` seconds:
+    /// a wedged Whisper or Parakeet call whose engine was just rebuilt. The
+    /// same engine's healthy calls on other chunks are seconds old and keep
+    /// their hold.
+    func evictShared(owner: String, olderThan age: TimeInterval = InferenceGate.stuckCallAge) {
+        let cutoff = Date().addingTimeInterval(-age)
+        sharedHolders = sharedHolders.filter { $0.value.owner != owner || $0.value.since > cutoff }
         admitWaiters()
     }
 
@@ -157,11 +187,14 @@ actor InferenceGate {
     }
 
     private func canAdmit(exclusive: Bool) -> Bool {
-        exclusive ? !exclusiveHeld && sharedHolders == 0 : !exclusiveHeld
+        exclusive ? exclusiveHolder == nil && sharedHolders.isEmpty : exclusiveHolder == nil
     }
 
-    private func admit(exclusive: Bool) {
-        if exclusive { exclusiveHeld = true } else { sharedHolders += 1 }
+    private func admit(exclusive: Bool, owner: String?) -> Int {
+        let token = nextToken
+        nextToken += 1
+        if exclusive { exclusiveHolder = token } else { sharedHolders[token] = SharedHold(owner: owner, since: Date()) }
+        return token
     }
 
     /// FIFO: admit from the head while the head fits, so an exclusive
@@ -171,17 +204,15 @@ actor InferenceGate {
     private func admitWaiters() {
         while let head = waiters.first, canAdmit(exclusive: head.exclusive) {
             waiters.removeFirst()
-            admit(exclusive: head.exclusive)
-            head.continuation.resume(returning: generation)
+            head.continuation.resume(returning: admit(exclusive: head.exclusive, owner: head.owner))
         }
-        guard !exclusiveHeld else { return }
+        guard exclusiveHolder == nil else { return }
         var i = 0
         while i < waiters.count {
             let w = waiters[i]
             if w.interactive, !w.exclusive {
                 waiters.remove(at: i)
-                admit(exclusive: false)
-                w.continuation.resume(returning: generation)
+                w.continuation.resume(returning: admit(exclusive: false, owner: w.owner))
             } else {
                 i += 1
             }

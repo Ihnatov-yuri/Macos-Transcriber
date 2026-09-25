@@ -51,6 +51,9 @@ final class AppContainer: @unchecked Sendable {
     let dictationSettings: DictationSettings
     let dictation: DictationController
 
+    // MARK: - Updates
+    let updates = UpdateChecker()
+
     // MARK: - Cross-screen signals
     /// Bumped by File → New Recording (⌘N). AppShell watches it to switch to
     /// the Record section; RecordView consumes `pendingNewRecording` to
@@ -156,6 +159,12 @@ final class AppContainer: @unchecked Sendable {
             jobs.onIdle = { [weak self] in
                 await self?.backendFactory.releaseLiteRTIfIdle() ?? true
             }
+        }
+
+        // Anonymous new-release check (see UpdateChecker). Not under the
+        // unit-test host.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            updates.start()
         }
 
         // Self-heal transcripts lost to interrupted runs (app updated or

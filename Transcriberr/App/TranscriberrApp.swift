@@ -37,6 +37,10 @@ struct TranscriberrApp: App {
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About Transcriberr") { Self.showAbout() }
+                Button("Check for Updates…") {
+                    let updates = container.updates
+                    Task { @MainActor in Self.showUpdateResult(await updates.check()) }
+                }
             }
             CommandGroup(replacing: .newItem) {
                 Button("New Recording") { container.requestNewRecording() }
@@ -75,35 +79,75 @@ struct TranscriberrApp: App {
         }
     }
 
+    /// Result of a manual check from the app menu.
+    @MainActor
+    private static func showUpdateResult(_ status: UpdateChecker.Status) {
+        let alert = NSAlert()
+        switch status {
+        case .available(let r):
+            alert.messageText = "Transcriberr \(r.version) is available"
+            alert.informativeText = r.title.isEmpty ? "The release page has the download and what changed." : r.title
+            alert.addButton(withTitle: "What's New…")
+            alert.addButton(withTitle: "Later")
+            if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(r.pageURL) }
+            return
+        case .failed(let why):
+            alert.messageText = why
+            alert.informativeText = "Try again later."
+        default:
+            alert.messageText = "Transcriberr is up to date"
+            alert.informativeText = "This is the latest version."
+        }
+        alert.runModal()
+    }
+
     /// Standard macOS About panel with author credits (macOS menu → About).
     @MainActor
     private static func showAbout() {
+        let body: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let quiet: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ]
+        func link(_ title: String, _ url: String) -> NSAttributedString {
+            NSAttributedString(string: title, attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .link: URL(string: url)!,
+            ])
+        }
         let credits = NSMutableAttributedString(
-            string: "Local-first transcription studio.\nParakeet · Whisper · Gemma — everything on-device.\n\nCreated by Yuri Ihnatov\n",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.labelColor,
-            ]
+            string: "Local-first transcription studio.\nParakeet · Whisper · Gemma — everything on-device.\n",
+            attributes: body
         )
-        credits.append(NSAttributedString(
-            string: "ihnatov.nl",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 11),
-                .link: URL(string: "https://ihnatov.nl")!,
-            ]
-        ))
-        credits.append(NSAttributedString(
-            string: "  ·  ",
-            attributes: [.font: NSFont.systemFont(ofSize: 11),
-                         .foregroundColor: NSColor.secondaryLabelColor]
-        ))
-        credits.append(NSAttributedString(
-            string: "github.com/Ihnatov-yuri",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 11),
-                .link: URL(string: "https://github.com/Ihnatov-yuri")!,
-            ]
-        ))
+
+        // What's new in the running version, from the bundled notes.
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let notes = ReleaseNotes.bundled().map { ReleaseNotes.entries(for: version, in: $0) } ?? []
+        if !notes.isEmpty {
+            let left = NSMutableParagraphStyle()
+            left.alignment = .left
+            left.headIndent = 10
+            left.paragraphSpacing = 3
+            credits.append(NSAttributedString(string: "\nWhat's new in \(version)\n", attributes: [
+                .font: NSFont.boldSystemFont(ofSize: 11),
+                .foregroundColor: NSColor.labelColor,
+            ]))
+            for item in notes {
+                credits.append(NSAttributedString(string: "•  \(item)\n", attributes: body.merging([.paragraphStyle: left]) { $1 }))
+            }
+            credits.append(link("All release notes", "https://github.com/Ihnatov-yuri/Macos-Transcriber/releases"))
+            credits.append(NSAttributedString(string: "\n", attributes: body))
+        }
+
+        credits.append(NSAttributedString(string: "\nCreated by Yuri Ihnatov\n", attributes: body))
+        credits.append(link("How it was built", "https://ihnatov.nl/transcriber/macos"))
+        credits.append(NSAttributedString(string: "  ·  ", attributes: quiet))
+        credits.append(link("ihnatov.nl", "https://ihnatov.nl"))
+        credits.append(NSAttributedString(string: "  ·  ", attributes: quiet))
+        credits.append(link("GitHub", "https://github.com/Ihnatov-yuri/Macos-Transcriber"))
         NSApp.orderFrontStandardAboutPanel(options: [
             .credits: credits,
             NSApplication.AboutPanelOptionKey(rawValue: "Copyright"):

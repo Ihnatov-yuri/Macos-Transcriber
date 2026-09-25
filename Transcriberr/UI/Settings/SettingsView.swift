@@ -23,6 +23,8 @@ struct SettingsView: View {
                 .tabItem { Label("Snippets", systemImage: "text.append") }
             APIKeysSettingsTab()
                 .tabItem { Label("API Keys", systemImage: "key") }
+            UpdatesSettingsTab()
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
         }
         .padding(20)
     }

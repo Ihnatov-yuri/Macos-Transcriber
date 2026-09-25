@@ -77,6 +77,12 @@ struct SettingsScreen: View {
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 760)
                     }
+
+                    sectionBlock("J", "Updates") {
+                        UpdatesSettingsTab()
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 200)
+                    }
                 }
                 .padding(.bottom, AppMetric.xl)
             }

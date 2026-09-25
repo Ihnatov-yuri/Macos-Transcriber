@@ -17,7 +17,49 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
 
     private var pipe: WhisperKit?
 
-    init() {}
+    /// Which chip runs Whisper's two halves.
+    ///
+    /// Default `split` since v3.13.0. With both halves on the Neural Engine
+    /// (WhisperKit's default) a Super read used ~0.5 of 12 CPU cores and
+    /// left the GPU idle, and two tracks read "in parallel" queued for the
+    /// one Neural Engine. Measured with `transcriberrcli whisperbench` on
+    /// the uk-a slice's two 5-min tracks (M3 Pro):
+    ///   ane 296 s · gpu 204 s · split 184 s · encgpu 313 s
+    /// The encoder on the GPU drops words (32 deletions against 5 on the mic
+    /// track, far-side WER 16.3 → 23.5-24.8%), so it stays on the Neural
+    /// Engine. Full Super on the reference slices, ane → split: uk-a 330 →
+    /// 233 s, WER 16.5 → 17.1%; uk-b 254 → 173 s, 12.2 → 12.1%.
+    enum Placement: String, Sendable {
+        /// Encoder and decoder on the Neural Engine (WhisperKit's default).
+        case ane
+        /// Both on the GPU.
+        case gpu
+        /// Encoder on the Neural Engine, decoder on the GPU.
+        case split
+        /// Encoder on the GPU, decoder on the Neural Engine.
+        case encgpu
+
+        var computeOptions: ModelComputeOptions {
+            switch self {
+            case .ane: return ModelComputeOptions()
+            case .gpu: return ModelComputeOptions(audioEncoderCompute: .cpuAndGPU, textDecoderCompute: .cpuAndGPU)
+            case .split: return ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine, textDecoderCompute: .cpuAndGPU)
+            case .encgpu: return ModelComputeOptions(audioEncoderCompute: .cpuAndGPU, textDecoderCompute: .cpuAndNeuralEngine)
+            }
+        }
+
+        /// `TRANSCRIBERR_WHISPER_COMPUTE` (CLI) or `whisper.compute`.
+        static var configured: Placement {
+            let raw = ProcessInfo.processInfo.environment["TRANSCRIBERR_WHISPER_COMPUTE"]
+                ?? UserDefaults.standard.string(forKey: "whisper.compute")
+            return raw.flatMap(Placement.init(rawValue:)) ?? .split
+        }
+    }
+
+    private let placement: Placement?
+
+    /// `placement` nil = the configured one, read at load.
+    init(placement: Placement? = nil) { self.placement = placement }
 
     // MARK: - Lifecycle
 
@@ -25,8 +67,11 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         if isReady, pipe != nil { return }
         AppLog.info("whisper", "loading Whisper large-v3 (downloads ~3 GB on first run)…")
         do {
+            let where_ = placement ?? .configured
+            AppLog.info("whisper", "placement: \(where_.rawValue)")
             let config = WhisperKitConfig(
                 model: "large-v3",
+                computeOptions: where_.computeOptions,
                 verbose: false,
                 prewarm: true
             )

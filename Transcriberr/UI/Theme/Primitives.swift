@@ -251,6 +251,12 @@ struct LedgerRow<Body: View, Meta: View>: View {
 /// 8pt accent dot with a continuous expand-and-fade ring. The ONLY
 /// infinite animation in the app; respects Reduce Motion (the ring stays
 /// static rather than looping).
+///
+/// The ring grows with `scaleEffect`, a drawing transform, inside a fixed
+/// frame. It used to animate its `.frame` size, which is layout: every
+/// display frame re-laid out whatever contained the dot, and the "Run
+/// transcription" bar shows one on every recording, so an idle app with a
+/// recording open burned about half a core in SwiftUI layout.
 struct PulseDot: View {
     var diameter: CGFloat = 8
     @State private var phase: CGFloat = 0
@@ -259,9 +265,10 @@ struct PulseDot: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(AppColor.accent.opacity(0.55 * (1 - phase)), lineWidth: 1)
-                .frame(width: diameter * (1 + 1.4 * phase),
-                       height: diameter * (1 + 1.4 * phase))
+                .stroke(AppColor.accent.opacity(0.55), lineWidth: 0.7)   // scales with the ring
+                .frame(width: diameter, height: diameter)
+                .scaleEffect(1 + 1.4 * phase)
+                .opacity(1 - phase)
             Circle().fill(AppColor.accent)
                 .frame(width: diameter, height: diameter)
         }

@@ -27,6 +27,13 @@ protocol ASRBackend: Actor {
         userMessage: String,
         maxTokens: Int
     ) async throws -> String
+
+    /// Called by the chunk watchdog after a wedge. A requirement, not only
+    /// an extension method: the runner calls it on `any ASRBackend`, and an
+    /// extension-only method is dispatched statically there, so every
+    /// engine's own surgical recovery (the ensemble's included) was skipped
+    /// for the full release-and-reload default.
+    func recoverWedge(modelPath: URL?) async throws
 }
 
 /// A recognized word with the recognizer's own confidence — the currency of
@@ -89,9 +96,8 @@ struct RawSegment: Sendable {
 }
 
 extension ASRBackend {
-    /// Called by the chunk watchdog after a wedge. Default keeps the old
-    /// full release+reload; engines with internal exclusive state override
-    /// to heal surgically (without disturbing concurrent users).
+    /// Default: the full release+reload. Engines that can be used by other
+    /// callers while one call is stuck override it to heal surgically.
     func recoverWedge(modelPath: URL?) async throws {
         await release()
         try await load(modelPath: modelPath)

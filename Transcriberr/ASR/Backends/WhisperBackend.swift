@@ -65,6 +65,25 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
 
     func load(modelPath: URL?) async throws {
         if isReady, pipe != nil { return }
+        try await rebuild()
+    }
+
+    /// The build in progress. Three chunks that time out together each ask
+    /// for a rebuild, and actor reentrancy let each start its own ~3 GB
+    /// WhisperKit; they now share one.
+    private var building: Task<Void, Error>?
+
+    private func rebuild() async throws {
+        if let building { return try await building.value }
+        let task = Task { try await self.buildPipe() }
+        building = task
+        defer { building = nil }
+        try await task.value
+    }
+
+    /// Builds a fresh WhisperKit and swaps it in, with no gap where `pipe`
+    /// is nil.
+    private func buildPipe() async throws {
         AppLog.info("whisper", "loading Whisper large-v3 (downloads ~3 GB on first run)…")
         do {
             let where_ = placement ?? .configured
@@ -88,6 +107,39 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             throw ASRError.modelLoadFailed(reason: String(describing: error))
         }
     }
+
+    /// Wedge recovery: build a fresh pipeline first, then swap it in. The
+    /// default release-then-load left `pipe` nil for the whole reload, and
+    /// every other chunk in flight failed with "not loaded", which killed
+    /// the run. The hung call keeps the old pipeline until it returns; its
+    /// gate hold is evicted so Gemma is not blocked behind it forever.
+    ///
+    /// Only when one of this engine's own calls is stuck: in Super the
+    /// runner cannot tell which engine hung, so it asks every engine, and
+    /// the healthy ones stay as they are.
+    func recoverWedge(modelPath: URL?) async throws {
+        let stuck = inFlight.filter { Date().timeIntervalSince($0.value) >= InferenceGate.stuckCallAge }
+        guard !stuck.isEmpty else {
+            try await load(modelPath: modelPath)
+            return
+        }
+        AppLog.warn("whisper", "wedge recovery: \(stuck.count) call(s) stuck — rebuilding the pipeline")
+        try await rebuild()
+        for key in stuck.keys { inFlight[key] = nil }
+        await InferenceGate.shared.evictShared(owner: id)
+    }
+
+    /// Native calls running now, by call id, with their start time.
+    private var inFlight: [Int: Date] = [:]
+    private var nextCallId = 0
+
+    private func beginCall() -> Int {
+        nextCallId += 1
+        inFlight[nextCallId] = Date()
+        return nextCallId
+    }
+
+    private func endCall(_ call: Int) { inFlight[call] = nil }
 
     func release() async {
         pipe = nil
@@ -159,8 +211,10 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         // Shared hold: runs alongside other Whisper/Parakeet calls, but never
         // while LiteRT Gemma infers — that pairing wedges LiteRT's native
         // call (see InferenceGate). Pass-through when no Gemma is loaded.
-        let gateStamp = try await InferenceGate.shared.acquire()
+        let gateStamp = try await InferenceGate.shared.acquire(owner: id)
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
+        let call = beginCall()
+        defer { endCall(call) }
         // Our own TranscribeTask with its own Progress, not `pipe.transcribe`.
         // Chunks run three at a time on ONE WhisperKit (shared gate since
         // v3.8.0), and WhisperKit is a plain class whose transcribe swaps a
@@ -278,8 +332,10 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         guard isReady, let pipe else {
             throw ASRError.modelLoadFailed(reason: "Whisper backend not loaded")
         }
-        let gateStamp = try await InferenceGate.shared.acquire()
+        let gateStamp = try await InferenceGate.shared.acquire(owner: id)
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
+        let call = beginCall()
+        defer { endCall(call) }
         let r = try await pipe.detectLangauge(audioArray: samples)
         return (r.language, exp(Double(r.langProbs[r.language] ?? -.infinity)))
     }
@@ -315,7 +371,11 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             guard from >= 0, to > from else { return samples.count >= win ? rawPeak(samples, 0, samples.count, win) : 0 }
             let a = Int(from * 16_000)
             guard a < samples.count - win / 2 else { return nil }   // padding
-            var b = Int(to.rounded(.up) * 16_000)
+            // Round the SAMPLE index up, not the seconds: rounding `to` to a
+            // whole second first measured up to 1 s past the line, so a
+            // phantom right before real speech was weighed with that speech
+            // and kept.
+            var b = to.isFinite ? Int((to * 16_000).rounded(.up)) : samples.count
             if b - a < win { let mid = (a + b) / 2; b = mid + win / 2; lo = max(0, mid - win / 2) } else { lo = a }
             hi = min(samples.count, max(b, lo + win))
         }

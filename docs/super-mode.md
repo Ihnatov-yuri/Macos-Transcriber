@@ -59,7 +59,7 @@ Code: `TranscriptionRunner.finalizeSegments`.
 
 ## If an engine hangs
 
-Every chunk has a 120 s limit. After a timeout the engine is rebuilt and the chunk is retried. If it hangs again, the healthy engine transcribes the chunk alone. After two hangs in one run, Gemma is benched and the rest of the run uses a single engine, so the run still finishes.
+Every chunk has a 120 s limit. After a timeout each engine checks whether one of its own calls has been running for over 60 s; only that engine is rebuilt (the new one is built before the old one is let go, so the other chunks in flight keep running), its stuck hold on the inference gate is evicted, and the chunk is retried. If it hangs again, the healthy engine transcribes the chunk alone. After two hangs in one run, Gemma is benched and the rest of the run uses a single engine, so the run still finishes.
 
 ## Where the time goes
 

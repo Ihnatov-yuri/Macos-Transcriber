@@ -36,7 +36,16 @@ enum MeetingMixRebuilder {
             async let sysTask = decoder.decodeAll(file: sysURL)
             let rawMic = try await rawMicTask
             let sys = try await sysTask
-            let cleanedMic = EchoCanceller.cancel(mic: rawMic, ref: sys)
+            let (cleanedMic, outcome) = EchoCanceller.cancelDetailed(mic: rawMic, ref: sys)
+            // The canceller gave up on an echo it could not remove: a mix of
+            // the raw mic and the far side plays every far-side word twice,
+            // 30-50 ms apart, and the live-gated mix already on disk is the
+            // better file. (The transcript is not affected: it reads the
+            // sidecars and removes that echo by timing.)
+            if outcome == .echoKept {
+                AppLog.info("aec", "mix rebuild skipped — echo not cancellable, keeping the live-gated mix")
+                return nil
+            }
 
             let n = min(cleanedMic.count, sys.count)
             guard n > 0 else { return nil }

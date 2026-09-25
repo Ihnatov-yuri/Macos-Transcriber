@@ -40,6 +40,25 @@ actor GemmaLiteRTBackend: ASRBackend {
             await InferenceGate.shared.setLitertActive(true)
             return
         }
+        try await rebuild(modelPath: modelPath)
+    }
+
+    /// The build in progress, shared by concurrent loads and recoveries:
+    /// actor reentrancy let three chunks that timed out together each start
+    /// their own multi-GB engine.
+    private var building: Task<Void, Error>?
+
+    private func rebuild(modelPath: URL?) async throws {
+        if let building { return try await building.value }
+        let task = Task { try await self.buildEngine(modelPath: modelPath) }
+        building = task
+        defer { building = nil }
+        try await task.value
+    }
+
+    /// Builds a fresh engine and swaps it in. The old one stays in place
+    /// until the new one is ready.
+    private func buildEngine(modelPath: URL?) async throws {
         guard let file = Self.resolveModelFile(from: modelPath) else {
             throw ASRError.modelMissing(backend: id)
         }
@@ -80,15 +99,52 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// Surgical wedge recovery: rebuild ONLY this engine and evict the
     /// zombie lock holder — without a full release() that would yank state
     /// from under concurrent pipeline chunks.
+    ///
+    /// Only when a call is actually stuck inside the engine. A caller that
+    /// timed out while QUEUED behind a healthy generation (a brief section
+    /// behind a Super arbitration) used to rebuild the engine under that
+    /// healthy call. And the new engine is built before the lock is reset:
+    /// resetting first woke the queued callers against a nil engine, and
+    /// every one of them failed with "not loaded".
     func recoverWedge(modelPath: URL?) async throws {
+        guard let since = inferringSince,
+              Date().timeIntervalSince(since) >= InferenceGate.stuckCallAge else {
+            try await load(modelPath: modelPath)
+            return
+        }
         AppLog.warn("litert", "wedge recovery: rebuilding engine in place")
-        engine = nil
-        isReady = false
+        do {
+            try await rebuild(modelPath: modelPath)
+        } catch {
+            // No engine to hand the queue to: fail the waiters fast with
+            // "not loaded" instead of leaving them behind the zombie.
+            engine = nil
+            isReady = false
+            inferringSince = nil
+            resetEngineLock()
+            await InferenceGate.shared.evictExclusive()
+            throw error
+        }
+        inferringSince = nil
         resetEngineLock()
-        // The wedged call also holds the cross-engine gate — evict it too,
-        // or Whisper/Parakeet stall behind a zombie forever.
-        await InferenceGate.shared.reset()
-        try await load(modelPath: modelPath)
+        // The wedged call also holds the cross-engine gate. Evict it alone:
+        // the Whisper/Parakeet calls running on other chunks keep theirs.
+        await InferenceGate.shared.evictExclusive()
+    }
+
+    /// When the call now inside the native engine started; nil when none
+    /// is. The engine lock admits one call at a time.
+    private var inferringSince: Date?
+    private var inferenceId = 0
+
+    private func beginInference() -> Int {
+        inferenceId += 1
+        inferringSince = Date()
+        return inferenceId
+    }
+
+    private func endInference(_ id: Int) {
+        if id == inferenceId { inferringSince = nil }
     }
 
     func release() async {
@@ -158,6 +214,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         // engine infers concurrently in-process (see InferenceGate).
         let gateStamp = try await InferenceGate.shared.acquire(exclusive: true)
         defer { Task { await InferenceGate.shared.release(gateStamp, exclusive: true) } }
+        let inference = beginInference()
+        defer { endInference(inference) }
 
         let sampler = try SamplerConfig(topK: 1, topP: 0.95, temperature: 0.1)
         let conversation = try await engine.createConversation(with: ConversationConfig(
@@ -254,6 +312,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         }
         let gateStamp = try await InferenceGate.shared.acquire(exclusive: true)
         defer { Task { await InferenceGate.shared.release(gateStamp, exclusive: true) } }
+        let inference = beginInference()
+        defer { endInference(inference) }
         func attempt() async throws -> String {
             let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)
             let conversation = try await engine.createConversation(with: ConversationConfig(

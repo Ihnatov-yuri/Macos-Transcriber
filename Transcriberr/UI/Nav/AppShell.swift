@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Top-level shell. Fixed-width sidebar on the left + adaptive detail pane
@@ -33,9 +34,23 @@ struct AppShell: View {
     @State private var recordModel: RecordModel?
     private let sidebarWidth: CGFloat = 200
 
+    @State private var askUpdateConsent = false
+
     var body: some View {
         shell
             .onChange(of: container.dictatePaneRequested) { _, _ in section = .dictate }
+            .task {
+                // A beat after the window settles, once, until answered.
+                guard container.updates.needsConsent else { return }
+                try? await Task.sleep(for: .seconds(1.5))
+                askUpdateConsent = container.updates.needsConsent
+            }
+            .alert("Check for new versions?", isPresented: $askUpdateConsent) {
+                Button("Check once a day") { container.updates.answerConsent(true) }
+                Button("Not now", role: .cancel) { container.updates.answerConsent(false) }
+            } message: {
+                Text(UpdateChecker.consentExplanation)
+            }
     }
 
     private var shell: some View {
@@ -103,6 +118,11 @@ struct AppShell: View {
 
             Spacer(minLength: 0)
 
+            if let release = container.updates.pendingNotice {
+                HairlineSoft()
+                updateNotice(release)
+            }
+
             HairlineSoft()
             HStack {
                 Text(Bundle.versionBadge).uiLabel(9, color: AppColor.ink3)
@@ -112,6 +132,26 @@ struct AppShell: View {
             .padding(.vertical, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// A newer release is out. Opens its GitHub page; × hides this version.
+    private func updateNotice(_ release: UpdateChecker.Release) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Circle().fill(AppColor.accent).frame(width: 6, height: 6)
+                Text("Version \(release.version) is out").uiLabel(11)
+                Spacer()
+                TapButton { container.updates.skippedVersion = release.version } label: {
+                    Text("×").uiLabel(12, color: AppColor.ink3)
+                }
+                .help("Hide until the next version")
+            }
+            TapButton { NSWorkspace.shared.open(release.pageURL) } label: {
+                LitButtonChrome(.ghost, compact: true) { Text("What's new…") }
+            }
+        }
+        .padding(.horizontal, AppMetric.l)
+        .padding(.vertical, 12)
     }
 
     private func sidebarRow(_ s: Section) -> some View {

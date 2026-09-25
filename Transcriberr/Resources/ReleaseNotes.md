@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.14.3
+- The same app as 3.14.2 under a new number, and the first release that installs itself: 3.14.2 updates to it with one button.
+
 ## 3.14.2
 - Update installs a new version with one button, in the sidebar, in Settings, Updates, and in Check for Updates.
 - The download is checked against a signature made with the author's own key before anything is installed, then the app reopens as the new version. Library, settings and permissions stay as they are.

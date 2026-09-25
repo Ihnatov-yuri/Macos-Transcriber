@@ -1422,7 +1422,7 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// ("…Complex API troubleshooting." / "Troubleshooting. And…").
     static func trimBoundaryEchoTail(from text: String, beforeHeadOf reference: String) -> String {
         func norm(_ s: some StringProtocol) -> String {
-            s.lowercased().filter { $0.isLetter || $0.isNumber }
+            TranscriptHygiene.wordKey(s)
         }
         let refHead = reference.split(separator: " ").prefix(4).map(norm)
         var words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
@@ -1450,7 +1450,7 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// genuine short reply ("Yes." after "Yes?") is never eaten.
     static func trimBoundaryEcho(from text: String, afterTailOf reference: String) -> String {
         func norm(_ s: some StringProtocol) -> String {
-            s.lowercased().filter { $0.isLetter || $0.isNumber }
+            TranscriptHygiene.wordKey(s)
         }
         let refTail = reference.split(separator: " ").suffix(4).map(norm)
         var words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)

@@ -269,7 +269,9 @@ final class CoreLogicTests: XCTestCase {
         var rng: UInt64 = 99
         func rand() -> Float {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
-            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3
+            // Zero-mean (see testEchoCancellerHandlesLargeDelay): with a DC
+            // offset the test passed even with the delay estimate wrong.
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
         }
         let lead = sr * 70          // 70 s of nothing, longer than the search span
         let n = lead + sr * 30
@@ -293,7 +295,9 @@ final class CoreLogicTests: XCTestCase {
         var rng: UInt64 = 11
         func rand() -> Float {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
-            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3
+            // Zero-mean (see testEchoCancellerHandlesLargeDelay): with a DC
+            // offset the test passed even with the delay estimate wrong.
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
         }
         let n = sr * 10
         var sys = [Float](repeating: 0, count: n)

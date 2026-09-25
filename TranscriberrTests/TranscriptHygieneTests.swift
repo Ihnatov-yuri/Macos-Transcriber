@@ -287,6 +287,36 @@ final class TranscriptHygieneTests: XCTestCase {
         XCTAssertEqual(EnsembleBackend.echoFiltered(later, farSide: far2).count, 4)
     }
 
+    // MARK: - Word keys
+
+    func testUkrainianApostrophesShareOneKey() {
+        // U+02BC is a modifier letter to Swift; it must not split the vote.
+        let keys = ["памʼятаєш", "пам'ятаєш", "Пам’ятаєш"].map { TranscriptHygiene.wordKey($0) }
+        XCTAssertEqual(Set(keys), ["памятаєш"])
+        XCTAssertEqual(TranscriptHygiene.normWords("Памʼятаєш, п'ять"), ["памятаєш", "пять"])
+    }
+
+    // MARK: - Language repair splice
+
+    func testSpliceKeepsOnlyWordsInsideTheSegment() {
+        let before = timed("ми зробили", from: 9.0)                 // 9.0 … 9.72
+        let seg = timed("чотири інтерв'ю вони зрозуміли", from: 10) // 10.0 … 11.52
+        let after = timed("і далі", from: 12)
+        // Re-read from 9.8 s (0.2 s pad): the neighbour's edge word "зробили"
+        // comes back as "robili" in the pad, and a padding phantom sits past the end.
+        let reread = [TimedWord(word: w("robili"), start: 0, end: 0.1)]
+            + timed("after four interviews they realized that", from: 0.25, step: 0.25)
+            + [TimedWord(word: w("Thank"), start: 20, end: 20.3), TimedWord(word: w("you."), start: 20.3, end: 20.6)]
+        let out = EnsembleBackend.splice(reread, offset: 9.8,
+                                         into: WhisperBackend.SegmentSpan(start: 10, end: 11.6),
+                                         of: before + seg + after)
+        XCTAssertEqual(out?.map(\.word.surface).joined(separator: " "),
+                       "ми зробили after four interviews they realized that і далі")
+        // Nothing inside the segment: leave the words alone.
+        XCTAssertNil(EnsembleBackend.splice(Array(reread.suffix(2)), offset: 9.8,
+                                            into: WhisperBackend.SegmentSpan(start: 10, end: 11.6), of: seg))
+    }
+
     // MARK: - Clean / verbatim
 
     func testCleanStyleDropsHesitationsKeepsTicWords() {

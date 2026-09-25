@@ -112,6 +112,17 @@ final class MeetingBriefTests: XCTestCase {
                        [.init(from: "хаускіпінг", to: "housekeeping")])
     }
 
+    func testRejectsChainsEitherWayRound() {
+        let text = "Ми були в Мьюз. Мьюз велика, а Muse теж."
+        let first = MeetingBrief.Fix(from: "Мьюз", to: "Muse"), second = MeetingBrief.Fix(from: "Muse", to: "Mews")
+        let terms = ["Muse", "Mews"]
+        // Each is fine on its own…
+        XCTAssertEqual(MeetingBriefBuilder.acceptedFixes([second], transcript: text, vocabulary: "", terms: terms), [second])
+        // …but together "Мьюз" would end up "Mews", whichever comes first.
+        XCTAssertEqual(MeetingBriefBuilder.acceptedFixes([first, second], transcript: text, vocabulary: "", terms: terms), [first])
+        XCTAssertEqual(MeetingBriefBuilder.acceptedFixes([second, first], transcript: text, vocabulary: "", terms: terms), [second])
+    }
+
     func testDiarizerLabelsAreNotPeople() {
         var b = MeetingBrief()
         b.people = ["SPEAKER_01", "Speaker 2 — коуч", "Yuri"]

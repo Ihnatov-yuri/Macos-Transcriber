@@ -301,8 +301,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                     if EnsembleBackend.attachesToPrevious(surface, previous: words.last?.word.surface) {
                         let i = words.count - 1
                         words[i].word.surface += surface
-                        words[i].word.norm = words[i].word.surface.lowercased()
-                            .filter { $0.isLetter || $0.isNumber }
+                        words[i].word.norm = TranscriptHygiene.wordKey(words[i].word.surface)
                         words[i].word.confidence = min(words[i].word.confidence, w.probability)
                         words[i].end = Double(w.end)
                         continue
@@ -310,7 +309,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                     words.append(TimedWord(
                         word: ScoredWord(
                             surface: surface,
-                            norm: surface.lowercased().filter { $0.isLetter || $0.isNumber },
+                            norm: TranscriptHygiene.wordKey(surface),
                             confidence: w.probability),
                         start: Double(w.start), end: Double(w.end)
                     ))

@@ -295,7 +295,12 @@ actor EnsembleBackend: ASRBackend {
         farSide = []
     }
 
-    func prepareTimeline(tracks: [(id: Int, samples: [Float])], languages: Set<String>, splitTracks: Bool) async {
+    /// `onProgress` gets the Whisper readings' combined fraction (0…1) every
+    /// few seconds: on a long meeting this step is most of the run (68 min
+    /// of Ukrainian: 31 min), and a stage frozen at one line reads as a hang.
+    /// Cancellation stops it before anything is stored.
+    func prepareTimeline(tracks: [(id: Int, samples: [Float])], languages: Set<String>, splitTracks: Bool,
+                         onProgress: (@Sendable (Double) -> Void)? = nil) async {
         clearTimeline()
         let whisper = (kindA == .whisper ? engineA : kindB == .whisper ? engineB : nil) as? WhisperBackend
         let parakeet = [(kindA, engineA), (kindB, engineB)]
@@ -304,15 +309,26 @@ actor EnsembleBackend: ASRBackend {
         let t0 = Date()
         var whisperTracks: [Int: (words: [TimedWord], segments: [WhisperBackend.SegmentSpan])] = [:]
         var parakeetTracks: [Int: [TimedWord]] = [:]
+        let progresses = useWhisper ? tracks.map { _ in Progress() } : []
+        let reporter: Task<Void, Never>? = (onProgress == nil || progresses.isEmpty) ? nil : Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                let f = progresses.map { $0.totalUnitCount > 0 ? $0.fractionCompleted : 0 }
+                onProgress?(f.reduce(0, +) / Double(f.count))
+            }
+        }
+        defer { reporter?.cancel() }
         // A failed reading is left OUT, never cached as empty: an empty
         // long-form track made Whisper's side of every chunk blank — Super
         // silently Parakeet-only. Left out, chunks read Whisper per chunk.
         await withTaskGroup(of: (Int, Bool, [TimedWord], [WhisperBackend.SegmentSpan])?.self) { group in
-            for t in tracks {
+            for (n, t) in tracks.enumerated() {
                 if useWhisper, let whisper {
+                    let progress = progresses[n]
                     group.addTask {
                         do {
-                            let r = try await whisper.transcribeTimedSegments(samples: t.samples, languages: languages)
+                            let r = try await whisper.transcribeTimedSegments(
+                                samples: t.samples, languages: languages, progress: progress)
                             return (t.id, true, r.words, r.segments)
                         } catch {
                             AppLog.warn("ensemble", "long-form whisper failed on track \(t.id): \(error.localizedDescription) — per-chunk reading instead")
@@ -335,6 +351,14 @@ actor EnsembleBackend: ASRBackend {
             for await case let (id, isWhisper, words, segments)? in group {
                 if isWhisper { whisperTracks[id] = (words, segments) } else { parakeetTracks[id] = words }
             }
+        }
+        // Cancelled: the readings failed or are partial, and language repair
+        // would spend more Whisper calls on a run nobody is waiting for.
+        // Store nothing — a cancelled run must not leave words behind for
+        // the next one on this shared backend.
+        guard !Task.isCancelled else {
+            AppLog.info("ensemble", "timeline cancelled")
+            return
         }
         for (id, w) in whisperTracks {
             var words = w.words

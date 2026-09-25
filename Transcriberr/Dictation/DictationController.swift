@@ -558,11 +558,15 @@ final class DictationController: @unchecked Sendable {
                 defer { self.previewInFlight = false }
                 let backend = self.factory.backend(for: self.settings.engine)
                 guard await backend.isReady else { continue }
-                if let text = try? await backend.transcribeChunk(
-                    samples: UtteranceCapture.applyGain(samples, sensitivity: RecorderSettings.shared.micSensitivity),
-                    languages: self.settings.languages, translateTo: nil, diarize: false,
-                    previousContext: nil, speakerHints: []
-                ), session == self.sessionID, self.phase == .listening {
+                let gained = UtteranceCapture.applyGain(samples, sensitivity: RecorderSettings.shared.micSensitivity)
+                let languages = self.settings.languages
+                // Interactive: never queued behind a background job's Gemma
+                // call (see InferenceGate).
+                if let text = try? await InferenceGate.$interactive.withValue(true, operation: {
+                    try await backend.transcribeChunk(
+                        samples: gained, languages: languages, translateTo: nil, diarize: false,
+                        previousContext: nil, speakerHints: [])
+                }), session == self.sessionID, self.phase == .listening {
                     let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !cleaned.isEmpty { self.previewText = cleaned }
                 }
@@ -776,15 +780,20 @@ final class DictationController: @unchecked Sendable {
             if languages.isEmpty, settings.languageFromContext, let lang = passage.context.contextLanguage {
                 languages = [lang]
             }
-            let recognized = try await Self.withTimeout(seconds: 60) {
-                try await backend.transcribeChunk(
-                    samples: samples,
-                    languages: languages,
-                    translateTo: nil,
-                    diarize: false,
-                    previousContext: nil,
-                    speakerHints: []
-                )
+            let spoken = languages
+            // Interactive: a Super run in the background must not hold the
+            // user's words hostage (see InferenceGate).
+            let recognized = try await InferenceGate.$interactive.withValue(true) {
+                try await Self.withTimeout(seconds: 60) {
+                    try await backend.transcribeChunk(
+                        samples: samples,
+                        languages: spoken,
+                        translateTo: nil,
+                        diarize: false,
+                        previousContext: nil,
+                        speakerHints: []
+                    )
+                }
             }
             AppLog.info("dictation", String(
                 format: "recognized %.1fs → %d chars in %.2fs", seconds, recognized.count,
@@ -969,8 +978,17 @@ final class DictationController: @unchecked Sendable {
             }
             let maxTokens = min(1200, text.count / 2 + 120)
             let t0 = Date()
-            let out = try await Self.withTimeout(seconds: 45) {
-                try await backend.generateText(systemInstruction: systemPrompt, userMessage: userPrompt, maxTokens: maxTokens)
+            // The polish is optional: when a background job has the engines
+            // (Super reading a whole meeting holds them for many minutes),
+            // give up after a few seconds and deliver the clean text rather
+            // than keep the user waiting — and never let the wait block the
+            // next passage's recognition.
+            let out = try await InferenceGate.$interactive.withValue(true) {
+                try await InferenceGate.$patience.withValue(Self.polishPatience) {
+                    try await Self.withTimeout(seconds: 45) {
+                        try await backend.generateText(systemInstruction: systemPrompt, userMessage: userPrompt, maxTokens: maxTokens)
+                    }
+                }
             }
             var trimmed = out.trimmingCharacters(in: .whitespacesAndNewlines)
             // A model that echoes the context is caught by the guard; strip a
@@ -983,11 +1001,18 @@ final class DictationController: @unchecked Sendable {
             // Self-corrections legitimately change words, so the in-order
             // overlap bar is lower than for a plain cleanup.
             return DictationText.acceptPolished(raw: text, polished: trimmed, minOverlap: 0.6) ? trimmed : text
+        } catch is InferenceGate.Busy {
+            AppLog.info("dictation", "polish skipped — a background transcription has the engines; using clean text")
+            return text
         } catch {
             AppLog.warn("dictation", "polish failed (\(error.localizedDescription)) — using raw text")
             return text
         }
     }
+
+    /// How long the optional polish may wait for the engines before the
+    /// passage goes out without it.
+    static let polishPatience: TimeInterval = 4
 
     // MARK: - History
 

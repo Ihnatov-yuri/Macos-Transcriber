@@ -149,13 +149,14 @@ actor GemmaLiteRTBackend: ASRBackend {
         // one engine and must never interleave conversations on it.
         let lockGen = await acquireEngine()
         defer { releaseEngine(lockGen) }
+        try Task.checkCancellation()
         // Read AFTER the wait — see generateText.
         guard let engine else {
             throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
         }
         // Cross-engine exclusivity: LiteRT's Metal path wedges when another
         // engine infers concurrently in-process (see InferenceGate).
-        let gateStamp = await InferenceGate.shared.acquire(exclusive: true)
+        let gateStamp = try await InferenceGate.shared.acquire(exclusive: true)
         defer { Task { await InferenceGate.shared.release(gateStamp, exclusive: true) } }
 
         let sampler = try SamplerConfig(topK: 1, topP: 0.95, temperature: 0.1)
@@ -238,14 +239,20 @@ actor GemmaLiteRTBackend: ASRBackend {
         // The idle release can land between two windows of a long preset run;
         // come back up instead of failing every remaining window.
         if !isReady || engine == nil { try await load(modelPath: nil) }
+        // A caller with bounded patience (dictation) does not queue behind a
+        // background generation that can run for minutes.
+        if InferenceGate.patience != nil, engineBusy { throw InferenceGate.Busy() }
         let lockGen = await acquireEngine()
         defer { releaseEngine(lockGen) }
+        // The caller may have given up (timeout) while this call queued:
+        // don't spend a generation nobody will read.
+        try Task.checkCancellation()
         // Read AFTER the wait: a wedge recovery swaps the engine while we
         // queue, and the one bound before the wait is the wedged one.
         guard isReady, let engine else {
             throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
         }
-        let gateStamp = await InferenceGate.shared.acquire(exclusive: true)
+        let gateStamp = try await InferenceGate.shared.acquire(exclusive: true)
         defer { Task { await InferenceGate.shared.release(gateStamp, exclusive: true) } }
         func attempt() async throws -> String {
             let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)

@@ -85,7 +85,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         var state = try TdtDecoderState()
         // Shared hold: never overlaps LiteRT inference (see InferenceGate);
         // pass-through when no LiteRT engine is live.
-        let gateStamp = await InferenceGate.shared.acquire()
+        let gateStamp = try await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let result = try await manager.transcribe(
             samples,
@@ -190,7 +190,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         var state = try TdtDecoderState()
         // Shared hold: never overlaps LiteRT inference (see InferenceGate);
         // pass-through when no LiteRT engine is live.
-        let gateStamp = await InferenceGate.shared.acquire()
+        let gateStamp = try await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let result = try await manager.transcribe(
             samples,

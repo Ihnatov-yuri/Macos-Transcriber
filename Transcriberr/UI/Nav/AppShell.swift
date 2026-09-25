@@ -134,20 +134,44 @@ struct AppShell: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    /// A newer release is out. Opens its GitHub page; × hides this version.
+    /// A newer release is out. Update installs it (signed releases only),
+    /// What's new opens its GitHub page, × hides this version.
     private func updateNotice(_ release: UpdateChecker.Release) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let phase = container.updates.installer.phase
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Circle().fill(AppColor.accent).frame(width: 6, height: 6)
                 Text("Version \(release.version) is out").uiLabel(11)
                 Spacer()
-                TapButton { container.updates.skippedVersion = release.version } label: {
-                    Text("×").uiLabel(12, color: AppColor.ink3)
+                if !phase.isWorking {
+                    TapButton { container.updates.skippedVersion = release.version } label: {
+                        Text("×").uiLabel(12, color: AppColor.ink3)
+                    }
+                    .help("Hide until the next version")
                 }
-                .help("Hide until the next version")
             }
-            TapButton { NSWorkspace.shared.open(release.pageURL) } label: {
-                LitButtonChrome(.ghost, compact: true) { Text("What's new…") }
+            switch phase {
+            case .downloading, .verifying, .relaunching:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(phase == .downloading ? "Downloading…" : phase == .verifying ? "Checking signature…" : "Reopening…")
+                        .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
+                }
+            default:
+                HStack(spacing: 6) {
+                    if release.installable {
+                        TapButton { container.installUpdate(release) } label: {
+                            LitButtonChrome(.accent, compact: true) { Text("Update") }
+                        }
+                    }
+                    TapButton { NSWorkspace.shared.open(release.pageURL) } label: {
+                        LitButtonChrome(.ghost, compact: true) { Text("What's new…") }
+                    }
+                }
+                if case .failed(let why) = phase {
+                    Text(why).font(AppFont.text(11)).foregroundStyle(AppColor.statusWarning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.horizontal, AppMetric.l)

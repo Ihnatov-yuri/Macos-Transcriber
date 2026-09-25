@@ -16,8 +16,8 @@ import Observation
 /// Off until the user says yes: the first launch asks once (AppShell), and
 /// the switch in Settings → Updates changes the answer later.
 ///
-/// Nothing is downloaded or installed. The notice links to the release
-/// page and the user updates by hand, as before.
+/// Installing is a separate, explicit step: UpdateInstaller downloads a
+/// signed zip only when the user presses Update.
 @Observable
 final class UpdateChecker: @unchecked Sendable {
 
@@ -25,6 +25,14 @@ final class UpdateChecker: @unchecked Sendable {
         let version: String
         let title: String
         let pageURL: URL
+        /// The release carries the zip and its signature, so the app can
+        /// install it. Older releases only get the "What's new" link.
+        var installable = false
+
+        var zipName: String { "Transcriberr-v\(version)-macOS-arm64.zip" }
+        /// Rebuilt from the version, never taken from the response.
+        var zipURL: URL { URL(string: "https://github.com/\(UpdateChecker.repo)/releases/download/v\(version)/\(zipName)")! }
+        var signatureURL: URL { URL(string: zipURL.absoluteString + ".sig")! }
     }
 
     enum Status: Equatable {
@@ -63,6 +71,7 @@ final class UpdateChecker: @unchecked Sendable {
     private(set) var status: Status = .idle
 
     let currentVersion: String
+    let installer = UpdateInstaller()
     private var loop: Task<Void, Never>?
 
     init(currentVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0",
@@ -142,24 +151,27 @@ final class UpdateChecker: @unchecked Sendable {
 
         Once a day it asks GitHub for the number of the newest release and compares it with the version on this Mac. The comparison happens here. The request is the same from every Mac and carries no version, account or identifier; GitHub sees your IP address, as it would for any web page.
 
-        When a new version is out, a notice appears in the sidebar with a link to the release page. Nothing is downloaded or installed. You can change this later in Settings, Updates.
+        When a new version is out, a notice appears in the sidebar. Nothing is downloaded until you press Update; then the new version is checked against a signature only its author can make, installed, and the app reopens. You can change this later in Settings, Updates.
         """
 
     // MARK: - The request (kept identical for every user)
 
-    static var request: URLRequest {
-        var req = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 20)
+    static var request: URLRequest { request(for: endpoint) }
+
+    /// The update downloads use the same bare request.
+    static func request(for url: URL, timeout: TimeInterval = 20) -> URLRequest {
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: timeout)
         req.httpMethod = "GET"
         req.httpShouldHandleCookies = false
         // GitHub rejects requests without a User-Agent; this one names the
         // app and nothing else.
         req.setValue("Transcriberr", forHTTPHeaderField: "User-Agent")
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue(url == endpoint ? "application/vnd.github+json" : "application/octet-stream", forHTTPHeaderField: "Accept")
         req.setValue("en", forHTTPHeaderField: "Accept-Language")
         return req
     }
 
-    private static let session: URLSession = {
+    static let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.httpCookieStorage = nil
         cfg.httpShouldSetCookies = false
@@ -173,10 +185,12 @@ final class UpdateChecker: @unchecked Sendable {
     // MARK: - Parsing
 
     private struct Payload: Decodable {
+        struct Asset: Decodable { let name: String }
         let tag_name: String
         let name: String?
         let draft: Bool?
         let prerelease: Bool?
+        let assets: [Asset]?
     }
 
     /// Only the tag is trusted, and only when it looks like a version. The
@@ -189,7 +203,10 @@ final class UpdateChecker: @unchecked Sendable {
               let url = URL(string: "https://github.com/\(repo)/releases/tag/v\(version)")
         else { return nil }
         let title = (p.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return Release(version: version, title: String(title.prefix(200)), pageURL: url)
+        var release = Release(version: version, title: String(title.prefix(200)), pageURL: url)
+        let names = Set((p.assets ?? []).map(\.name))
+        release.installable = names.contains(release.zipName) && names.contains(release.zipName + ".sig")
+        return release
     }
 
     /// "v3.13.1" → "3.13.1"; nil for anything that isn't 1–4 numeric parts.

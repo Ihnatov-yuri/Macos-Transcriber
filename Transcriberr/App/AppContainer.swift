@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftData
@@ -260,6 +261,46 @@ final class AppContainer: @unchecked Sendable {
 
     func requestDictatePane() {
         dictatePaneRequested &+= 1
+    }
+
+    // MARK: - Updates
+
+    /// Why the app can't quit for an update right now, if anything.
+    @MainActor
+    func updateBlocker() -> String? {
+        switch recorder.state {
+        case .recording, .paused: return "A recording is in progress. Stop it, then update."
+        default: break
+        }
+        if meetingRecorder.isRunning { return "A meeting is being recorded. Stop it, then update." }
+        switch dictation.phase {
+        case .listening, .transcribing, .inserting: return "Dictation is running. Let it finish, then update."
+        default: return nil
+        }
+    }
+
+    /// The Update button, wherever it sits. Recording or dictating blocks
+    /// it; a running transcription asks first, since it restarts from the
+    /// beginning after the relaunch.
+    @MainActor
+    func installUpdate(_ release: UpdateChecker.Release) {
+        if let why = updateBlocker() {
+            let alert = NSAlert()
+            alert.messageText = "Not now"
+            alert.informativeText = why
+            alert.runModal()
+            return
+        }
+        if jobManager.statuses.values.contains(where: { !$0.failed }) {
+            let alert = NSAlert()
+            alert.messageText = "A transcription is running"
+            alert.informativeText = "Transcriberr quits to update, and the transcription starts again after it reopens."
+            alert.addButton(withTitle: "Update Now")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        let updates = self.updates
+        Task { await updates.installer.install(release, currentVersion: updates.currentVersion) }
     }
 
 }

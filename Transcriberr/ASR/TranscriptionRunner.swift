@@ -237,7 +237,12 @@ final class TranscriptionRunner: @unchecked Sendable {
         // Whole-track readings before pass 1 (see EnsembleBackend.prepareTimeline):
         // long-form Whisper for non-English, the far side's timeline for
         // echo-by-timing in split-track meetings. Max quality path only.
-        let prepareTimeline = params.backend == .ensemble && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+        // Read ONCE per run: the whole-track reading below and the two-pass
+        // arbitration (`ensembleTwoPass`) are one mode. Read again minutes
+        // later, a toggle mid-run split it: the reading paid for and then no
+        // arbitration, or arbitration without the reading.
+        let superMaxQuality = params.backend == .ensemble && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+        let prepareTimeline = superMaxQuality
             && (EnsembleBackend.longFormEnabled(languages: params.languages)
                 || (AudioCompressor.sidecarURL(for: params.file, kind: "mic") != nil
                     && AudioCompressor.sidecarURL(for: params.file, kind: "sys") != nil))
@@ -380,8 +385,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             func set(_ idx: Int, _ v: EnsembleBackend.RichChunk) { lock.lock(); map[idx] = v; lock.unlock() }
             func all() -> [Int: EnsembleBackend.RichChunk] { lock.lock(); defer { lock.unlock() }; return map }
         }
-        let ensembleTwoPass = params.backend == .ensemble
-            && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+        let ensembleTwoPass = superMaxQuality
         let richBox = RichBox()
         runWedgeCount = 0
         var perChunkParsed: [Int: [RawSegment]] = [:]
@@ -406,76 +410,11 @@ final class TranscriptionRunner: @unchecked Sendable {
             return out
         }
 
-        var pipelineResults: [Int: String] = [:]
-        if pipelineWidth > 1 {
-            try await withThrowingTaskGroup(of: (Int, String).self) { group in
-                var submitted = 0
-                func submit(_ idx: Int) {
-                    let chunk = chunks[idx]
-                    let hints = hintsFor(chunk)
-                    if ensembleTwoPass, let ens = backend as? EnsembleBackend {
-                        group.addTask { [self] in
-                            let rich = try await richChunkWithRetry(
-                                ens: ens, samples: chunk.samples,
-                                window: prepareTimeline
-                                    ? .init(track: micChunkIndices.contains(idx) ? 1 : 0,
-                                            start: chunk.startSeconds, end: chunk.endSeconds)
-                                    : nil,
-                                params: params, continuation: continuation)
-                            richBox.set(idx, rich)
-                            return (idx, rich.text)
-                        }
-                        return
-                    }
-                    group.addTask { [self] in
-                        let raw = try await runChunkWithRetry(
-                            backend: backend, params: params,
-                            samples: chunk.samples,
-                            previousContext: nil,
-                            speakerHints: hints,
-                            continuation: continuation
-                        )
-                        return (idx, raw)
-                    }
-                }
-                while submitted < min(pipelineWidth, chunks.count) { submit(submitted); submitted += 1 }
-                while let (idx, raw) = try await group.next() {
-                    pipelineResults[idx] = raw
-                    continuation.yield(.stage(
-                        text: "Chunk \(min(pipelineResults.count, chunks.count))/\(chunks.count)",
-                        fraction: chunkBaseFraction + chunkSpan * Double(pipelineResults.count) / Double(max(chunks.count, 1))
-                    ))
-                    if submitted < chunks.count { submit(submitted); submitted += 1 }
-                }
-            }
-        }
-
-        for (idx, chunk) in chunks.enumerated() {
-            try Task.checkCancellation()
-
-            let raw: String
-            if pipelineWidth > 1 {
-                raw = pipelineResults[idx] ?? ""
-            } else {
-                let progress = chunkBaseFraction + chunkSpan * Double(idx) / Double(max(chunks.count, 1))
-                continuation.yield(.stage(
-                    text: "Chunk \(idx + 1)/\(chunks.count) (\(formatTime(chunk.startSeconds))–\(formatTime(chunk.endSeconds)))",
-                    fraction: progress
-                ))
-                do {
-                    raw = try await runChunkWithRetry(
-                        backend: backend,
-                        params: params,
-                        samples: chunk.samples,
-                        previousContext: previousTail,
-                        speakerHints: hintsFor(chunk),
-                        continuation: continuation
-                    )
-                } catch {
-                    AppLog.error("runner", "chunk \(idx + 1)/\(chunks.count) failed: \(error.localizedDescription)")
-                    throw error
-                }
-            }
+        // Everything after a chunk's raw text: parse, label, trim, dedup,
+        // emit. Chunks are consumed strictly in order (seam trim, dedup and
+        // the context tail all look at the chunk before).
+        func consume(_ idx: Int, raw: String) {
+            let chunk = chunks[idx]
             AppLog.info("runner", "chunk \(idx + 1)/\(chunks.count) -> \(raw.count) chars")
 
             var parsed = parseSegments(
@@ -557,6 +496,86 @@ final class TranscriptionRunner: @unchecked Sendable {
                     lowConfidenceChunks.append((idx, chunk, parsedJoined))
                 }
             }
+        }
+
+        var pipelineResults: [Int: String] = [:]
+        if pipelineWidth > 1 {
+            try await withThrowingTaskGroup(of: (Int, String).self) { group in
+                var submitted = 0
+                func submit(_ idx: Int) {
+                    let chunk = chunks[idx]
+                    let hints = hintsFor(chunk)
+                    if ensembleTwoPass, let ens = backend as? EnsembleBackend {
+                        group.addTask { [self] in
+                            let rich = try await richChunkWithRetry(
+                                ens: ens, samples: chunk.samples,
+                                window: prepareTimeline
+                                    ? .init(track: micChunkIndices.contains(idx) ? 1 : 0,
+                                            start: chunk.startSeconds, end: chunk.endSeconds)
+                                    : nil,
+                                params: params, continuation: continuation)
+                            richBox.set(idx, rich)
+                            return (idx, rich.text)
+                        }
+                        return
+                    }
+                    group.addTask { [self] in
+                        let raw = try await runChunkWithRetry(
+                            backend: backend, params: params,
+                            samples: chunk.samples,
+                            previousContext: nil,
+                            speakerHints: hints,
+                            continuation: continuation
+                        )
+                        return (idx, raw)
+                    }
+                }
+                while submitted < min(pipelineWidth, chunks.count) { submit(submitted); submitted += 1 }
+                // Consume the finished in-order prefix as results arrive, so
+                // text appears while pass 1 runs. Consuming only after the
+                // whole group showed nothing until the last chunk, and a
+                // chunk that threw threw away every finished one with it.
+                var nextToConsume = 0
+                var finished = 0
+                while let (idx, raw) = try await group.next() {
+                    pipelineResults[idx] = raw
+                    finished += 1
+                    continuation.yield(.stage(
+                        text: "Chunk \(min(finished, chunks.count))/\(chunks.count)",
+                        fraction: chunkBaseFraction + chunkSpan * Double(finished) / Double(max(chunks.count, 1))
+                    ))
+                    if submitted < chunks.count { submit(submitted); submitted += 1 }
+                    while let ready = pipelineResults.removeValue(forKey: nextToConsume) {
+                        try Task.checkCancellation()
+                        consume(nextToConsume, raw: ready)
+                        nextToConsume += 1
+                    }
+                }
+            }
+        }
+
+        for (idx, chunk) in chunks.enumerated() where pipelineWidth <= 1 {
+            try Task.checkCancellation()
+            let progress = chunkBaseFraction + chunkSpan * Double(idx) / Double(max(chunks.count, 1))
+            continuation.yield(.stage(
+                text: "Chunk \(idx + 1)/\(chunks.count) (\(formatTime(chunk.startSeconds))–\(formatTime(chunk.endSeconds)))",
+                fraction: progress
+            ))
+            let raw: String
+            do {
+                raw = try await runChunkWithRetry(
+                    backend: backend,
+                    params: params,
+                    samples: chunk.samples,
+                    previousContext: previousTail,
+                    speakerHints: hintsFor(chunk),
+                    continuation: continuation
+                )
+            } catch {
+                AppLog.error("runner", "chunk \(idx + 1)/\(chunks.count) failed: \(error.localizedDescription)")
+                throw error
+            }
+            consume(idx, raw: raw)
         }
         AppLog.info("runner", "first pass done — \(allSegments.count) segments, \(lowConfidenceChunks.count) low-confidence chunks")
 
@@ -1153,7 +1172,12 @@ final class TranscriptionRunner: @unchecked Sendable {
             // in-flight pipeline chunks — the watchdog killed healthy work.
             continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
             await noteWedge(backend: backend, continuation: continuation)
-            try await backend.recoverWedge(modelPath: params.modelDirectory)
+            // A failed rebuild must not end the run from here: the engine
+            // keeps its old instance, and the retry below either works on it
+            // or times out into the skip.
+            do { try await backend.recoverWedge(modelPath: params.modelDirectory) } catch {
+                AppLog.warn("runner", "wedge recovery failed: \(error.localizedDescription)")
+            }
             do {
                 return try await withChunkTimeout(seconds: timeout) {
                     try await backend.transcribeChunk(
@@ -1225,7 +1249,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 try? await ens.recoverWedge(modelPath: nil)
                 return (try? await withChunkTimeout(seconds: timeout) {
                     try await ens.transcribeChunkSolo(
-                        samples: samples, languages: params.languages)
+                        samples: samples, languages: params.languages, window: window)
                 }) ?? EnsembleBackend.RichChunk(text: "", agreement: 1, textA: "", textB: "")
             }
         }
@@ -1398,7 +1422,7 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// ("…Complex API troubleshooting." / "Troubleshooting. And…").
     static func trimBoundaryEchoTail(from text: String, beforeHeadOf reference: String) -> String {
         func norm(_ s: some StringProtocol) -> String {
-            s.lowercased().filter { $0.isLetter || $0.isNumber }
+            TranscriptHygiene.wordKey(s)
         }
         let refHead = reference.split(separator: " ").prefix(4).map(norm)
         var words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
@@ -1426,7 +1450,7 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// genuine short reply ("Yes." after "Yes?") is never eaten.
     static func trimBoundaryEcho(from text: String, afterTailOf reference: String) -> String {
         func norm(_ s: some StringProtocol) -> String {
-            s.lowercased().filter { $0.isLetter || $0.isNumber }
+            TranscriptHygiene.wordKey(s)
         }
         let refTail = reference.split(separator: " ").suffix(4).map(norm)
         var words = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)

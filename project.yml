@@ -63,6 +63,11 @@ targets:
       path: Transcriberr/Info.plist
       properties:
         CFBundleDisplayName: Transcriberr
+        # XcodeGen writes 1.0 / 1 into the plist when these are missing, and
+        # the plist wins over the build settings — so the sidebar badge and
+        # MCP serverInfo said "1.0" whatever MARKETING_VERSION was.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.productivity
         NSMicrophoneUsageDescription: Transcriberr records audio from your microphone to transcribe it locally on this Mac.
@@ -114,6 +119,8 @@ targets:
       path: TranscriberrCLI/Info.plist
       properties:
         CFBundleDisplayName: TranscriberrCLI
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSMinimumSystemVersion: "15.0"
         NSMicrophoneUsageDescription: Transcriberrcli records audio from your microphone for pipeline tests.
     entitlements:
@@ -124,6 +131,10 @@ targets:
     settings:
       base:
         PRODUCT_NAME: transcriberrcli
+        # A bare tool has no bundle: its Info.plist only reaches
+        # Bundle.main (MCP serverInfo's version) and TCC (the mic prompt
+        # text) when linked into the binary's __info_plist section.
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
         PRODUCT_BUNDLE_IDENTIFIER: nl.ihnatov.TranscriberrCLI
         # Stays on the project's old floor: audio-pipeline-only (see the
         # sources list above — no UI/Theme files), so it has no dependency

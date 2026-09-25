@@ -1,8 +1,10 @@
 import Foundation
 import IOKit.pwr_mgt
 
-/// macOS equivalent of `KeepScreenOn.kt` + `WakeLockHelper.kt`.
-/// While the assertion is held, the system won't dim the display or sleep.
+/// macOS equivalent of `WakeLockHelper.kt`. While the assertion is held the
+/// system does not idle-sleep; the display may still dim and sleep, which is
+/// right for a long transcription nobody is watching. `JobManager` holds it
+/// while its queue has work.
 @MainActor
 final class IdleAssertion {
     private var assertionID: IOPMAssertionID = 0

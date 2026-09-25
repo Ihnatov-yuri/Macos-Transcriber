@@ -44,8 +44,15 @@ enum AudioCompressor {
     /// failure must never cost the recording itself, so every file falls
     /// back to its original WAV URL on error. Returns the main file's
     /// final URL.
+    ///
+    /// The main file is transcoded and verified alongside the sidecars, but
+    /// its WAV is deleted only once they are done, right before returning.
+    /// Deleting it the moment its own transcode finished left the caller's
+    /// row pointing at a missing WAV for as long as the sidecars still took
+    /// — a crash in that stretch stranded the row. Now the gap is just
+    /// delete → return → the caller's repoint.
     static func compressRecordingFiles(mainURL: URL, includeSidecars: Bool) async -> URL {
-        async let main = compressOrLog(mainURL, label: "main file")
+        async let main = transcodeVerifiedOrLog(mainURL, label: "main file")
         if includeSidecars {
             await withTaskGroup(of: Void.self) { group in
                 for kind in sidecarKinds {
@@ -55,7 +62,14 @@ enum AudioCompressor {
                 }
             }
         }
-        return await main
+        guard let m4a = await main else { return mainURL }
+        do {
+            try replace(mainURL, with: m4a)
+            return m4a
+        } catch {
+            AppLog.warn("compressor", "main file compression failed for \(mainURL.lastPathComponent): \(error.localizedDescription)")
+            return mainURL
+        }
     }
 
     private static func compressOrLog(_ wav: URL, label: String) async -> URL {
@@ -67,12 +81,30 @@ enum AudioCompressor {
         }
     }
 
+    private static func transcodeVerifiedOrLog(_ wav: URL, label: String) async -> URL? {
+        do {
+            return try await transcodeVerified(wav)
+        } catch {
+            AppLog.warn("compressor", "\(label) compression failed for \(wav.lastPathComponent): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     /// Transcodes `wav` to a sibling `.m4a`, verifies the decoded duration
     /// matches within tolerance, deletes `wav` ONLY on success, and returns
     /// the new URL. On any failure the original file is left untouched and
     /// no partial `.m4a` survives — never delete-then-fail, never leave an
     /// orphan behind either.
     static func compressAndReplace(_ wav: URL) async throws -> URL {
+        let m4a = try await transcodeVerified(wav)
+        try replace(wav, with: m4a)
+        return m4a
+    }
+
+    /// The transcode-and-verify half of `compressAndReplace`: leaves a
+    /// verified `.m4a` next to the untouched `wav`, or throws with no
+    /// `.m4a` left behind.
+    private static func transcodeVerified(_ wav: URL) async throws -> URL {
         let m4a = wav.deletingPathExtension().appendingPathExtension("m4a")
         let originalDuration = try await duration(of: wav)
         do {
@@ -93,6 +125,11 @@ enum AudioCompressor {
             try? FileManager.default.removeItem(at: m4a)
             throw CompressError.durationMismatch(original: originalDuration, transcoded: newDuration)
         }
+        return m4a
+    }
+
+    /// The commit half: delete `wav` now that `m4a` is verified.
+    private static func replace(_ wav: URL, with m4a: URL) throws {
         do {
             try FileManager.default.removeItem(at: wav)
         } catch {
@@ -102,7 +139,6 @@ enum AudioCompressor {
             try? FileManager.default.removeItem(at: m4a)
             throw error
         }
-        return m4a
     }
 
     /// Locates a recording's `<base>.<kind>.{m4a,wav}` sidecar — checks the

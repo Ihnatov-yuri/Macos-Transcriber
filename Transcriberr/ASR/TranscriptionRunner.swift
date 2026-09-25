@@ -130,7 +130,16 @@ final class TranscriptionRunner: @unchecked Sendable {
     func run(_ params: Params) -> AsyncThrowingStream<ASREvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
+                // One run at a time, including a cancelled one still winding
+                // down: the job manager moves on the moment it cancels, and
+                // a Super run that has not yet noticed kept its Whisper calls
+                // (and its writes to the SHARED ensemble's timeline) going
+                // next to the new run — seen after a cancel + re-run on
+                // 2026-09-25.
+                await Self.runSlot.acquire()
+                defer { Self.runSlot.release() }
                 do {
+                    try Task.checkCancellation()
                     try await self.runImpl(params, continuation: continuation)
                     continuation.finish()
                 } catch is CancellationError {
@@ -142,6 +151,24 @@ final class TranscriptionRunner: @unchecked Sendable {
                 }
             }
             continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
+    }
+
+    @MainActor private static let runSlot = RunSlot()
+
+    /// A FIFO mutex on the main actor.
+    @MainActor
+    final class RunSlot {
+        private var busy = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func acquire() async {
+            guard busy else { busy = true; return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+
+        func release() {
+            if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
         }
     }
 
@@ -291,8 +318,15 @@ final class TranscriptionRunner: @unchecked Sendable {
             continuation.yield(.stage(text: "Reading the whole recording…", fraction: 0.15))
             var tracks: [(id: Int, samples: [Float])] = [(0, samples)]
             if let cleanedMic { tracks.append((1, cleanedMic)) }
-            await ens.prepareTimeline(tracks: tracks, languages: params.languages, splitTracks: splitTracks)
+            await ens.prepareTimeline(tracks: tracks, languages: params.languages, splitTracks: splitTracks,
+                                      onProgress: { f in
+                continuation.yield(.stage(text: "Reading the whole recording… \(Int(f * 100))%",
+                                          fraction: 0.15 + 0.01 * f))
+            })
             cleanedMic = nil
+            // Cancelled mid-reading: stop here instead of sending every
+            // chunk to engines that fail it with CancellationError.
+            try Task.checkCancellation()
         } else if let ens = backend as? EnsembleBackend {
             // The ensemble is shared across runs: without this, a run that
             // skips the timeline (English, one track) read the PREVIOUS

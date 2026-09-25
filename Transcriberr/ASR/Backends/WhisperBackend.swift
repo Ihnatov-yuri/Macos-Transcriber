@@ -86,9 +86,13 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// a whole track, WhisperKit runs its own long-form loop: every 30 s
     /// window starts at the last segment it finished, so no word is ever
     /// read from a cut-off scrap (see `EnsembleBackend.prepareLongForm`).
+    ///
+    /// `progress` (optional) is WhisperKit's own seek progress over
+    /// `samples` — how a caller shows a half-hour whole-track reading moving.
     func transcribeTimedSegments(
         samples: [Float],
-        languages: Set<String>
+        languages: Set<String>,
+        progress: Progress? = nil
     ) async throws -> (text: String, words: [TimedWord], segments: [SegmentSpan]) {
         guard isReady, let pipe else {
             throw ASRError.modelLoadFailed(reason: "Whisper backend not loaded")
@@ -110,7 +114,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         // Shared hold: runs alongside other Whisper/Parakeet calls, but never
         // while LiteRT Gemma infers — that pairing wedges LiteRT's native
         // call (see InferenceGate). Pass-through when no Gemma is loaded.
-        let gateStamp = await InferenceGate.shared.acquire()
+        let gateStamp = try await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
         // Our own TranscribeTask with its own Progress, not `pipe.transcribe`.
         // Chunks run three at a time on ONE WhisperKit (shared gate since
@@ -125,7 +129,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         if pipe.modelState != .loaded { try await pipe.loadModels() }
         guard let tokenizer = pipe.tokenizer else { throw WhisperError.tokenizerUnavailable() }
         let task = pipe.setupTranscribeTask(
-            currentTimings: pipe.currentTimings, progress: Progress(),
+            currentTimings: pipe.currentTimings, progress: progress ?? Progress(),
             audioProcessor: pipe.audioProcessor, audioEncoder: pipe.audioEncoder,
             featureExtractor: pipe.featureExtractor, segmentSeeker: pipe.segmentSeeker,
             textDecoder: pipe.textDecoder, tokenizer: tokenizer)
@@ -229,7 +233,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         guard isReady, let pipe else {
             throw ASRError.modelLoadFailed(reason: "Whisper backend not loaded")
         }
-        let gateStamp = await InferenceGate.shared.acquire()
+        let gateStamp = try await InferenceGate.shared.acquire()
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let r = try await pipe.detectLangauge(audioArray: samples)
         return (r.language, exp(Double(r.langProbs[r.language] ?? -.infinity)))

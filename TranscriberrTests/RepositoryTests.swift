@@ -537,6 +537,85 @@ final class RepositoryTests: XCTestCase {
         XCTAssertTrue(rec.segments.isEmpty)
     }
 
+    // MARK: - Audio repoint
+
+    /// Post-record compression repoints the row seconds after Stop — the
+    /// user may have deleted the recording by then.
+    func testUpdateAudioPathOnDeletedRecordingIsANoOp() throws {
+        let rec = try makeRecording(title: "Gone", seconds: 1, segs: [])
+        let (id, before) = (rec.id, rec.audioPath)
+        try repo.delete(rec)
+        XCTAssertNoThrow(try repo.updateAudioPath(URL(fileURLWithPath: "/tmp/gone.m4a"), for: rec))
+        BackupService.flush()
+        XCTAssertEqual(BackupService.allRecordingBackups().first { $0.id == id }?.audioPath, before,
+                       "a deleted recording's backup must not be rewritten")
+    }
+
+    /// Crash between the compressor deleting <base>.wav and the row being
+    /// repointed: the launch heal finds the .m4a twin.
+    func testHealMissingAudioPathRepointsToCompressedTwin() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heal_\(UUID().uuidString.prefix(6))")
+        let m4a = base.appendingPathExtension("m4a")
+        FileManager.default.createFile(atPath: m4a.path, contents: Data([0]))
+        tempFiles.append(m4a)
+        let rec = Recording(title: "Stranded", audioPath: base.appendingPathExtension("wav").path)
+        try repo.save(rec)
+        let intact = try makeRecording(title: "Intact", seconds: 1, segs: [])
+        let intactPath = intact.audioPath
+
+        XCTAssertEqual(repo.healMissingAudioPaths(), 1)
+        XCTAssertEqual(rec.audioPath, m4a.path)
+        XCTAssertEqual(intact.audioPath, intactPath, "a row whose file exists is left alone")
+    }
+
+    func testHealedAudioURLRules() {
+        let present: Set<String> = ["/r/a.m4a", "/r/b.wav", "/r/c.wav", "/r/c.m4a"]
+        let exists = { present.contains($0) }
+        XCTAssertEqual(RecordingRepository.healedAudioURL(for: "/r/a.wav", fileExists: exists)?.path, "/r/a.m4a")
+        XCTAssertEqual(RecordingRepository.healedAudioURL(for: "/r/b.m4a", fileExists: exists)?.path, "/r/b.wav")
+        XCTAssertNil(RecordingRepository.healedAudioURL(for: "/r/c.wav", fileExists: exists), "file still there")
+        XCTAssertNil(RecordingRepository.healedAudioURL(for: "/r/d.wav", fileExists: exists), "no twin either")
+    }
+
+    // MARK: - Second-pass refinement splice
+
+    /// Split-track meeting: mic ("ME") and sys rows share one timeline. A
+    /// refined chunk replaces only its OWN track's rows in the window.
+    func testRefinementSpliceIsSameTrackOnly() throws {
+        let rec = try makeRecording(title: "Meeting", seconds: 1, segs: [
+            (10, 14, "mic first pass", "ME", "Me"),
+            (11, 15, "sys first pass", "SPEAKER_00", nil),
+            (31, 33, "mic later", "ME", "Me"),
+        ])
+        try repo.replaceSegmentsInRange(10, 30, with: [
+            Segment(startSeconds: 10, endSeconds: 14, text: "mic refined", speaker: "ME", speakerName: "Me"),
+        ], for: rec)
+        XCTAssertEqual(Set(rec.segments.map(\.text)), ["mic refined", "sys first pass", "mic later"])
+
+        try repo.replaceSegmentsInRange(10, 30, with: [
+            Segment(startSeconds: 11, endSeconds: 15, text: "sys refined", speaker: "SPEAKER_00"),
+        ], for: rec)
+        XCTAssertEqual(Set(rec.segments.map(\.text)), ["mic refined", "sys refined", "mic later"])
+    }
+
+    /// Single-track runs (no "ME" anywhere) keep the plain time splice.
+    func testRefinementSpliceSingleTrackReplacesTheWindow() {
+        let replaces = RecordingRepository.refinementReplaces(10, 30, replacementSpeakers: [nil])
+        XCTAssertTrue(replaces(10, 30, nil))
+        XCTAssertTrue(replaces(12, 20, "SPEAKER_01"))
+        XCTAssertFalse(replaces(9, 20, nil), "only rows fully inside the window")
+        XCTAssertFalse(replaces(25, 31, nil))
+    }
+
+    /// An empty replacement names no track — it must not guess and delete
+    /// the other side's rows.
+    func testRefinementSpliceWithEmptyReplacementReplacesNothing() {
+        let replaces = RecordingRepository.refinementReplaces(10, 30, replacementSpeakers: [])
+        XCTAssertFalse(replaces(12, 20, "ME"))
+        XCTAssertFalse(replaces(12, 20, nil))
+    }
+
     // MARK: - Pending queue
 
     func testPendingTaskRoundTripAndReplace() throws {
@@ -554,9 +633,22 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(tasks.first?.backend, BackendFactory.Kind.parakeet.rawValue)
         XCTAssertEqual(tasks.first?.languages, "Dutch,English")
         XCTAssertEqual(tasks.first?.expectedSpeakers, 3)
+        XCTAssertNil(tasks.first?.keepVisibleUntilDone, "an ordinary run reads like a pre-column row")
 
         repo.removePendingTask(rec.id)
         XCTAssertTrue(repo.pendingTasks().isEmpty)
+    }
+
+    /// The Super refinement after a meeting's draft must come back as a
+    /// BACKGROUND run after a quit — resumed as a foreground one, its first
+    /// chunk wiped the readable draft.
+    func testPendingTaskKeepsBackgroundRefinementFlag() throws {
+        let rec = Recording(title: "Meeting", audioPath: "/tmp/meeting.wav")
+        try repo.save(rec)
+        repo.savePendingTask(for: rec, params: .init(file: URL(fileURLWithPath: rec.audioPath),
+                                                     backend: .ensemble, diarize: true,
+                                                     keepVisibleUntilDone: true))
+        XCTAssertEqual(repo.pendingTasks().first?.keepVisibleUntilDone, true)
     }
 
     func testDeletingRecordingDropsItsPendingTask() throws {

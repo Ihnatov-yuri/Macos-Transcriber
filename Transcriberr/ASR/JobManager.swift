@@ -191,7 +191,12 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 diarize: task.diarize,
                 hybridDiarize: task.hybridDiarize,
                 expectedSpeakers: task.expectedSpeakers,
-                expectedSpeakersExact: recording.runSpeakersExact ?? false
+                expectedSpeakersExact: recording.runSpeakersExact ?? false,
+                // An interrupted background refinement resumes in the
+                // background: as a foreground run its first chunk wiped the
+                // readable draft. (`modelDirectory` is not persisted: every
+                // enqueue passes nil and the engines self-resolve.)
+                keepVisibleUntilDone: task.keepVisibleUntilDone ?? false
             ))
         }
     }
@@ -405,14 +410,19 @@ final class TranscriptionJobManager: @unchecked Sendable {
                             speakerName: raw.speakerName
                         )
                     }
+                    // Same-track splice, like the store's: in a split-track
+                    // meeting a time-only removal dropped the other track's
+                    // rows in this window.
+                    let replaces = RecordingRepository.refinementReplaces(
+                        start, end, replacementSpeakers: segs.map(\.speaker))
                     if params.keepVisibleUntilDone {
-                        allSegments.removeAll { $0.startSeconds >= start && $0.endSeconds <= end }
+                        allSegments.removeAll { replaces($0.startSeconds, $0.endSeconds, $0.speaker) }
                         allSegments.append(contentsOf: segs)
                         continue
                     }
                     do {
                         try repository.replaceSegmentsInRange(start, end, with: segs, for: recording)
-                        allSegments.removeAll { $0.startSeconds >= start && $0.endSeconds <= end }
+                        allSegments.removeAll { replaces($0.startSeconds, $0.endSeconds, $0.speaker) }
                         allSegments.append(contentsOf: segs)
                     } catch {
                         AppLog.warn("job", "replace failed: \(error.localizedDescription)")

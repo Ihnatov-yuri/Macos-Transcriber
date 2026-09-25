@@ -76,6 +76,7 @@ func cmdMigrateAudio(dryRun: Bool) async -> Int32 {
                 rec.audioPath = m4a.path
                 do {
                     try context.save()
+                    BackupService.backupRecording(rec)
                     print("[migrate]   ✓ '\(rec.title)' — WAV already gone, repointed to existing verified .m4a")
                     migrated += 1
                 } catch {
@@ -110,6 +111,9 @@ func cmdMigrateAudio(dryRun: Bool) async -> Int32 {
                 print("[migrate] ❌ failed to save '\(rec.title)': \(error.localizedDescription) — stopping")
                 return 1
             }
+            // Keep recording.json in step with the new path, or a later
+            // restore-backups would point the row back at the deleted WAV.
+            BackupService.backupRecording(rec)
             let sizeAfter = totalSize(for: finalURL)
             bytesBefore += sizeBefore
             bytesAfter += sizeAfter

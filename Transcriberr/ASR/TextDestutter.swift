@@ -33,7 +33,7 @@ enum TextDestutter {
     /// the same pair for the same reason. Only with the comma: a bare
     /// "так так" mid-sentence is as likely a stutter of "so".
     private static let commaDoubles: Set<String> = [
-        "так", "ні", "да", "нет", "ja", "nee", "nein",
+        "так", "ні", "ja", "nee", "nein",
     ]
 
     /// Pure hesitation sounds — dropped outright before stutter collapse

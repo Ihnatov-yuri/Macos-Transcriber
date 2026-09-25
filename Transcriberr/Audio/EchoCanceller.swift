@@ -213,7 +213,13 @@ enum EchoCanceller {
             w.withUnsafeMutableBufferPointer { wp in
                 for i in 0..<n {
                     let j = i - delay
-                    guard j >= 0 else { continue }
+                    guard j >= 0 else {
+                        // No reference history yet, so no echo prediction:
+                        // count the raw mic as residual, or the suppressor
+                        // reads these frames as 0 > 0 and mutes them.
+                        framePe[i / nlpFrame] += mic[i] * mic[i]
+                        continue
+                    }
                     let win = j < taps ? hp.baseAddress! + j : rp.baseAddress! + (j - taps)
                     var yhat: Float = 0
                     vDSP_dotpr(win, 1, wp.baseAddress!, 1, &yhat, vDSP_Length(taps))

@@ -47,18 +47,25 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// actor reentrancy let three chunks that timed out together each start
     /// their own multi-GB engine.
     private var building: Task<Void, Error>?
+    /// Bumped by release(). A build that finishes under an older one drops
+    /// its engine: it used to store it and re-arm the gate after the
+    /// release, which left the gate latched on an orphaned engine.
+    private var buildGeneration = 0
 
     private func rebuild(modelPath: URL?) async throws {
         if let building { return try await building.value }
-        let task = Task { try await self.buildEngine(modelPath: modelPath) }
+        let gen = buildGeneration
+        let task = Task { try await self.buildEngine(modelPath: modelPath, generation: gen) }
         building = task
-        defer { building = nil }
+        // Only clear OUR build: release() may have detached it already and
+        // a later load started a new one.
+        defer { if building == task { building = nil } }
         try await task.value
     }
 
     /// Builds a fresh engine and swaps it in. The old one stays in place
     /// until the new one is ready.
-    private func buildEngine(modelPath: URL?) async throws {
+    private func buildEngine(modelPath: URL?, generation gen: Int) async throws {
         guard let file = Self.resolveModelFile(from: modelPath) else {
             throw ASRError.modelMissing(backend: id)
         }
@@ -68,6 +75,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         // Android's Auto path. Audio encoder pinned to CPU per the bundle's
         // constraint ("Model requires one of [cpu]").
         var failures: [String] = []
+        var built: (engine: Engine, gpu: Bool)?
         for gpu in [true, false] {
             do {
                 let config = try EngineConfig(
@@ -83,15 +91,25 @@ actor GemmaLiteRTBackend: ASRBackend {
                 )
                 let e = Engine(engineConfig: config)
                 try await e.initialize()
-                self.engine = e
-                self.isReady = true
-                await InferenceGate.shared.setLitertActive(true)
-                AppLog.info("litert", "engine ready on \(gpu ? "GPU" : "CPU")")
-                return
+                // Outside this do/catch so a stale build does not fall
+                // through to a CPU attempt.
+                built = (e, gpu)
+                break
             } catch {
                 failures.append("\(gpu ? "GPU" : "CPU"): \(error.localizedDescription)")
                 AppLog.warn("litert", "engine init failed on \(gpu ? "GPU" : "CPU"): \(error.localizedDescription)")
             }
+        }
+        if let built {
+            guard buildGeneration == gen else {
+                AppLog.info("litert", "released while loading — engine discarded")
+                throw ASRError.modelLoadFailed(reason: "LiteRT Gemma was released while loading")
+            }
+            self.engine = built.engine
+            self.isReady = true
+            await InferenceGate.shared.setLitertActive(true)
+            AppLog.info("litert", "engine ready on \(built.gpu ? "GPU" : "CPU")")
+            return
         }
         throw ASRError.modelLoadFailed(reason: "LiteRT engine init failed — \(failures.joined(separator: "; "))")
     }
@@ -161,6 +179,8 @@ actor GemmaLiteRTBackend: ASRBackend {
     }
 
     func release() async {
+        buildGeneration += 1
+        building = nil
         engine = nil
         isReady = false
         // A wedged native call may hold the engine lock forever — the whole
@@ -267,26 +287,38 @@ actor GemmaLiteRTBackend: ASRBackend {
     // 0-char generation coincided with a concurrent gemma merge. One
     // generation at a time, strict FIFO.
     private var engineBusy = false
-    private var engineWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Resumed WITH the lock generation they are granted, at grant time.
+    private var engineWaiters: [CheckedContinuation<Int, Never>] = []
     /// Bumped whenever the engine is torn down: a WEDGED native call holds
     /// the lock forever (it never returns to run its defer), so release()
     /// resets the lock — and the generation stamp makes the zombie's
     /// eventual release a no-op instead of corrupting the new holder.
     private var lockGeneration = 0
 
-    /// A generation is running or queued — not the moment for an idle release.
-    var isBusy: Bool { engineBusy }
+    /// A generation is running or queued, or the engine is being built for
+    /// one — not the moment for an idle release (a release during the build
+    /// discards it, and the load that asked for it fails).
+    var isBusy: Bool { engineBusy || building != nil }
 
     private func acquireEngine() async -> Int {
-        if !engineBusy { engineBusy = true; return lockGeneration }
-        await withCheckedContinuation { engineWaiters.append($0) }
-        return lockGeneration
+        while true {
+            if !engineBusy { engineBusy = true; return lockGeneration }
+            // The grant is the generation handed over at resume time. Reading
+            // `lockGeneration` after waking let two waiters, resumed by two
+            // resets before either ran, return the same generation and both
+            // hold the engine. A grant a later reset superseded before this
+            // waiter ran is stale: queue again.
+            let granted = await withCheckedContinuation { (c: CheckedContinuation<Int, Never>) in
+                engineWaiters.append(c)
+            }
+            if granted == lockGeneration { return granted }
+        }
     }
 
     private func releaseEngine(_ generation: Int) {
         guard generation == lockGeneration else { return }   // zombie holder
         if engineWaiters.isEmpty { engineBusy = false }
-        else { engineWaiters.removeFirst().resume() }
+        else { engineWaiters.removeFirst().resume(returning: lockGeneration) }
     }
 
     /// Called from release()/teardown: unblock the queue — waiters resume
@@ -298,7 +330,7 @@ actor GemmaLiteRTBackend: ASRBackend {
             engineBusy = false
         } else {
             engineBusy = true
-            engineWaiters.removeFirst().resume()
+            engineWaiters.removeFirst().resume(returning: lockGeneration)
         }
     }
 
@@ -426,7 +458,10 @@ actor GemmaLiteRTBackend: ASRBackend {
             if !speakerHints.isEmpty {
                 core += "\n\nThis audio has multiple speakers. Voice analysis identifies these turns (times relative to this segment):\n"
                 for h in speakerHints.prefix(12) {
-                    let n = (h.speakerKey.split(separator: "_").last.flatMap { Int($0) } ?? 0) + 1
+                    // No +1: the runner parses "Speaker N" back to SPEAKER_0N,
+                    // which must name the same cluster as Parakeet's labels
+                    // and the diarizer's own assignment.
+                    let n = SpeakerHint.number(fromKey: h.speakerKey)
                     core += String(format: "- %.1f–%.1fs: Speaker %d\n", h.startSeconds, h.endSeconds, n)
                 }
                 core += "\nUse exactly these speaker labels. Prefix each spoken turn with the matching \"Speaker N: \" tag, one turn per line. Do not invent new speakers; do not renumber."

@@ -91,11 +91,13 @@ actor EnsembleBackend: ASRBackend {
         kindA = a
         kindB = b
         AppLog.info("ensemble", "loading \(a.rawValue) + \(b.rawValue)")
+        let gen = generation
 
         let ea = factory.backend(for: a)
         try await ea.load(modelPath: nil)
         let eb = factory.backend(for: b)
         try await eb.load(modelPath: nil)
+        try checkNotReleased(since: gen)
         engineA = ea
         engineB = eb
 
@@ -109,13 +111,25 @@ actor EnsembleBackend: ASRBackend {
         if await !arb.isReady {
             try? await arb.load(modelPath: nil)
         }
-        arbiter = await arb.isReady ? arb : nil
+        let arbReady = await arb.isReady
+        try checkNotReleased(since: gen)
+        arbiter = arbReady ? arb : nil
         if arbiter == nil {
             AppLog.warn("ensemble", "Gemma arbiter unavailable — merge falls back to engine A output")
         }
         gemmaBenched = false
         brief = nil
         isReady = true
+    }
+
+    /// Bumped by release(). A load that release() overtook at one of its
+    /// awaits used to finish anyway and set `isReady` on a released ensemble.
+    private var generation = 0
+
+    private func checkNotReleased(since gen: Int) throws {
+        guard generation == gen else {
+            throw ASRError.modelLoadFailed(reason: "Super was released while loading")
+        }
     }
 
     /// Recover from a wedged chunk: ask each engine (A, B and the arbiter,
@@ -163,6 +177,7 @@ actor EnsembleBackend: ASRBackend {
     }
 
     func release() async {
+        generation += 1
         engineA = nil
         engineB = nil
         arbiter = nil

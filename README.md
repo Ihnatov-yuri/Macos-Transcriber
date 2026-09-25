@@ -93,7 +93,11 @@ xcodebuild -project Transcriberr.xcodeproj -scheme Transcriberr \
 open .build/xcode/Build/Products/Release/Transcriberr.app
 ```
 
+Shipping a version (notes, signing, GitHub release): [docs/RELEASING.md](docs/RELEASING.md).
+
 **Requirements:** Apple Silicon Mac, macOS 15+, Xcode 16+.
+
+**Updates:** from 3.14 the app asks once, on first launch, whether to check GitHub for new versions. The request is the same from every Mac and the comparison happens locally. From 3.14.2 on, Update installs a new version in place after verifying its signature. Details in [docs/RELEASING.md](docs/RELEASING.md#how-installed-copies-update).
 
 **First run:** models download on demand — Parakeet/Whisper/diarization fetch themselves on first use; Gemma `.litertlm` bundles are downloaded from Settings → Models.
 

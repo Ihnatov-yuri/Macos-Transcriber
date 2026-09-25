@@ -64,7 +64,9 @@ final class TranscriptionJobManager: @unchecked Sendable {
     var onIdle: (() async -> Bool)?
     /// Suspends until nothing is rewriting this recording's audio files (mix
     /// rebuild / compression after a recording). AppContainer points this at
-    /// `AudioPostProcessTracker.waitUntilIdle`.
+    /// `AudioPostProcessTracker.waitUntilIdle` — busy only, never pending:
+    /// with auto-transcribe on, that post-processing waits for THIS job to
+    /// consume the source. Returns early when the job is cancelled.
     var waitForAudio: ((UUID) async -> Void)?
     static let idleReleaseSeconds: UInt64 = 120
     private var idleTask: Task<Void, Never>?
@@ -295,6 +297,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
         // recording points at NOW — the one captured at enqueue may be gone.
         var params = params
         await waitForAudio?(recording.id)
+        // Cancelled while waiting: `cancel()` already dropped the status row.
+        if Task.isCancelled { return }
         if recording.isDeleted || recording.modelContext == nil {
             statuses.removeValue(forKey: recording.id)
             return
@@ -436,10 +440,18 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // — the user sees an unchanged transcript and a bogus
                     // entry in VERSIONS.
                     if finalRaws.isEmpty && allSegments.isEmpty {
-                        AppLog.warn("job", "run finished with no transcript at all — reporting failure")
+                        // A background refinement never touched the draft on
+                        // screen, so that draft is still the transcript.
+                        let stage = params.keepVisibleUntilDone
+                            ? "Failed: Super transcribed no speech — draft kept"
+                            : "Failed: no speech transcribed"
+                        AppLog.warn("job", params.keepVisibleUntilDone
+                            ? "background run produced no segments — keeping the draft"
+                            : "run finished with no transcript at all — reporting failure")
                         statuses[recording.id] = Status(
-                            id: recording.id, stage: "Failed: no speech transcribed",
-                            fraction: 1.0, failed: true, failureReason: "no speech transcribed"
+                            id: recording.id, stage: stage,
+                            fraction: 1.0, failed: true, failureReason: "no speech transcribed",
+                            background: params.keepVisibleUntilDone
                         )
                         return
                     }
@@ -449,10 +461,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // payload is the authoritative transcript — replace the
                     // live-appended rows with it whenever it differs.
                     stampRunMetadata()
-                    if params.keepVisibleUntilDone && (finalRaws.isEmpty && allSegments.isEmpty) {
-                        // Never trade the readable draft for nothing.
-                        AppLog.warn("job", "background run produced no segments — keeping the draft")
-                    } else if params.keepVisibleUntilDone {
+                    if params.keepVisibleUntilDone {
                         // Nothing of this run is on screen yet: swap it in whole.
                         let segs = finalRaws.isEmpty
                             ? allSegments.sorted { $0.startSeconds < $1.startSeconds }.map {

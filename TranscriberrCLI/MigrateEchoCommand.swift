@@ -79,6 +79,7 @@ func cmdMigrateEcho(dryRun: Bool) async -> Int32 {
                 print("[migrate-echo] ❌ failed to save '\(rec.title)': \(error.localizedDescription) — stopping")
                 return 1
             }
+            BackupService.backupRecording(rec)
         }
         rebuilt += 1
         print("[migrate-echo]   ✓ '\(rec.title)' rebuilt with offline echo cancellation")

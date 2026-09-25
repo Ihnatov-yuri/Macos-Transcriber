@@ -166,6 +166,7 @@ final class AppContainer: @unchecked Sendable {
         // unit-test host.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             updates.start()
+            ModelCatalog.excludeModelsFromBackup()
         }
 
         // Self-heal transcripts lost to interrupted runs (app updated or
@@ -181,6 +182,16 @@ final class AppContainer: @unchecked Sendable {
             // Not under the unit-test host: it opens the user's real store.
             if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
                 self.jobManager.resumePendingTasks()
+                // Recordings cut short by a crash: fix their WAV headers and
+                // give them a library row. The candidate list is taken here,
+                // before anything can record, so a capture started while the
+                // repair runs writes a new file that is not on it.
+                if !self.recorder.isCapturing, !self.meetingRecorder.isCapturing {
+                    let candidates = WavRepair.candidates(in: WavRepair.recordingsDirectory)
+                    let repaired = await Task.detached(priority: .utility) { WavRepair.repairAll(candidates) }.value
+                    let recovered = WavRepair.importOrphans(repaired, into: self.repository)
+                    if recovered > 0 { AppLog.info("app", "recovered \(recovered) interrupted recording(s)") }
+                }
             }
         }
 
@@ -300,7 +311,10 @@ final class AppContainer: @unchecked Sendable {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         let updates = self.updates
-        Task { await updates.installer.install(release, currentVersion: updates.currentVersion) }
+        Task {
+            await updates.installer.install(release, currentVersion: updates.currentVersion,
+                                            blocker: { [weak self] in self?.updateBlocker() })
+        }
     }
 
 }

@@ -51,7 +51,10 @@ struct DetailView: View {
 
     var body: some View {
         Group {
-            if let model {
+            // The model is swapped in `.task(id:)`, one render after the
+            // selection changes; until then it still belongs to the previous
+            // recording and must not be drawn under this one.
+            if let model, model.recording.id == recording.id {
                 content(model)
             } else {
                 Sheet { ProgressView().padding() }

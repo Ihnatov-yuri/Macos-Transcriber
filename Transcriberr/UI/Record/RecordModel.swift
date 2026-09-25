@@ -104,6 +104,16 @@ final class RecordModel {
         do {
             activeMeeting = meetingMode
             if activeMeeting {
+                // The mic went away mid-meeting: the recorder has already
+                // closed its files, so stop the session and save what was
+                // captured instead of showing RECORDING over a dead device.
+                container.meetingRecorder.onInterrupted = { [weak self] message in
+                    guard let self, self.activeMeeting, self.uiState == .recording || self.uiState == .paused else { return }
+                    Task { @MainActor in
+                        await self.endRecording()
+                        self.lastError = message
+                    }
+                }
                 try await container.meetingRecorder.start()
             } else {
                 try await container.recorder.start()
@@ -119,6 +129,12 @@ final class RecordModel {
                     translateTo: nil,
                     modelDirectory: nil
                 )
+                // Stop can land while the live model is still loading: the
+                // session is gone (or going) by the time start returns, and
+                // the worker must not stay attached to a stopped recorder.
+                if isStopping || (uiState != .recording && uiState != .paused) {
+                    await liveWorker.stop()
+                }
             }
         } catch {
             lastError = error.localizedDescription
@@ -148,7 +164,9 @@ final class RecordModel {
                 // already failed (or never started) and the session is gone —
                 // silently dropping back to idle looked like the Stop button
                 // simply discarding the recording.
-                if case .failed(let reason) = container.recorder.state {
+                // Only the mic recorder keeps a failure state; for a meeting
+                // it would be a stale reason from some other session.
+                if !wasMeeting, case .failed(let reason) = container.recorder.state {
                     lastError = reason
                 } else if lastError == nil {
                     lastError = "Recording could not be saved."
@@ -176,7 +194,18 @@ final class RecordModel {
             // transcode. The recording is fully safe and visible before
             // any compression happens at all.
             let recording = Recording(title: title, audioPath: url.path, durationSeconds: duration)
-            try container.repository.save(recording)
+            // Pending BEFORE the row becomes visible: with auto-transcribe on,
+            // compression starts only after the job has decoded the WAV, and
+            // a merge/split started in that gap must still wait it out (see
+            // AudioPostProcessTracker). Cleared when post-processing ends.
+            let tracker = container.audioPostProcessTracker
+            await tracker.markPending(recording.id)
+            do {
+                try container.repository.save(recording)
+            } catch {
+                await tracker.clearPending(recording.id)
+                throw error
+            }
             uiState = .finished(url)
 
             // Echo-cancel rebuild + AAC compression run in the BACKGROUND,
@@ -242,7 +271,8 @@ final class RecordModel {
 
     /// Rebuilds the meeting mix with offline echo cancellation (no-op for a
     /// plain recording) and reclaims disk space via AAC compression, then
-    /// repoints the saved `Recording` at whatever file survived. Only ever
+    /// repoints the saved `Recording` at whatever file survived, then clears
+    /// the tracker's pending mark set in `endRecording`. Only ever
     /// called after it's safe to mutate the recording's files — either
     /// nothing is reading them (auto-transcribe off) or the transcription
     /// job has finished decoding them (auto-transcribe on). Static, and

@@ -229,6 +229,23 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(merged2.folder?.id, folder.id)
     }
 
+    func testMergeFilesIntoInitiatorsFolderWhenSourcesDisagree() async throws {
+        let work = try repo.createFolder(named: "Work")
+        let home = try repo.createFolder(named: "Home")
+        let early = try makeRecording(title: "Early", seconds: 1, segs: [(0, 1, "first", nil, nil)])
+        let late = try makeRecording(title: "Late", seconds: 1, segs: [(0, 1, "second", nil, nil)])
+        early.createdAtMillis = 1_000
+        late.createdAtMillis = 2_000
+        try repo.move(early, to: home)
+        try repo.move(late, to: work)
+
+        // Initiated from the later recording: the chronological swap must
+        // not hand the result to the earlier one's folder.
+        let merged = try await repo.merge(late, early)
+        defer { tempFiles.append(URL(fileURLWithPath: merged.audioPath)) }
+        XCTAssertEqual(merged.folder?.id, work.id)
+    }
+
     /// Every file a split half COULD have produced (main audio in either
     /// possible extension, mic/sys sidecars, me.json), for teardown.
     /// split() always writes to the real ~/Documents/Transcriberr/Recordings

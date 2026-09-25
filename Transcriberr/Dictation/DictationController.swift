@@ -150,6 +150,14 @@ final class DictationController: @unchecked Sendable {
     private var holdTimer: Task<Void, Never>?
     private var holdSessionActive = false
     private static let holdThreshold: TimeInterval = 0.45
+    /// Hold mode: the session the hotkey press itself started. A session
+    /// begun from the menu, a URL or an App Intent is not held by the key,
+    /// so a tap, a modifier combo or a re-arm must not throw it away.
+    private var hotkeySession: Int?
+    /// The session whose `capture.start()` succeeded. The capture of the
+    /// previous session keeps running through its tail grace, and a new
+    /// session's loops must not drain or snapshot that session's audio.
+    private var captureSession: Int?
     private var activationObserver: NSObjectProtocol?
 
     init(
@@ -290,10 +298,11 @@ final class DictationController: @unchecked Sendable {
         // MONITOR's state. The release then never reached `handleHotkey`, so
         // the phase stayed `.listening` with the HUD up until the 180-second
         // watchdog fired and dumped the whole recording into the target app.
-        if phase == .listening, settings.mode == .hold || holdSessionActive {
+        if isHeldByHotkey {
             AppLog.warn("dictation", "hotkey re-armed during a hold session — cancelling it")
             cancel(quiet: true)
         }
+        hotkeySession = nil
         pressedAt = nil
         comboUsed = false
         holdSessionActive = false
@@ -354,7 +363,10 @@ final class DictationController: @unchecked Sendable {
             holdTimer?.cancel()
             switch settings.mode {
             case .hold:
-                if canBegin { begin(target: resolveTarget()) }
+                if canBegin {
+                    begin(target: resolveTarget())
+                    if phase == .listening { hotkeySession = sessionID }
+                }
             case .toggle:
                 // Still held after the threshold and nothing else pressed →
                 // push-to-talk session (ends on release). A quick tap toggles.
@@ -371,7 +383,7 @@ final class DictationController: @unchecked Sendable {
             comboUsed = true
             holdTimer?.cancel()
             // ⌥-e, ⌘-c … while the key is held: the user wanted the modifier.
-            if phase == .listening, settings.mode == .hold || holdSessionActive {
+            if isHeldByHotkey {
                 holdSessionActive = false
                 cancel(quiet: true)
             }
@@ -382,6 +394,12 @@ final class DictationController: @unchecked Sendable {
             switch settings.mode {
             case .hold:
                 guard phase == .listening else { return }
+                guard hotkeySession == sessionID else {
+                    // Started from the menu, a URL or an intent: the key
+                    // acts like a toggle tap and ends it.
+                    if !comboUsed { toggle(target: resolveTarget()) }
+                    return
+                }
                 if held < 0.25 { cancel(quiet: true) } else { finish() }
             case .toggle:
                 if holdSessionActive {
@@ -393,6 +411,12 @@ final class DictationController: @unchecked Sendable {
                 toggle(target: resolveTarget())
             }
         }
+    }
+
+    /// A listening session that ends when the hotkey is released.
+    private var isHeldByHotkey: Bool {
+        guard phase == .listening else { return false }
+        return holdSessionActive || (settings.mode == .hold && hotkeySession == sessionID)
     }
 
     private func isMessage(_ p: Phase) -> Bool {
@@ -525,8 +549,12 @@ final class DictationController: @unchecked Sendable {
             do {
                 self.capture.voiceProcessing = self.settings.voiceProcessing
                 try await self.capture.start()
+                self.captureSession = session
             } catch {
                 AppLog.error("dictation", "capture failed: \(error.localizedDescription)")
+                // start() can suspend (first mic prompt, Bluetooth); a newer
+                // session may be listening by now and must keep its phase.
+                guard self.sessionID == session, self.phase == .listening else { return }
                 self.lastError = error.localizedDescription
                 self.flushLoop?.cancel()
                 self.showMessage(error.localizedDescription)
@@ -551,7 +579,8 @@ final class DictationController: @unchecked Sendable {
             while let self, !Task.isCancelled, session == self.sessionID, self.phase == .listening {
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 guard session == self.sessionID, self.phase == .listening, self.capture.isRunning,
-                      self.capture.hasVoiceSinceDrain, !self.previewInFlight, self.pendingPasses == 0,
+                      self.captureSession == session, self.capture.hasVoiceSinceDrain,
+                      !self.previewInFlight, self.pendingPasses == 0,
                       !self.context.isSecure   // never show a password on screen
                 else { continue }
                 let samples = self.capture.snapshot()
@@ -670,7 +699,7 @@ final class DictationController: @unchecked Sendable {
             var lastVoiceAt = Date()
             while let self, !Task.isCancelled, session == self.sessionID, self.phase == .listening {
                 try? await Task.sleep(nanoseconds: 150_000_000)
-                guard self.capture.isRunning else { continue }
+                guard self.capture.isRunning, self.captureSession == session else { continue }
                 if self.capture.hasVoiceSinceDrain { lastVoiceAt = Date() }
                 let quietFor = Date().timeIntervalSince(lastVoiceAt)
                 if quietFor >= Self.autoStopSilenceSeconds {
@@ -705,7 +734,7 @@ final class DictationController: @unchecked Sendable {
         flushLoop = Task { @MainActor [weak self] in
             while let self, !Task.isCancelled, session == self.sessionID, self.phase == .listening {
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                if self.capture.elapsedSeconds >= 180 {
+                if self.captureSession == session, self.capture.elapsedSeconds >= 180 {
                     AppLog.warn("dictation", "hold session hit 180 s — finishing")
                     self.finish()
                     return
@@ -800,7 +829,10 @@ final class DictationController: @unchecked Sendable {
             AppLog.info("dictation", String(
                 format: "recognized %.1fs → %d chars in %.2fs", seconds, recognized.count,
                 Date().timeIntervalSince(t0)))
-            if settings.spokenCommands, passage.mode != .verbatim, DictationText.isScratchOnly(recognized) {
+            // A session cancelled during recognition must not act either —
+            // "scratch that" would still Backspace the previous passage away.
+            if settings.spokenCommands, passage.mode != .verbatim, DictationText.isScratchOnly(recognized),
+               !cancelledSessions.contains(passage.session) {
                 if !final { deliveredSessions.insert(passage.session) }
                 scratchLastInsertion(final: final)
                 return
@@ -870,7 +902,8 @@ final class DictationController: @unchecked Sendable {
             case .copiedOnly:
                 finalMessage("Copied — press ⌘V. Grant Accessibility to auto-insert.")
             case .appChanged:
-                finalMessage("You switched apps — kept it in the Dictate pad")
+                finalMessage(secret ? "You switched apps — password not inserted"
+                                    : "You switched apps — kept it in the Dictate pad")
             }
         } else if outcome == .copiedOnly {
             // Keep listening, but tell the user once.
@@ -884,7 +917,10 @@ final class DictationController: @unchecked Sendable {
     private func deliver(_ text: String, passage: Passage) -> DeliveryOutcome {
         // The user may have come back to the pane mid-session; never paste
         // into our own window when the pane is what's showing.
-        let usePane = passage.target == .pane || (NSApp.isActive && paneVisible)
+        // A password never lands in the pad (on screen, copyable, savable to
+        // the library): a secret passage whose field is gone is dropped.
+        let secret = passage.context.isSecure
+        let usePane = passage.target == .pane || (NSApp.isActive && paneVisible && !secret)
         if usePane {
             let before = paneText.count
             paneText = DictationText.join(existing: paneText, new: text)
@@ -909,15 +945,18 @@ final class DictationController: @unchecked Sendable {
            let current = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
            current != expected {
             AppLog.warn("dictation", "target app changed mid-recognition (\(expected) → \(current)) — not pasting")
-            paneText = DictationText.join(existing: paneText, new: text)
+            if !secret { paneText = DictationText.join(existing: paneText, new: text) }
             lastInsertion = nil
             return .appChanged
         }
         // Context-aware join: look at what's left of the caret when the
-        // target app exposes it through Accessibility.
-        let preceding = settings.spacing == .auto ? FocusedTextContext.textBeforeCaret() : nil
-        let payload = DictationText.forInsertion(text, spacing: settings.spacing, preceding: preceding)
-        switch TextInserter.insert(payload, restoreClipboard: settings.restoreClipboard) {
+        // target app exposes it through Accessibility. Never for a password:
+        // the spacing rule appended a space (or capitalized the first
+        // letter), so the dictated password no longer matched. And it is
+        // never left on the clipboard for the next ⌘V anywhere.
+        let preceding = settings.spacing == .auto && !secret ? FocusedTextContext.textBeforeCaret() : nil
+        let payload = secret ? text : DictationText.forInsertion(text, spacing: settings.spacing, preceding: preceding)
+        switch TextInserter.insert(payload, restoreClipboard: settings.restoreClipboard || secret) {
         case .pasted:
             lastInsertion = LastInsertion(
                 target: .frontmostApp, inserted: payload, paneLength: 0,
@@ -926,7 +965,7 @@ final class DictationController: @unchecked Sendable {
             return .pasted
         case .copiedOnly:
             // Nothing is lost: the pane keeps a copy.
-            paneText = DictationText.join(existing: paneText, new: text)
+            if !secret { paneText = DictationText.join(existing: paneText, new: text) }
             lastInsertion = nil
             return .copiedOnly
         }

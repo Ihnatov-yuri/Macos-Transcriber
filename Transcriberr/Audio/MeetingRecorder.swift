@@ -113,6 +113,33 @@ final class MeetingRecorder: @unchecked Sendable {
     private(set) var isRunning = false
     private var isStarting = false
 
+    /// A capture is starting or running. Launch-time crash repair
+    /// (`WavRepair`) must not run while this is true.
+    var isCapturing: Bool { isStarting || isRunning }
+
+    /// Set when capture ended on its own mid-meeting: the microphone was
+    /// unplugged (or the aggregate built on it died), after which the
+    /// aggregate stops calling the IO proc and the file silently stops
+    /// growing. The graph is torn down and the files closed at that moment,
+    /// but `isRunning` stays true so the next `stop()` still returns the
+    /// file with everything captured up to then. Cleared by `start()`.
+    private(set) var interruption: String?
+    /// Called on the main actor once `interruption` is set, so the owner can
+    /// react (say, run its normal Stop) without polling.
+    @ObservationIgnored var onInterrupted: (@MainActor (String) -> Void)?
+
+    /// The microphone the aggregate was built on, watched for removal.
+    @ObservationIgnored private var micDeviceID = AudioObjectID(kAudioObjectUnknown)
+    /// Main-actor copies of the devices being watched (the pool-side IDs
+    /// are reset by teardown while a listener callback may be queued).
+    @ObservationIgnored private var watchedMic = AudioObjectID(kAudioObjectUnknown)
+    @ObservationIgnored private var watchedAggregate = AudioObjectID(kAudioObjectUnknown)
+    @ObservationIgnored private var deviceListeners: [(object: AudioObjectID, address: AudioObjectPropertyAddress,
+                                   block: AudioObjectPropertyListenerBlock)] = []
+    /// Serializes `finishCapture` — an interruption and a Stop can both
+    /// arrive — and the listener list it empties.
+    private let captureLock = NSLock()
+
     // MARK: - Public surface (mirrors WavRecorder)
 
     /// Nonisolated on purpose — tap and aggregate creation block — so the
@@ -123,14 +150,18 @@ final class MeetingRecorder: @unchecked Sendable {
         let claimed = await MainActor.run { () -> Bool in
             guard !isStarting, !isRunning else { return false }
             isStarting = true
+            interruption = nil
             return true
         }
         guard claimed else { return }
         do {
             try await startCapture()
             await MainActor.run {
+                watchDevices()
                 isRunning = true
                 isStarting = false
+                // A device lost while starting was ignored (not running yet).
+                handleDeviceChange()
             }
         } catch {
             await MainActor.run { isStarting = false }
@@ -176,6 +207,12 @@ final class MeetingRecorder: @unchecked Sendable {
     }
 
     func stop() async throws -> URL? {
+        // A stop that lands while start() is still setting up must wait for
+        // it: returning nil here let start() finish afterwards and leave a
+        // capture running — mic open, files growing — that nothing could stop.
+        while await MainActor.run(body: { self.isStarting }) {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
         // A second stop must NOT hand back the old URL — the caller would
         // create a duplicate Recording row for the same WAV.
         let wasRunning = await MainActor.run { () -> Bool in
@@ -184,6 +221,25 @@ final class MeetingRecorder: @unchecked Sendable {
             return true
         }
         guard wasRunning else { return nil }
+        let finalMs = finishCapture()
+        let elapsed = await MainActor.run { () -> Int64 in
+            if finalMs > 0 { elapsedMs = finalMs }
+            chunkContinuation?.finish()
+            return elapsedMs
+        }
+        AppLog.info("meeting", "stopped after \(elapsed / 1000)s → \(fileURL?.lastPathComponent ?? "?")")
+        return fileURL
+    }
+
+    /// Stop's capture work without the state flip: remove the device
+    /// listeners, tear the CoreAudio graph down, flush and close the three
+    /// files, write the me-timeline. Idempotent — a second call finds
+    /// nothing open and returns the same elapsed time. Returns milliseconds
+    /// actually captured.
+    private func finishCapture() -> Int64 {
+        captureLock.lock()
+        defer { captureLock.unlock() }
+        removeDeviceListeners()
         teardownCoreAudio()
         // Drain any in-flight IO callback, then flush the converter tail.
         var finalMs: Int64 = 0
@@ -206,17 +262,92 @@ final class MeetingRecorder: @unchecked Sendable {
                 let sidecar = url.deletingPathExtension().appendingPathExtension("me.json")
                 try? data.write(to: sidecar)
                 AppLog.info("meeting", "me-timeline: \(self.meIntervals.count) intervals → \(sidecar.lastPathComponent)")
+                self.meIntervals.removeAll()   // written once, even if finish runs twice
             }
             self.audioFile = nil
             self.converter = nil
         }
-        let elapsed = await MainActor.run { () -> Int64 in
-            if finalMs > 0 { elapsedMs = finalMs }
-            chunkContinuation?.finish()
-            return elapsedMs
+        return finalMs
+    }
+
+    // MARK: - Device loss
+
+    /// Watch the microphone and the aggregate for removal, and the device
+    /// list as a backstop (a USB mic yanked out is reported there even when
+    /// its own is-alive notification never comes). CoreAudio calls these on
+    /// the main queue; `handleDeviceChange` decides.
+    @MainActor
+    private func watchDevices() {
+        captureLock.lock()
+        defer { captureLock.unlock() }
+        watchedMic = micDeviceID
+        watchedAggregate = aggID
+        func listen(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) {
+            guard object != kAudioObjectUnknown else { return }
+            var address = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                Task { @MainActor [weak self] in self?.handleDeviceChange() }
+            }
+            if AudioObjectAddPropertyListenerBlock(object, &address, DispatchQueue.main, block) == noErr {
+                deviceListeners.append((object: object, address: address, block: block))
+            }
         }
-        AppLog.info("meeting", "stopped after \(elapsed / 1000)s → \(fileURL?.lastPathComponent ?? "?")")
-        return fileURL
+        listen(watchedMic, kAudioDevicePropertyDeviceIsAlive)
+        listen(watchedAggregate, kAudioDevicePropertyDeviceIsAlive)
+        listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
+    }
+
+    /// Called with `captureLock` held.
+    private func removeDeviceListeners() {
+        for var l in deviceListeners {
+            AudioObjectRemovePropertyListenerBlock(l.object, &l.address, DispatchQueue.main, l.block)
+        }
+        deviceListeners.removeAll()
+    }
+
+    /// A watched device died mid-meeting: end capture now — the aggregate
+    /// has stopped (or is about to stop) delivering audio, and the screen
+    /// would otherwise keep saying RECORDING over a file that no longer
+    /// grows. Everything captured so far is flushed and closed; `stop()`
+    /// hands it back as usual.
+    @MainActor
+    private func handleDeviceChange() {
+        guard isRunning, interruption == nil else { return }
+        let reason: String
+        if !Self.isAlive(watchedMic) {
+            reason = "The microphone was disconnected"
+        } else if !Self.isAlive(watchedAggregate) {
+            reason = "The meeting audio device stopped"
+        } else {
+            return
+        }
+        let message = "\(reason), so the meeting recording stopped. Press Stop to keep what was recorded."
+        AppLog.warn("meeting", "\(reason.lowercased()) mid-meeting — closing capture, audio so far is kept")
+        interruption = message
+        // Off the main actor: AudioDeviceStop waits for the IO proc to return.
+        Task.detached(priority: .userInitiated) { [self] in
+            let ms = self.finishCapture()
+            // Still this session (no Stop + new start in between).
+            await MainActor.run { if ms > 0, self.interruption != nil { self.elapsedMs = ms } }
+        }
+        onInterrupted?(message)
+    }
+
+    /// Whether a device still exists and runs. An unknown ID (nothing to
+    /// watch) counts as alive; a lookup that fails means the object is gone.
+    private static func isAlive(_ id: AudioObjectID) -> Bool {
+        guard id != kAudioObjectUnknown else { return true }
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var alive: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &alive) == noErr else { return false }
+        return alive != 0
     }
 
     func pause()  { ioQueue.async { self.paused = true } }
@@ -248,6 +379,7 @@ final class MeetingRecorder: @unchecked Sendable {
 
         // 2. Aggregate device: the chosen mic + the tap, one clock.
         let micUID = try mic?.uid ?? defaultInputUID()
+        micDeviceID = mic?.id ?? AudioInputDevices.systemDefault()?.id ?? AudioObjectID(kAudioObjectUnknown)
         let aggDict: [String: Any] = [
             kAudioAggregateDeviceNameKey as String: "Transcriberr Meeting",
             kAudioAggregateDeviceUIDKey as String: "nl.ihnatov.Transcriberr.meeting.\(UUID().uuidString)",
@@ -659,11 +791,12 @@ final class MeetingRecorder: @unchecked Sendable {
         try check(AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
                                              &addr, 0, nil, &size, &dev), "Default input lookup")
         addr.mSelector = kAudioDevicePropertyDeviceUID
-        var uid: CFString? = nil
-        size = UInt32(MemoryLayout<CFString?>.size)
+        // +1 CFString (Create rule) — take ownership so it is released.
+        var uid: Unmanaged<CFString>?
+        size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         try check(AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &uid), "Input UID lookup")
         guard let uid else { throw MeetingError.coreAudio("Input UID lookup", -1) }
-        return uid as String
+        return uid.takeRetainedValue() as String
     }
 
     private func deviceSampleRate(_ device: AudioObjectID) -> Double? {

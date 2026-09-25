@@ -27,4 +27,23 @@ final class TranscriptExporterTests: XCTestCase {
         XCTAssertEqual(back.segments.first?.speakerName, "Yuri")
         XCTAssertEqual(back.durationSeconds, 12.5)
     }
+
+    func testSrtTimeRoundsInsteadOfTruncating() {
+        XCTAssertEqual(TranscriptExporter.srtTime(2.3), "00:00:02,300")
+        XCTAssertEqual(TranscriptExporter.srtTime(59.9996), "00:01:00,000")
+        XCTAssertEqual(TranscriptExporter.srtTime(3_661.5), "01:01:01,500")
+        XCTAssertEqual(TranscriptExporter.srtTime(.nan), "00:00:00,000")
+    }
+
+    func testSrtSkipsEmptySegmentsAndKeepsNumberingSequential() {
+        let segs = [
+            Segment(startSeconds: 0, endSeconds: 1, text: "One"),
+            Segment(startSeconds: 1, endSeconds: 2, text: "  \n "),
+            Segment(startSeconds: 2, endSeconds: 3, text: ""),
+            Segment(startSeconds: 3, endSeconds: 4, text: "Two"),
+        ]
+        XCTAssertEqual(TranscriptExporter.srtText(segments: segs),
+                       "1\n00:00:00,000 --> 00:00:01,000\nOne\n\n"
+                       + "2\n00:00:03,000 --> 00:00:04,000\nTwo\n\n")
+    }
 }

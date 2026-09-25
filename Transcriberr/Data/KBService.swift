@@ -78,10 +78,25 @@ struct KBService {
         iso.string(from: Date(timeIntervalSince1970: TimeInterval(millis) / 1000))
     }
 
+    /// Date-only ("2026-09-01", UTC midnight) and fractional-second
+    /// ("…T10:00:00.000Z") ISO8601 forms — the default formatter rejects both.
+    private static let isoFallbacks: [ISO8601DateFormatter] = {
+        let dateOnly = ISO8601DateFormatter()
+        dateOnly.timeZone = TimeZone(identifier: "UTC")
+        dateOnly.formatOptions = [.withFullDate]
+        let fractional = ISO8601DateFormatter()
+        fractional.timeZone = TimeZone(identifier: "UTC")
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return [dateOnly, fractional]
+    }()
+
     /// Accepts ISO8601 or a relative "7d"/"24h"/"90m" style suffix.
     static func parseSince(_ raw: String) -> Date? {
         let s = raw.trimmingCharacters(in: .whitespaces)
         if let date = iso.date(from: s) { return date }
+        for f in isoFallbacks {
+            if let date = f.date(from: s) { return date }
+        }
         let scales: [Character: TimeInterval] = ["d": 86_400, "h": 3_600, "m": 60, "w": 604_800]
         if let unit = s.last, let scale = scales[unit],
            let n = Double(s.dropLast()), n > 0 {

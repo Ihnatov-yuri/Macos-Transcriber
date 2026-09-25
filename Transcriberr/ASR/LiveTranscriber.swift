@@ -42,7 +42,8 @@ final class LiveTranscriber: @unchecked Sendable {
     private weak var source: (any LiveChunkSource)?
     private var consumer: Task<Void, Never>?
     /// Bumped by every start/stop, so a `start()` that was suspended in a
-    /// model load can tell it has been superseded.
+    /// model load — or a chunk still in flight — can tell its session has
+    /// been superseded.
     private var startToken = 0
 
     /// Read per chunk, not captured at start: switching the language on the
@@ -62,6 +63,8 @@ final class LiveTranscriber: @unchecked Sendable {
         modelDirectory: URL?
     ) async {
         await stop()
+        // A new session starts with an empty caption list.
+        lines.removeAll()
         self.languages = languages
         self.translateTo = translateTo
         let token = startToken
@@ -75,14 +78,19 @@ final class LiveTranscriber: @unchecked Sendable {
         }
         // Stopped (or restarted) while the model was loading.
         guard token == startToken else { return }
+        // No recorder attached (or it went away): `.running` with no
+        // consumer would claim captions that can never arrive.
+        guard let source else {
+            status = .failed(reason: "no audio source")
+            return
+        }
         status = .running
-        guard let source else { return }
         let chunkStream = source.chunks
         consumer = Task { @MainActor [weak self] in
             for await chunk in chunkStream {
                 guard let self else { break }
                 if Task.isCancelled { break }
-                await self.handleChunk(chunk, backend: backend,
+                await self.handleChunk(chunk, backend: backend, session: token,
                                        languages: self.languages, translateTo: self.translateTo)
             }
         }
@@ -132,6 +140,7 @@ final class LiveTranscriber: @unchecked Sendable {
     private func handleChunk(
         _ chunk: WavRecorder.Chunk,
         backend: ASRBackend,
+        session: Int,
         languages: Set<String>,
         translateTo: String?
     ) async {
@@ -153,10 +162,15 @@ final class LiveTranscriber: @unchecked Sendable {
                 previousContext: nil,
                 speakerHints: []
             )
+            // Stopped or restarted while this chunk was in flight: its text
+            // belongs to a session that is gone.
+            guard session == startToken else { return }
             let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !cleaned.isEmpty else { return }
             lines.append(LiveLine(startSeconds: chunk.startTimeSeconds, text: cleaned))
         } catch {
+            // Cancellation is Stop doing its job, not a failed chunk.
+            if error is CancellationError || Task.isCancelled || session != startToken { return }
             // Keep the worker alive across single-chunk failures so a transient
             // hiccup doesn't kill the live session.
             lines.append(LiveLine(

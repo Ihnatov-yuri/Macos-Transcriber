@@ -28,17 +28,27 @@ enum TranscriptExporter {
     }
 
     private static func writeSrt(stem: String, dir: URL, segments: [Segment]) throws {
+        try srtText(segments: segments)
+            .write(to: dir.appendingPathComponent("\(stem).srt"), atomically: true, encoding: .utf8)
+    }
+
+    static func srtText(segments: [Segment]) -> String {
         var out = ""
-        for (idx, seg) in segments.enumerated() {
+        var cue = 0
+        for seg in segments {
             // A blank line ends an SRT cue: text carrying one (an LLM chunk
             // with paragraphs) cut its own cue short.
             let text = seg.text.split(whereSeparator: \.isNewline)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n")
-            out += "\(idx + 1)\n\(srtTime(seg.startSeconds)) --> \(srtTime(seg.endSeconds))\n\(text)\n\n"
+            // A cue with no text line is malformed SRT; skip it and keep
+            // the numbering sequential.
+            guard !text.isEmpty else { continue }
+            cue += 1
+            out += "\(cue)\n\(srtTime(seg.startSeconds)) --> \(srtTime(seg.endSeconds))\n\(text)\n\n"
         }
-        try out.write(to: dir.appendingPathComponent("\(stem).srt"), atomically: true, encoding: .utf8)
+        return out
     }
 
     private static func writeJson(stem: String, dir: URL, recording: Recording, segments: [Segment]) throws {
@@ -133,12 +143,14 @@ enum TranscriptExporter {
         try data.write(to: dir.appendingPathComponent("\(stem).speakers.json"))
     }
 
-    private static func srtTime(_ s: Double) -> String {
-        let total = max(0, s)
-        let h = Int(total) / 3600
-        let m = (Int(total) % 3600) / 60
-        let sec = Int(total) % 60
-        let ms = Int((total - floor(total)) * 1000)
+    static func srtTime(_ s: Double) -> String {
+        // Round once in whole milliseconds: truncating the fraction put 2.3 s
+        // at 00:00:02,299 (binary 0.2999…), and Int() traps on NaN/inf.
+        let totalMs = s.isFinite ? Int((max(0, s) * 1000).rounded()) : 0
+        let h = totalMs / 3_600_000
+        let m = (totalMs % 3_600_000) / 60_000
+        let sec = (totalMs % 60_000) / 1000
+        let ms = totalMs % 1000
         return String(format: "%02d:%02d:%02d,%03d", h, m, sec, ms)
     }
 }

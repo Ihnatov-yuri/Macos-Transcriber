@@ -19,6 +19,12 @@ final class ModelDownloader: @unchecked Sendable {
     private(set) var isDownloading: Set<String> = []
 
     private var activeTasks: [String: Task<URL, Error>] = [:]
+    /// The attempt whose bytes are streaming now, per model. Progress hops
+    /// are fire-and-forget and can land after the status moved on
+    /// ("Verifying…", "Cancelled.", "Failed: …"); they only apply while
+    /// their own attempt is still streaming.
+    @ObservationIgnored private var streamingAttempt: [String: Int] = [:]
+    @ObservationIgnored private var attemptCounter = 0
 
     init() {}
 
@@ -29,8 +35,14 @@ final class ModelDownloader: @unchecked Sendable {
     @discardableResult
     func download(_ entry: ModelEntry) async throws -> URL {
         // A second press while one is running would truncate the shared
-        // `.partial` underneath the first writer.
-        if let running = activeTasks[entry.id] { return try await running.value }
+        // `.partial` underneath the first writer. A cancelled one still
+        // winding down is waited out: its cleanup deletes that `.partial`
+        // and clears `isDownloading`, and on a quick restart both landed on
+        // the new download.
+        while let running = activeTasks[entry.id] {
+            guard running.isCancelled else { return try await running.value }
+            _ = await running.result
+        }
         // Single-file models (.litertlm bundles): direct streaming download —
         // a repo snapshot would pull every device-specific variant (~20 GB).
         if let direct = entry.directURL {
@@ -47,11 +59,15 @@ final class ModelDownloader: @unchecked Sendable {
         // Run inside a registered Task so cancel(id:) actually stops the byte
         // loop (before this, CANCEL left the loop running and a second press
         // could interleave two writers into one .partial file).
-        let task = Task<URL, Error> { @MainActor in try await self.downloadDirectBody(entry, from: remote) }
+        //
+        // The task unregisters itself, as its last step: cancel() leaves it
+        // registered so a restart waits for its cleanup (see download), and
+        // no other task can be registered under this id meanwhile.
+        let task = Task<URL, Error> { @MainActor in
+            defer { self.activeTasks.removeValue(forKey: entry.id) }
+            return try await self.downloadDirectBody(entry, from: remote)
+        }
         activeTasks[entry.id] = task
-        // Only unregister OUR task — a cancel + restart may have put a new
-        // one under the same id by the time this one unwinds.
-        defer { if activeTasks[entry.id] == task { activeTasks.removeValue(forKey: entry.id) } }
         return try await task.value
     }
 
@@ -84,16 +100,22 @@ final class ModelDownloader: @unchecked Sendable {
         let written: Int64
         // One UI hop per 16 MB, not per network chunk.
         let reported = ByteCounter()
+        attemptCounter += 1
+        let attempt = attemptCounter
+        streamingAttempt[entry.id] = attempt
         do {
             written = try await StreamingDownload(handle: handle) { [weak self] got, expected in
                 guard reported.shouldReport(got, every: 16 << 20) else { return }
                 let total = expected > 0 ? expected : fallbackTotal
                 Task { @MainActor in
-                    self?.progress[entryID] = ProgressInfo(
+                    guard let self, self.streamingAttempt[entryID] == attempt else { return }
+                    self.progress[entryID] = ProgressInfo(
                         bytesDownloaded: got, totalBytes: total, status: "Downloading…")
                 }
             }.run(url: remote)
+            streamingAttempt[entry.id] = nil
         } catch {
+            streamingAttempt[entry.id] = nil
             // Every failure used to leave the Settings → Models row showing a
             // frozen "Downloading…" bar forever: only `isDownloading` was
             // cleaned up, never the status.
@@ -115,6 +137,13 @@ final class ModelDownloader: @unchecked Sendable {
         if let expected = entry.sha256 {
             progress[entry.id] = ProgressInfo(bytesDownloaded: written, totalBytes: written, status: "Verifying…")
             let actual = try await Task.detached(priority: .userInitiated) { try Self.sha256(of: temp) }.value
+            // The hash runs detached, so a cancel during it only shows here;
+            // before, the download went on to finish over "Cancelled.".
+            if Task.isCancelled {
+                try? FileManager.default.removeItem(at: temp)
+                progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: "Cancelled.")
+                throw CancellationError()
+            }
             guard actual == expected else {
                 try? FileManager.default.removeItem(at: temp)
                 progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes,
@@ -152,9 +181,12 @@ final class ModelDownloader: @unchecked Sendable {
         return dir
     }
 
+    /// The task stays registered until its own cleanup has run (see
+    /// download); only the UI state is cleared here, at once.
+    @MainActor
     func cancel(_ id: String) {
         activeTasks[id]?.cancel()
-        activeTasks.removeValue(forKey: id)
+        streamingAttempt[id] = nil
         isDownloading.remove(id)
         progress[id]?.status = "Cancelled."
     }
@@ -225,6 +257,11 @@ private final class StreamingDownload: NSObject, URLSessionDataDelegate, @unchec
     private var task: URLSessionDataTask?
     private var written: Int64 = 0
     private var expected: Int64 = 0
+    /// Set by the cancellation handler. On a task that is already cancelled
+    /// the handler runs BEFORE the operation, when there is no data task yet
+    /// to cancel — without this the download started anyway and ran to the
+    /// end for a result nobody would keep.
+    private var cancelled = false
 
     init(handle: FileHandle, onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
         self.handle = handle
@@ -241,6 +278,12 @@ private final class StreamingDownload: NSObject, URLSessionDataDelegate, @unchec
                     c.resume(with: p)
                     return
                 }
+                if cancelled {
+                    settled = true
+                    lock.unlock()
+                    c.resume(throwing: CancellationError())
+                    return
+                }
                 cont = c
                 let s = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
                 session = s
@@ -251,6 +294,7 @@ private final class StreamingDownload: NSObject, URLSessionDataDelegate, @unchec
             }
         } onCancel: {
             lock.lock()
+            cancelled = true
             let t = task
             lock.unlock()
             t?.cancel()

@@ -36,6 +36,9 @@ actor GoogleGeminiBackend: ASRBackend {
         guard let key = apiKey, !key.isEmpty else {
             throw ASRError.modelLoadFailed(reason: "Gemini API key missing")
         }
+        // Same floor as the local engines: a tap-length scrap is silence,
+        // not an error to show.
+        guard samples.count >= 8_000 else { return "" }   // < 0.5 s @ 16 kHz
 
         // WAV-encode the chunk and inline-Base64 it. For chunks > 20 MB we'd
         // need the Files API — at 16k mono Float32, 30 s is ~7.6 MB so we're
@@ -79,9 +82,15 @@ actor GoogleGeminiBackend: ASRBackend {
                     ["text": prompt]
                 ]
             ]],
+            // 2.5 models think by default, and thinking tokens count against
+            // maxOutputTokens: at 1024 a chunk could spend them all thinking
+            // and come back MAX_TOKENS with no text. Transcription needs
+            // no reasoning, so thinking is held to the model's floor, with
+            // room left for a dense 30 s chunk.
             "generationConfig": [
                 "temperature": 0.1,
-                "maxOutputTokens": 1024
+                "maxOutputTokens": 4096,
+                "thinkingConfig": ["thinkingBudget": Self.minimalThinkingBudget(for: model)]
             ]
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -137,6 +146,12 @@ actor GoogleGeminiBackend: ASRBackend {
     }
 
     // MARK: - Helpers
+
+    /// 2.5 Pro cannot turn thinking off (its minimum budget is 128); Flash
+    /// and Flash-Lite take 0.
+    nonisolated static func minimalThinkingBudget(for model: String) -> Int {
+        model.contains("flash") ? 0 : 128
+    }
 
     private func ensureOK(_ resp: URLResponse, data: Data) throws {
         guard let http = resp as? HTTPURLResponse else {

@@ -292,6 +292,61 @@ func cmdWhisper(path: String, language: String? = nil) async -> Int32 {
     }
 }
 
+/// Time Whisper's whole-track reading per chip placement.
+///   whisperbench <ane|gpu|split|encgpu|dual|dual2|dual3> <Language> <file> [file…]
+/// Files are read concurrently, as Super reads a meeting's two tracks.
+/// The dual modes load two Whisper copies, first file on the first:
+/// dual = ane + gpu, dual2 = ane + encgpu, dual3 = split + ane.
+/// Each file's text goes to <file>.<placement>.txt.
+func cmdWhisperBench(placement: String, language: String, paths: [String]) async -> Int32 {
+    let decoder = AudioDecoder()
+    var tracks: [(String, [Float])] = []
+    for p in paths {
+        let url = URL(fileURLWithPath: NSString(string: p).expandingTildeInPath)
+        do { tracks.append((url.path, try await decoder.decodeAll(file: url))) } catch {
+            print("decode failed: \(p): \(error.localizedDescription)"); return 1
+        }
+    }
+    let backends: [WhisperBackend]
+    switch placement {
+    case "dual": backends = [WhisperBackend(placement: .ane), WhisperBackend(placement: .gpu)]
+    case "dual2": backends = [WhisperBackend(placement: .ane), WhisperBackend(placement: .encgpu)]
+    case "dual3": backends = [WhisperBackend(placement: .split), WhisperBackend(placement: .ane)]
+    default:
+        guard let pl = WhisperBackend.Placement(rawValue: placement) else { print("unknown placement"); return 64 }
+        backends = [WhisperBackend(placement: pl)]
+    }
+    let tl = Date()
+    do { for b in backends { try await b.load(modelPath: nil) } } catch {
+        print("load failed: \(error)"); return 1
+    }
+    print(String(format: "load %.1fs", Date().timeIntervalSince(tl)))
+    let audio = tracks.map { Double($0.1.count) / 16_000 }.reduce(0, +)
+    let t0 = Date()
+    let results = await withTaskGroup(of: (Int, String, Double).self) { group in
+        for (i, t) in tracks.enumerated() {
+            let b = backends[min(i, backends.count - 1)]
+            group.addTask {
+                let s = Date()
+                let r = try? await b.transcribeTimedSegments(samples: t.1, languages: [language])
+                return (i, r?.text ?? "", Date().timeIntervalSince(s))
+            }
+        }
+        var out: [(Int, String, Double)] = []
+        for await r in group { out.append(r) }
+        return out.sorted { $0.0 < $1.0 }
+    }
+    let wall = Date().timeIntervalSince(t0)
+    for (i, text, secs) in results {
+        let path = tracks[i].0 + ".\(placement).txt"
+        try? text.write(toFile: path, atomically: true, encoding: .utf8)
+        print(String(format: "track %d: %.0fs audio in %.1fs, %d chars → %@", i,
+                     Double(tracks[i].1.count) / 16_000, secs, text.count, path))
+    }
+    print(String(format: "WALL %.1fs for %.0fs of audio (%.2fx realtime)", wall, audio, audio / wall))
+    return 0
+}
+
 /// Gemma via Google's LiteRT-LM runtime — the Android-proven stack.
 @MainActor
 func cmdLitert(path: String) async -> Int32 {
@@ -597,6 +652,9 @@ func main() async -> Int32 {
     case "superdiar":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdSuperDiar(path: args[2])
+    case "whisperbench":
+        guard args.count > 4 else { usage(); return 64 }
+        return await cmdWhisperBench(placement: args[2], language: args[3], paths: Array(args[4...]))
     case "whisper":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)

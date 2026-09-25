@@ -119,8 +119,13 @@ final class UpdateChecker: @unchecked Sendable {
 
     @discardableResult
     func check() async -> Status {
-        if await MainActor.run(body: { status == .checking }) { return .checking }
-        await MainActor.run { status = .checking }
+        // Check and claim in one hop so two callers can't both go out.
+        let claimed = await MainActor.run { () -> Bool in
+            if status == .checking { return false }
+            status = .checking
+            return true
+        }
+        guard claimed else { return .checking }
         let result: Status
         do {
             let (data, response) = try await Self.session.data(for: Self.request)

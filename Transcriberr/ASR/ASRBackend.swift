@@ -69,6 +69,18 @@ struct SpeakerHint: Sendable {
     let startSeconds: Double
     let endSeconds: Double
     let speakerKey: String
+
+    /// The N a backend prints in "Speaker N:" for a diarizer key, which the
+    /// runner parses back to SPEAKER_0N: the key's trailing digits, as is.
+    /// FluidAudio's offline diarizer names clusters "S1", "S2"…, which the
+    /// old `split("_")` parse missed: LiteRT Gemma was told every turn was
+    /// "Speaker 1" and Parakeet fell back to hash numbers. Keys without
+    /// digits get a fallback that is stable within the process.
+    static func number(fromKey key: String) -> Int {
+        let digits = key.reversed().prefix(while: { $0.isASCII && $0.isNumber })
+        if let n = Int(String(digits.reversed())) { return n }
+        return abs(key.hashValue % 90) + 10
+    }
 }
 
 struct RawSegment: Sendable {

@@ -72,6 +72,8 @@ func cmdKB(_ raw: [String]) -> Int32 {
     let parsed = KBArgs(raw)
     guard let sub = parsed.positionals.first else { kbUsage(); return 64 }
     let rest = Array(parsed.positionals.dropFirst())
+    // Before opening the store: help must work with no database present.
+    if ["help", "-h", "--help"].contains(sub) { kbUsage(); return 0 }
 
     let kb: KBService
     do {
@@ -101,7 +103,9 @@ func cmdKB(_ raw: [String]) -> Int32 {
                               : KBRender.markdownList(rows))
 
         case "search":
-            guard let query = rest.first else { kbUsage(); return 64 }
+            // Unquoted words are one query, not "first word only".
+            guard !rest.isEmpty else { kbUsage(); return 64 }
+            let query = rest.joined(separator: " ")
             let hits = try kb.search(query, limit: parsed.int("limit", default: 20))
             print(parsed.json ? try KBJSON.envelope("hits", hits)
                               : KBRender.markdown(hits, query: query))

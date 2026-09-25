@@ -398,6 +398,9 @@ final class UtteranceCapture: @unchecked Sendable {
         audioArrived = false
         tick?.cancel()
         tick = nil
+        // The hold watchdog of the next session reads this before its own
+        // start resets it: a 180 s leftover ended that session at once.
+        elapsedSeconds = 0
         let wasRunning = engine.isRunning
         try? ExceptionTrap.run {
             self.engine.stop()

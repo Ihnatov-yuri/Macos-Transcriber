@@ -134,15 +134,7 @@ enum AudioInputDevices {
             // gave it. Going back to "System default" (or losing the chosen
             // mic) has to move it back too, or it keeps recording from — or
             // failing on — the old device while we report the default.
-            let fallback = systemDefault()
-            if let fallback, wasPinned(engine) {
-                if (try? engine.outputNode.auAudioUnit.setDeviceID(fallback.id)) == nil {
-                    try? engine.inputNode.auAudioUnit.setDeviceID(fallback.id)
-                }
-                setPinned(engine, false)
-                AppLog.info("audio", "back to the system default input '\(fallback.name)'")
-            }
-            return fallback
+            return followSystemDefault(engine)
         }
         if (try? engine.outputNode.auAudioUnit.setDeviceID(device.id)) != nil {
             AppLog.info("audio", "capturing from '\(device.name)' (no default input opened)")
@@ -156,8 +148,29 @@ enum AudioInputDevices {
             return device
         } catch {
             AppLog.warn("audio", "could not select input '\(device.name)': \(error.localizedDescription) — falling back to the system default")
-            return systemDefault()
+            // Same as losing the device: an engine still pinned to an older
+            // choice would keep recording from it while we reported the default.
+            return followSystemDefault(engine)
         }
+    }
+
+    /// Move an engine a previous `apply` pinned back to the system default
+    /// input, and return the device it really ends up on. When the move
+    /// itself fails, that is the device it is still bound to — not the
+    /// default we meant.
+    private static func followSystemDefault(_ engine: AVAudioEngine) -> Device? {
+        let fallback = systemDefault()
+        guard wasPinned(engine) else { return fallback }
+        if let fallback,
+           (try? engine.outputNode.auAudioUnit.setDeviceID(fallback.id)) != nil
+            || (try? engine.inputNode.auAudioUnit.setDeviceID(fallback.id)) != nil {
+            setPinned(engine, false)
+            AppLog.info("audio", "back to the system default input '\(fallback.name)'")
+            return fallback
+        }
+        let bound = device(for: engine.inputNode.auAudioUnit.deviceID)?.device
+        AppLog.warn("audio", "could not move capture back to the system default — still on '\(bound?.name ?? "unknown device")'")
+        return bound ?? fallback
     }
 
     /// Whether opening capture right now would drag a Bluetooth link into
@@ -263,9 +276,13 @@ enum AudioInputDevices {
             mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        var value: CFString = "" as CFString
-        var size = UInt32(MemoryLayout<CFString>.size)
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr else { return nil }
-        return value as String
+        // CoreAudio hands back a +1 CFString (Create rule): take ownership so
+        // it is released — reading it into a plain CFString leaked one string
+        // per device per enumeration.
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr,
+              let value else { return nil }
+        return value.takeRetainedValue() as String
     }
 }

@@ -172,6 +172,9 @@ struct TagEditorRow: View {
                     }
                 }
         }
+        // The detail view is reused across recordings: a half-typed tag
+        // must not be committed to the next recording selected.
+        .onChange(of: recording.id) { _, _ in draft = "" }
     }
 
     private func commitDraft() {

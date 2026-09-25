@@ -72,19 +72,27 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// for a rebuild, and actor reentrancy let each start its own ~3 GB
     /// WhisperKit; they now share one.
     private var building: Task<Void, Error>?
+    /// Bumped by release(). A build that finishes under an older one drops
+    /// its pipeline: it used to store it and set `isReady` after the
+    /// release, bringing the released engine back.
+    private var generation = 0
 
     private func rebuild() async throws {
         if let building { return try await building.value }
-        let task = Task { try await self.buildPipe() }
+        let gen = generation
+        let task = Task { try await self.buildPipe(generation: gen) }
         building = task
-        defer { building = nil }
+        // Only clear OUR build: release() may have detached it already and
+        // a later load started a new one.
+        defer { if building == task { building = nil } }
         try await task.value
     }
 
     /// Builds a fresh WhisperKit and swaps it in, with no gap where `pipe`
     /// is nil.
-    private func buildPipe() async throws {
+    private func buildPipe(generation gen: Int) async throws {
         AppLog.info("whisper", "loading Whisper large-v3 (downloads ~3 GB on first run)…")
+        let kit: WhisperKit
         do {
             let where_ = placement ?? .configured
             AppLog.info("whisper", "placement: \(where_.rawValue)")
@@ -94,18 +102,22 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                 verbose: false,
                 prewarm: true
             )
-            let kit = try await WhisperKit(config)
+            kit = try await WhisperKit(config)
             // Load now, once: `prewarm` leaves the models unloaded, and the
             // first transcribe calls — three chunks at once — would each
             // start loading them (see transcribeTimedSegments).
             if kit.modelState != .loaded { try await kit.loadModels() }
-            self.pipe = kit
-            self.isReady = true
-            AppLog.info("whisper", "ready")
         } catch {
             AppLog.error("whisper", "load failed: \(error.localizedDescription)")
             throw ASRError.modelLoadFailed(reason: String(describing: error))
         }
+        guard generation == gen else {
+            AppLog.info("whisper", "released while loading — build discarded")
+            throw ASRError.modelLoadFailed(reason: "Whisper was released while loading")
+        }
+        self.pipe = kit
+        self.isReady = true
+        AppLog.info("whisper", "ready")
     }
 
     /// Wedge recovery: build a fresh pipeline first, then swap it in. The
@@ -142,6 +154,8 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     private func endCall(_ call: Int) { inFlight[call] = nil }
 
     func release() async {
+        generation += 1
+        building = nil
         pipe = nil
         isReady = false
     }

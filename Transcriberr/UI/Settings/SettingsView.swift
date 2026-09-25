@@ -679,9 +679,12 @@ struct APIKeysSettingsTab: View {
                     ))
                     HStack {
                         TapButton {
-                            // Never let an empty field wipe a stored key.
-                            guard let v = inputs[provider.rawValue],
-                                  !v.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                            // Never let an empty field wipe a stored key. A
+                            // key copied with a trailing newline or space was
+                            // stored as-is and every request then failed auth.
+                            guard let v = inputs[provider.rawValue]?
+                                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                                  !v.isEmpty else { return }
                             container.apiKeys.set(v, for: provider)
                         } label: {
                             LitButtonChrome(.secondary, compact: true) { Text("Save") }

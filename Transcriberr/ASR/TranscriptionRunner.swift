@@ -656,6 +656,10 @@ final class TranscriptionRunner: @unchecked Sendable {
                             textA: info.textA, textB: info.textB,
                             context: ctx, languages: params.languages)
                     }
+                } catch is CancellationError {
+                    // Cancelled, not wedged: rebuilding a healthy engine here
+                    // only delayed the next queued job.
+                    throw CancellationError()
                 } catch {
                     AppLog.warn("runner", "arbitration wedged on chunk \(idx + 1) — recovering, keeping voted text")
                     try? await ens.recoverWedge(modelPath: nil)
@@ -1003,7 +1007,10 @@ final class TranscriptionRunner: @unchecked Sendable {
             // User-tunable (Settings → Engines → Speaker turns): 30 s =
             // smooth blocks, 2 s = fine Samsung-style turns.
             let gap = UserDefaults.standard.double(forKey: "ui.turnCoalesceGapSeconds")
+            // Unlabeled segments stay as chunks: nil == nil merged every
+            // chunk of a run whose diarization failed into one segment.
             if var last = out.last,
+               last.speakerKey != nil,
                last.speakerKey == seg.speakerKey,
                seg.startSeconds - last.endSeconds < (gap > 0 ? gap : 30)
             {
@@ -1247,10 +1254,18 @@ final class TranscriptionRunner: @unchecked Sendable {
                 AppLog.error("runner", "rich chunk wedged twice — degrading to single engine")
                 await noteWedge(backend: ens, continuation: continuation)
                 try? await ens.recoverWedge(modelPath: nil)
-                return (try? await withChunkTimeout(seconds: timeout) {
-                    try await ens.transcribeChunkSolo(
-                        samples: samples, languages: params.languages, window: window)
-                }) ?? EnsembleBackend.RichChunk(text: "", agreement: 1, textA: "", textB: "")
+                do {
+                    return try await withChunkTimeout(seconds: timeout) {
+                        try await ens.transcribeChunkSolo(
+                            samples: samples, languages: params.languages, window: window)
+                    }
+                } catch is CancellationError {
+                    // A cancelled job must stop here, not come back as an
+                    // empty chunk that triggers yet another recovery.
+                    throw CancellationError()
+                } catch {
+                    return EnsembleBackend.RichChunk(text: "", agreement: 1, textA: "", textB: "")
+                }
             }
         }
     }

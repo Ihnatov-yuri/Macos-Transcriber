@@ -68,17 +68,28 @@ final class DiarizationRunner: @unchecked Sendable {
     ) async throws -> [SpeakerSegment] {
         let thresholds: [Double] = (exact && numClusters > 1) ? [0.6, 0.45, 0.34] : [0.6]
         var out: [SpeakerSegment] = []
+        var succeeded = false
         for (attempt, th) in thresholds.enumerated() {
-            try await prepare(numClusters: numClusters, threshold: th)
-            guard let manager else { return [] }
-            let result = try await manager.process(audio: samples)
-            out = result.segments.map {
-                SpeakerSegment(
-                    startSeconds: Double($0.startTimeSeconds),
-                    endSeconds: Double($0.endTimeSeconds),
-                    speakerId: normalize($0.speakerId)
-                )
+            let segments: [SpeakerSegment]
+            do {
+                try await prepare(numClusters: numClusters, threshold: th)
+                guard let manager else { return out }
+                segments = try await manager.process(audio: samples).segments.map {
+                    SpeakerSegment(
+                        startSeconds: Double($0.startTimeSeconds),
+                        endSeconds: Double($0.endTimeSeconds),
+                        speakerId: normalize($0.speakerId)
+                    )
+                }
+            } catch {
+                // A finer retry failing must not cost the pass that already
+                // worked. Cancellation, and a first attempt failing, still throw.
+                if !succeeded || error is CancellationError || Task.isCancelled { throw error }
+                AppLog.warn("diar", "exact mode retry at threshold \(th) failed: \(error.localizedDescription) — keeping the previous result")
+                return out
             }
+            succeeded = true
+            out = segments
             let found = Set(out.map(\.speakerId)).count
             if !exact || numClusters <= 1 || found >= numClusters {
                 if attempt > 0 {
@@ -214,10 +225,13 @@ final class DiarizationRunner: @unchecked Sendable {
 
     // MARK: - Helpers
 
-    /// FluidAudio yields ids like "speaker_1" — normalize to the SPEAKER_NN
-    /// format the Android app (and our sidecar JSON) use.
+    /// FluidAudio yields ids like "speaker_1" (streaming) or "S1" (offline)
+    /// — normalize both to the SPEAKER_NN format the Android app (and our
+    /// sidecar JSON) use. Splitting on "_" alone left "S1" as is, so the
+    /// runner's keys and the backends' "Speaker N" labels never matched.
     private func normalize(_ id: String) -> String {
-        if let num = id.split(separator: "_").last.flatMap({ Int($0) }) {
+        let digits = id.reversed().prefix(while: { $0.isASCII && $0.isNumber })
+        if !digits.isEmpty, let num = Int(String(digits.reversed())) {
             return String(format: "SPEAKER_%02d", num)
         }
         return id

@@ -165,6 +165,8 @@ final class KBServiceTests: XCTestCase {
         XCTAssertNotNil(KBService.parseSince("24h"))
         XCTAssertNotNil(KBService.parseSince("2026-01-01T00:00:00Z"))
         XCTAssertNil(KBService.parseSince("banana"))
+        XCTAssertNotNil(KBService.parseSince("2026-09-01"))
+        XCTAssertNotNil(KBService.parseSince("2026-09-01T10:00:00.123Z"))
         let sevenDays = KBService.parseSince("7d")!
         XCTAssertEqual(sevenDays.timeIntervalSinceNow, -7 * 86_400, accuracy: 5)
     }

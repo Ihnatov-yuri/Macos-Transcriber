@@ -167,13 +167,19 @@ final class RecordingRepository: @unchecked Sendable {
         // Chronological, not click order: the earlier-created recording is
         // the first half of the merged timeline — merging 9:03 "with" 9:01
         // must still play 9:01 first.
+        // Taken before the swap: the folder of the recording the merge was
+        // initiated from must win, not the earlier one's.
+        let initiatorFolder = a.folder ?? b.folder
         var a = a, b = b
         if b.createdAtMillis < a.createdAtMillis { swap(&a, &b) }
         // A just-stopped recording is saved and mergeable before its
-        // background echo-cancel rebuild / AAC compression finishes — wait
-        // either source out so this doesn't read a file mid rebuild/delete.
-        await postProcessTracker.waitUntilIdle(a.id)
-        await postProcessTracker.waitUntilIdle(b.id)
+        // background echo-cancel rebuild / AAC compression finishes — or
+        // even starts: with auto-transcribe on it waits for the job to
+        // decode the WAV first. Wait either source out (pending included)
+        // so this doesn't read a file mid rebuild/delete.
+        await postProcessTracker.waitUntilSettled(a.id)
+        await postProcessTracker.waitUntilSettled(b.id)
+        try Task.checkCancellation()
         let decoder = AudioDecoder()
         let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: a.audioPath))
         let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: b.audioPath))
@@ -260,9 +266,9 @@ final class RecordingRepository: @unchecked Sendable {
             durationSeconds: Double(sa.count + sb.count) / AudioDecoder.sampleRate
         )
         // Stay where the sources live: merging inside a folder must not eject
-        // the result to the unfiled root (a is the recording the merge was
-        // initiated from, so its folder wins when the two disagree).
-        merged.folder = a.folder ?? b.folder
+        // the result to the unfiled root (the recording the merge was
+        // initiated from wins when the two disagree).
+        merged.folder = initiatorFolder
         do {
             try save(merged)
         } catch {
@@ -342,6 +348,11 @@ final class RecordingRepository: @unchecked Sendable {
                 rollbackMerge(merged, at: url)
                 throw error
             }
+            // Same reason as split(): appendSegments skips the backup, and
+            // the only recording.json so far was written by save() with no
+            // segments — a merged recording that never gets re-run would
+            // restore as an empty transcript.
+            BackupService.backupRecording(merged)
         }
         AppLog.info("repo", "merged '\(a.title)' + '\(b.title)' → \(finalURL.lastPathComponent) (\(copies.count) segments)")
         return merged
@@ -378,8 +389,9 @@ final class RecordingRepository: @unchecked Sendable {
     func split(_ recording: Recording, atSeconds: Double) async throws -> (first: Recording, second: Recording) {
         // Same race merge() guards against: a just-stopped recording is
         // saved and splittable before its background echo-cancel rebuild /
-        // AAC compression finishes.
-        await postProcessTracker.waitUntilIdle(recording.id)
+        // AAC compression finishes (or starts — pending included).
+        await postProcessTracker.waitUntilSettled(recording.id)
+        try Task.checkCancellation()
         // Snapshotted before the (multi-second) work below so a live
         // transcription job racing this call — clearSegments/appendSegments
         // on the SAME recording, from a Cancel that flipped the UI's

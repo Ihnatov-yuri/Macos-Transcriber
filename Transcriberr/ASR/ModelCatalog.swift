@@ -79,6 +79,23 @@ extension ModelCatalog {
             .appendingPathComponent("Transcriberr/models", isDirectory: true)
     }
 
+    /// Keep the multi-GB model bundles out of Time Machine: they are
+    /// downloaded again on demand, and backing them up cost every backup
+    /// several GB. The flag is set on the folder, so it covers everything
+    /// downloaded into it later.
+    static func excludeModelsFromBackup() {
+        var dir = durableModelsDirectory()
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            if (try? dir.resourceValues(forKeys: [.isExcludedFromBackupKey]))?.isExcludedFromBackup == true { return }
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try dir.setResourceValues(values)
+        } catch {
+            AppLog.warn("models", "could not exclude models from backup: \(error.localizedDescription)")
+        }
+    }
+
     /// Local snapshot dir for a HF repo id, if downloaded (mirrors
     /// ModelDownloader.localPath without needing an entry instance).
     static func cachedRepoDirectory(huggingFaceID: String?) -> URL? {

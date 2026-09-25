@@ -552,6 +552,9 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
 /// can it find the English stretches inside a Ukrainian meeting?).
 @MainActor
 func cmdLangID(path: String, window: Double) async -> Int32 {
+    // A zero window never advances (infinite loop); a negative one traps on
+    // an inverted slice range.
+    guard window > 0 else { print("window must be > 0 seconds"); return 64 }
     let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
     guard let samples = try? await AudioDecoder().decodeAll(file: url) else { print("decode failed"); return 1 }
     do {
@@ -704,4 +707,6 @@ func main() async -> Int32 {
 }
 
 let exitCode = await main()
+// Backup writes are queued off-thread; exit() would drop any still pending.
+BackupService.flush()
 exit(exitCode)

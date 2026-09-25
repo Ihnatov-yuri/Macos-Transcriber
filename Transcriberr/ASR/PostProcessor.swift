@@ -194,10 +194,12 @@ final class PostProcessor: @unchecked Sendable {
                     transcript: transcript
                 )
             } else {
-                var user = preset.userTemplate
+                // Snippets expand in the template only: a literal
+                // `{snippet:…}` spoken into the transcript stays text.
+                var user = snippets.substitute(preset.userTemplate)
                     .replacingOccurrences(of: "{transcript_with_speakers}", with: transcriptWithSpeakers)
                     .replacingOccurrences(of: "{transcript}", with: transcript)
-                user = vocabPrefix + snippets.substitute(user)
+                user = vocabPrefix + user
                 let maxTokens = 1500
                 let timeout: TimeInterval = max(360, Double(maxTokens) / 4.0 + 120)
                 AppLog.info("postproc", "preset=\(presetId) single-shot (user=\(user.count)ch maxTokens=\(maxTokens) timeout=\(Int(timeout))s)")
@@ -294,10 +296,9 @@ final class PostProcessor: @unchecked Sendable {
         var stitched: [String] = []
         var failures = 0
         for (i, w) in windows.enumerated() {
-            var user = preset.userTemplate
+            var user = snippets.substitute(preset.userTemplate)
                 .replacingOccurrences(of: "{transcript_with_speakers}", with: w)
                 .replacingOccurrences(of: "{transcript}", with: w)
-            user = snippets.substitute(user)
             if let prev = stitched.last {
                 let tail = String(prev.suffix(Self.historyTailChars))
                 user = """

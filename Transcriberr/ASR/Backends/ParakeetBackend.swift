@@ -41,19 +41,27 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// The build in progress, shared by concurrent loads and recoveries
     /// (actor reentrancy let each start its own).
     private var building: Task<Void, Error>?
+    /// Bumped by release(). A build that finishes under an older one drops
+    /// its manager: it used to store it and set `isReady` after the
+    /// release, bringing the released engine back.
+    private var generation = 0
 
     private func rebuild() async throws {
         if let building { return try await building.value }
-        let task = Task { try await self.buildManager() }
+        let gen = generation
+        let task = Task { try await self.buildManager(generation: gen) }
         building = task
-        defer { building = nil }
+        // Only clear OUR build: release() may have detached it already and
+        // a later load started a new one.
+        defer { if building == task { building = nil } }
         try await task.value
     }
 
     /// Builds a fresh AsrManager and swaps it in, with no gap where
     /// `manager` is nil.
-    private func buildManager() async throws {
+    private func buildManager(generation gen: Int) async throws {
         AppLog.info("parakeet", "loading Parakeet \(version == .v2 ? "v2" : "v3") models (downloads ~1 GB on first run)…")
+        let mgr: AsrManager
         do {
             var lastLoggedPct = -1
             let models = try await AsrModels.downloadAndLoad(version: version) { progress in
@@ -63,15 +71,20 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
                     AppLog.info("parakeet", "model download/load \(pct)%")
                 }
             }
-            let mgr = AsrManager(config: .default)
+            mgr = AsrManager(config: .default)
             try await mgr.loadModels(models)
-            self.manager = mgr
-            self.isReady = true
-            AppLog.info("parakeet", "ready")
         } catch {
             AppLog.error("parakeet", "load failed: \(error.localizedDescription)")
             throw ASRError.modelLoadFailed(reason: String(describing: error))
         }
+        guard generation == gen else {
+            await mgr.cleanup()
+            AppLog.info("parakeet", "released while loading — build discarded")
+            throw ASRError.modelLoadFailed(reason: "Parakeet was released while loading")
+        }
+        self.manager = mgr
+        self.isReady = true
+        AppLog.info("parakeet", "ready")
     }
 
     /// Wedge recovery: build a fresh manager first, then swap it in. The
@@ -108,9 +121,14 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     private func endCall(_ call: Int) { inFlight[call] = nil }
 
     func release() async {
-        if let manager { await manager.cleanup() }
+        // Before the first await: a build finishing during cleanup() must
+        // already see itself as stale.
+        generation += 1
+        building = nil
+        let old = manager
         manager = nil
         isReady = false
+        if let old { await old.cleanup() }
     }
 
     // MARK: - Audio in
@@ -170,11 +188,8 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// (nearest region when it falls in a gap), then group consecutive
     /// same-speaker tokens into "Speaker N: …" lines.
     static func labelSpeakers(timings: [TokenTiming], hints: [SpeakerHint]) -> String {
-        func speakerNumber(_ key: String) -> Int {
-            // "SPEAKER_03" → 3; anything unparseable gets a stable fallback.
-            if let n = key.split(separator: "_").last.flatMap({ Int($0) }) { return n }
-            return abs(key.hashValue % 90) + 10
-        }
+        // "S3" / "SPEAKER_03" → 3; the same numbering LiteRT Gemma's hints use.
+        func speakerNumber(_ key: String) -> Int { SpeakerHint.number(fromKey: key) }
         func speakerFor(mid: TimeInterval) -> Int {
             var bestKey: String?
             var bestDistance = Double.greatestFiniteMagnitude

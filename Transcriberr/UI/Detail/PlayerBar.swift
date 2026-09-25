@@ -57,6 +57,10 @@ struct PlayerBar: View {
         .task(id: recording.id) {
             container.audioPlayer.load(url: URL(fileURLWithPath: recording.audioPath))
         }
+        // The player is app-wide: closing or deleting the recording, or
+        // leaving the Library, took this bar away while the audio kept
+        // playing with nothing on screen able to stop it.
+        .onDisappear { container.audioPlayer.pause() }
     }
 
     /// 200-bucket peak waveform with split-color rendering (past = accent,

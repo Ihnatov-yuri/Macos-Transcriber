@@ -41,7 +41,11 @@ final class MCPServer {
         var buffer = Data()
         while true {
             let chunk = stdin.availableData
-            if chunk.isEmpty { return 0 }   // EOF
+            if chunk.isEmpty {   // EOF
+                // A final request with no trailing newline is still a request.
+                if !buffer.isEmpty { handleLine(buffer) }
+                return 0
+            }
             buffer.append(chunk)
             while let nl = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer.subdata(in: buffer.startIndex..<nl)
@@ -53,11 +57,22 @@ final class MCPServer {
     }
 
     private func handleLine(_ data: Data) {
-        guard let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let method = message["method"] as? String else {
+        guard let parsed = try? JSONSerialization.jsonObject(with: data) else {
             // Parse error with no usable id — per JSON-RPC, id is null.
             send(["jsonrpc": "2.0", "id": NSNull(),
                   "error": ["code": -32700, "message": "Parse error"]])
+            return
+        }
+        guard let message = parsed as? [String: Any],
+              let method = message["method"] as? String else {
+            // Valid JSON but not a request object: Invalid Request, echoing
+            // the id when there is one so the client can match it.
+            let object = parsed as? [String: Any]
+            // A response (result/error) is never answered.
+            if object?["result"] != nil || object?["error"] != nil { return }
+            let id = object?["id"] ?? NSNull()
+            send(["jsonrpc": "2.0", "id": id,
+                  "error": ["code": -32600, "message": "Invalid Request"]])
             return
         }
         let id = message["id"]
@@ -88,6 +103,12 @@ final class MCPServer {
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
+            // MCP reports an unknown tool as a protocol error, not a tool result.
+            guard Self.toolDefinitions.contains(where: { $0["name"] as? String == name }) else {
+                send(["jsonrpc": "2.0", "id": id ?? NSNull(),
+                      "error": ["code": -32602, "message": "Unknown tool: \(name)"]])
+                return
+            }
             reply(id, result: callTool(name, arguments))
         default:
             send(["jsonrpc": "2.0", "id": id ?? NSNull(),

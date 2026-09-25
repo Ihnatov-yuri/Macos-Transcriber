@@ -31,7 +31,6 @@ struct DictationMenu: View {
             c.toggle(target: .frontmostApp)
         }
         .keyboardShortcut("d", modifiers: [.command, .shift])
-        .disabled(c.phase == .transcribing || c.phase == .inserting)
         if c.phase == .listening {
             Button("Cancel") { c.cancel() }
         }

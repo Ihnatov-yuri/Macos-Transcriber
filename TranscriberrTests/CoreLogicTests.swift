@@ -147,6 +147,16 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertEqual(out[0].text, "Hello. How are you?")
     }
 
+    func testCoalesceKeepsUnlabeledChunksApart() {
+        // Diarization failed: no speaker keys at all must not fold the
+        // whole recording into one segment.
+        let segs = [
+            RawSegment(startSeconds: 0, endSeconds: 28, text: "One.", speakerKey: nil, speakerName: nil),
+            RawSegment(startSeconds: 28, endSeconds: 56, text: "Two.", speakerKey: nil, speakerName: nil),
+        ]
+        XCTAssertEqual(TranscriptionRunner.coalesceBySpeaker(segs).count, 2)
+    }
+
     // MARK: - ROVER merge
 
     func testRoverPrefersHigherConfidence() {

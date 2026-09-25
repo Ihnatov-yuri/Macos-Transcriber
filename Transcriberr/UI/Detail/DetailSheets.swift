@@ -70,7 +70,18 @@ struct SegmentEditSheet: View {
     let segment: Segment
     let container: AppContainer
     @Environment(\.dismiss) private var dismiss
-    @State private var text: String = ""
+    @State private var text: String
+    /// Copied at init: the body must not read the model, which a run or a
+    /// version restore can delete while the sheet is open (see Save).
+    private let startSeconds: Double
+
+    init(segment: Segment, container: AppContainer) {
+        self.segment = segment
+        self.container = container
+        let alive = !segment.isDeleted && segment.modelContext != nil
+        _text = State(initialValue: alive ? segment.text : "")
+        startSeconds = alive ? segment.startSeconds : 0
+    }
 
     var body: some View {
         Sheet {
@@ -78,7 +89,7 @@ struct SegmentEditSheet: View {
                 HStack {
                     Text("Edit segment").uiLabel(11)
                     Spacer()
-                    Text(timestamp(segment.startSeconds)).uiLabel(9, color: AppColor.ink2)
+                    Text(timestamp(startSeconds)).uiLabel(9, color: AppColor.ink2)
                 }
                 Hairline()
                 TextEditor(text: $text)
@@ -121,7 +132,6 @@ struct SegmentEditSheet: View {
             .padding(AppMetric.l)
         }
         .frame(minWidth: 460, minHeight: 280)
-        .onAppear { text = segment.text }
     }
 
     private func timestamp(_ s: Double) -> String {

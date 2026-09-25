@@ -41,6 +41,10 @@ actor OpenAIBackend: ASRBackend {
         guard let key = apiKey, !key.isEmpty else {
             throw ASRError.modelLoadFailed(reason: "OpenAI API key missing")
         }
+        // Same floor as the local engines: an empty chunk failed the WAV
+        // buffer alloc and one under 0.1 s is an HTTP 400, so a tap-length
+        // dictation showed an error instead of nothing.
+        guard samples.count >= 8_000 else { return "" }   // < 0.5 s @ 16 kHz
 
         // Write the chunk to a temp WAV — same approach we use for Gemma.
         let wav = try writeTempWav(samples: samples, sampleRate: 16_000)
@@ -64,8 +68,8 @@ actor OpenAIBackend: ASRBackend {
         }
         part("model", asrModel)
         part("response_format", "text")
-        if let lang = languages.first, languages.count == 1 {
-            part("language", iso639(lang))
+        if let lang = languages.first, languages.count == 1, let code = iso639(lang) {
+            part("language", code)
         }
         if let ctx = previousContext, !ctx.isEmpty {
             part("prompt", String(ctx.suffix(220)))
@@ -137,14 +141,13 @@ actor OpenAIBackend: ASRBackend {
         }
     }
 
-    private func iso639(_ name: String) -> String {
-        switch name.lowercased() {
-        case "english", "en":     return "en"
-        case "arabic", "ar":      return "ar"
-        case "ukrainian", "uk":   return "uk"
-        case "dutch", "nl":       return "nl"
-        default:                  return name.lowercased()
-        }
+    /// nil = let the API detect it. The old fallback sent the lowercased
+    /// name ("german"), which the endpoint rejects with HTTP 400, so every
+    /// dictation chunk in German, French, Spanish… failed.
+    private func iso639(_ name: String) -> String? {
+        if let code = WhisperBackend.languageCode(from: [name]) { return code }
+        let lower = name.lowercased()
+        return lower.count == 2 && lower.allSatisfy(\.isLetter) ? lower : nil
     }
 
     private func writeTempWav(samples: [Float], sampleRate: Int) throws -> URL {

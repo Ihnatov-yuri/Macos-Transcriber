@@ -68,9 +68,19 @@ final class UpdateInstaller: @unchecked Sendable {
         var errorDescription: String? { message }
     }
 
-    func install(_ release: UpdateChecker.Release, currentVersion: String) async {
-        if await MainActor.run(body: { phase.isWorking }) { return }
-        await setPhase(.downloading)
+    /// `blocker` is asked again right before quitting: a recording started
+    /// while the zip downloaded must not be cut off by the relaunch.
+    func install(_ release: UpdateChecker.Release, currentVersion: String,
+                 blocker: @escaping @MainActor @Sendable () -> String? = { nil }) async {
+        // Check and claim in one main-actor hop, so a second press can't
+        // slip in between and start a parallel install that wipes this
+        // one's staging directory.
+        let claimed = await MainActor.run { () -> Bool in
+            if phase.isWorking { return false }
+            phase = .downloading
+            return true
+        }
+        guard claimed else { return }
         let stage: URL
         do {
             stage = try Self.makeStagingDirectory()
@@ -95,6 +105,7 @@ final class UpdateInstaller: @unchecked Sendable {
             let app = try Self.unpack(zip, into: stage)
             try Self.checkBundle(app, version: release.version)
             try? FileManager.default.removeItem(at: zip)
+            if let why = await MainActor.run(body: blocker) { throw Failure(why) }
 
             await setPhase(.relaunching)
             AppLog.info("update", "installing \(release.version) over \(currentVersion)")

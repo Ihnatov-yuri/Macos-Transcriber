@@ -183,7 +183,9 @@ enum TranscriptHygiene {
         var raw = d.string(forKey: "prompt.vocabulary") ?? ""
         if let js = d.string(forKey: "prompt.vocabulary.byLang"),
            let map = try? JSONDecoder().decode([String: String].self, from: Data(js.utf8)) {
-            for lang in languages { raw += "," + (map[lang] ?? "") }
+            // Auto-detect (no languages) takes every list, as PromptStore does.
+            let keys = languages.isEmpty ? Array(map.keys) : Array(languages)
+            for lang in keys.sorted() { raw += "," + (map[lang] ?? "") }
         }
         var seen = Set<String>()
         return raw.split(whereSeparator: { $0 == "," || $0.isNewline })

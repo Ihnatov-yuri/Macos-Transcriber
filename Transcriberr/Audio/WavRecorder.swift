@@ -104,6 +104,10 @@ final class WavRecorder: @unchecked Sendable {
 
     nonisolated(unsafe) private var isStarting = false
 
+    /// A capture is starting or has a file open. Launch-time crash repair
+    /// (`WavRepair`) must not run while this is true.
+    var isCapturing: Bool { isStarting || openFileURL != nil }
+
     /// Nonisolated on purpose: voice-processing setup and `engine.start()`
     /// block for up to seconds and must not sit on the main thread. The
     /// price is that this body runs on the cooperative pool — so every
@@ -714,21 +718,28 @@ final class WavRecorder: @unchecked Sendable {
         self.appendToChunkBuffer(Array(UnsafeBufferPointer(start: ptr, count: outFrames)))
     }
 
+    /// Meter coalescing state, shared by ioQueue (`coalescePeak`) and the
+    /// main actor (`flushPendingMeter`) — hence the lock. Held for a handful
+    /// of loads and stores, never across the MainActor hop. ioQueue is not
+    /// the render thread (the tap callback only enqueues onto it).
+    private let meterLock = NSLock()
     nonisolated(unsafe) private var pendingRMS: Float = 0
     nonisolated(unsafe) private var pendingPeak: Float = 0
     nonisolated(unsafe) private var lastPublishMs: Int64 = 0
     nonisolated(unsafe) private var publishScheduled: Bool = false
 
     nonisolated private func coalescePeak(rms: Float, peak: Float) {
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let interval: Int64 = 80          // 12.5 Hz
+        meterLock.lock()
         // Combine with anything that hasn't been published yet.
         pendingRMS = max(pendingRMS, rms)
         pendingPeak = max(pendingPeak, peak)
-
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let interval: Int64 = 80          // 12.5 Hz
         if nowMs - lastPublishMs < interval {
-            if publishScheduled { return }
+            let schedule = !publishScheduled
             publishScheduled = true
+            meterLock.unlock()
+            guard schedule else { return }
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 self?.flushPendingMeter()
@@ -739,6 +750,7 @@ final class WavRecorder: @unchecked Sendable {
         let r = pendingRMS, p = pendingPeak
         pendingRMS = 0
         pendingPeak = 0
+        meterLock.unlock()
         Task { @MainActor [weak self] in
             self?.publishMeter(rms: r, peak: p)
         }
@@ -746,11 +758,13 @@ final class WavRecorder: @unchecked Sendable {
 
     @MainActor
     private func flushPendingMeter() {
+        meterLock.lock()
         publishScheduled = false
         let r = pendingRMS, p = pendingPeak
         pendingRMS = 0
         pendingPeak = 0
         lastPublishMs = Int64(Date().timeIntervalSince1970 * 1000)
+        meterLock.unlock()
         publishMeter(rms: r, peak: p)
     }
 

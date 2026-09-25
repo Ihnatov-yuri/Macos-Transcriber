@@ -241,6 +241,27 @@ final class InferenceGateTests: XCTestCase {
         await gate.release(x, exclusive: true)
     }
 
+    /// Dictation abandoning its own hung call evicts that hold, never a
+    /// background hold of the same engine (Super's whole-track reading).
+    func testInteractiveEvictionLeavesBackgroundHolds() async throws {
+        let gate = InferenceGate()
+        let background = try await gate.acquire(owner: "whisper")
+        let dictation = try await InferenceGate.$interactive.withValue(true) {
+            try await gate.acquire(owner: "whisper")
+        }
+        await gate.setLitertActive(true)
+        let order = Order()
+        let gemma = Task { let s = try await gate.acquire(exclusive: true); order.add("X"); return s }
+        try await settle()
+        await gate.evictShared(owner: "whisper", olderThan: 0, interactiveOnly: true)
+        try await settle()
+        XCTAssertEqual(order.all, [], "the background reading still holds the gate")
+        await gate.release(background)
+        _ = try await gemma.value
+        XCTAssertEqual(order.all, ["X"])
+        await gate.release(dictation)   // evicted token: no effect
+    }
+
     /// The 2026-09-25 freeze: a timed-out dictation polish left its
     /// exclusive request queued behind Super's long Whisper hold, and every
     /// later shared request queued behind that. Cancelling must free the

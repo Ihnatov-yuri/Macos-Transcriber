@@ -83,6 +83,7 @@ actor InferenceGate {
     /// admitted (for `evictShared(owner:olderThan:)`).
     private struct SharedHold {
         let owner: String?
+        let interactive: Bool
         let since: Date
     }
     private var sharedHolders: [Int: SharedHold] = [:]
@@ -111,12 +112,12 @@ actor InferenceGate {
     func acquire(exclusive: Bool = false, owner: String? = nil) async throws -> Int {
         guard litertActive else {
             if exclusive { return -1 }
-            return admit(exclusive: false, owner: owner)
+            return admit(exclusive: false, owner: owner, interactive: Self.interactive)
         }
         let interactive = Self.interactive
         if canAdmit(exclusive: exclusive),
            waiters.isEmpty || (interactive && !waiters.contains { $0.interactive }) {
-            return admit(exclusive: exclusive, owner: owner)
+            return admit(exclusive: exclusive, owner: owner, interactive: interactive)
         }
         let id = nextWaiterId
         nextWaiterId += 1
@@ -170,9 +171,18 @@ actor InferenceGate {
     /// a wedged Whisper or Parakeet call whose engine was just rebuilt. The
     /// same engine's healthy calls on other chunks are seconds old and keep
     /// their hold.
-    func evictShared(owner: String, olderThan age: TimeInterval = InferenceGate.stuckCallAge) {
+    ///
+    /// `interactiveOnly`: dictation abandoning its own hung call. Its hold
+    /// is counted even with no Gemma loaded, and left in place it would
+    /// block the next Gemma call forever; a background hold of the same
+    /// engine (Super's half-hour whole-track Whisper reading) is not its to
+    /// evict.
+    func evictShared(owner: String, olderThan age: TimeInterval = InferenceGate.stuckCallAge,
+                     interactiveOnly: Bool = false) {
         let cutoff = Date().addingTimeInterval(-age)
-        sharedHolders = sharedHolders.filter { $0.value.owner != owner || $0.value.since > cutoff }
+        sharedHolders = sharedHolders.filter {
+            $0.value.owner != owner || $0.value.since > cutoff || (interactiveOnly && !$0.value.interactive)
+        }
         admitWaiters()
     }
 
@@ -190,10 +200,14 @@ actor InferenceGate {
         exclusive ? exclusiveHolder == nil && sharedHolders.isEmpty : exclusiveHolder == nil
     }
 
-    private func admit(exclusive: Bool, owner: String?) -> Int {
+    private func admit(exclusive: Bool, owner: String?, interactive: Bool) -> Int {
         let token = nextToken
         nextToken += 1
-        if exclusive { exclusiveHolder = token } else { sharedHolders[token] = SharedHold(owner: owner, since: Date()) }
+        if exclusive {
+            exclusiveHolder = token
+        } else {
+            sharedHolders[token] = SharedHold(owner: owner, interactive: interactive, since: Date())
+        }
         return token
     }
 
@@ -204,7 +218,8 @@ actor InferenceGate {
     private func admitWaiters() {
         while let head = waiters.first, canAdmit(exclusive: head.exclusive) {
             waiters.removeFirst()
-            head.continuation.resume(returning: admit(exclusive: head.exclusive, owner: head.owner))
+            head.continuation.resume(returning: admit(exclusive: head.exclusive, owner: head.owner,
+                                                      interactive: head.interactive))
         }
         guard exclusiveHolder == nil else { return }
         var i = 0
@@ -212,7 +227,7 @@ actor InferenceGate {
             let w = waiters[i]
             if w.interactive, !w.exclusive {
                 waiters.remove(at: i)
-                w.continuation.resume(returning: admit(exclusive: false, owner: w.owner))
+                w.continuation.resume(returning: admit(exclusive: false, owner: w.owner, interactive: true))
             } else {
                 i += 1
             }

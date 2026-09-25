@@ -107,15 +107,25 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// resetting first woke the queued callers against a nil engine, and
     /// every one of them failed with "not loaded".
     func recoverWedge(modelPath: URL?) async throws {
+        // 120 s, not the shared 60: every caller's timeout (chunk, brief
+        // section, arbitration) is 120 s and counts its queue wait, so a
+        // healthy generation someone else started 60-120 s ago is not
+        // proof of a wedge. A real hang is still healed, one timeout later.
         guard let since = inferringSince,
-              Date().timeIntervalSince(since) >= InferenceGate.stuckCallAge else {
+              Date().timeIntervalSince(since) >= Self.stuckInferenceAge else {
             try await load(modelPath: modelPath)
             return
         }
+        // Several chunks time out together and each asks for recovery.
+        // They share one build; only the first to finish resets the lock
+        // and the gate. A second reset would orphan the waiter the first
+        // one just admitted and could evict its legitimate gate hold.
+        let wedged = inferenceId
         AppLog.warn("litert", "wedge recovery: rebuilding engine in place")
         do {
             try await rebuild(modelPath: modelPath)
         } catch {
+            guard inferenceId == wedged, inferringSince != nil else { throw error }
             // No engine to hand the queue to: fail the waiters fast with
             // "not loaded" instead of leaving them behind the zombie.
             engine = nil
@@ -125,12 +135,15 @@ actor GemmaLiteRTBackend: ASRBackend {
             await InferenceGate.shared.evictExclusive()
             throw error
         }
+        guard inferenceId == wedged, inferringSince != nil else { return }
         inferringSince = nil
         resetEngineLock()
         // The wedged call also holds the cross-engine gate. Evict it alone:
         // the Whisper/Parakeet calls running on other chunks keep theirs.
         await InferenceGate.shared.evictExclusive()
     }
+
+    static let stuckInferenceAge: TimeInterval = 120
 
     /// When the call now inside the native engine started; nil when none
     /// is. The engine lock admits one call at a time.

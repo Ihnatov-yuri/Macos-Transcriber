@@ -112,3 +112,71 @@ final class ReleaseNotesTests: XCTestCase {
         XCTAssertEqual(ReleaseNotes.entries(for: "3.13", in: text), [])
     }
 }
+
+/// The install path trusts nothing it can't verify.
+final class UpdateInstallerTests: XCTestCase {
+
+    // Made by scripts/update-signing.swift with a throwaway key, so these
+    // also prove the release script and the app sign the same message.
+    private let testPublicKey = "37DPQPVEqH1petShIWgN52rSlp+ExRwFrmUO1pg4nfc="
+    private let payload = Data("Transcriberr test payload\n".utf8)
+    private let payloadSHA = "7fdc1d0af4def78ba9c1285966f005c469550890bcb29528c13b62c56a851c13"
+    private let signature = Data(base64Encoded: "S1n98cfYmMK9jwnUfeegp4OfCsIvIVGo02ShNp2OdI/dC30cl5qx20ngpZr56NubsJBAaXI2bCW51aC5Pml1CA==")!
+
+    func testScriptSignatureVerifies() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try payload.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertEqual(try UpdateSignature.sha256Hex(of: file), payloadSHA)
+        XCTAssertTrue(UpdateSignature.isValid(signature: signature, version: "9.9.9",
+                                              sha256Hex: payloadSHA, publicKey: testPublicKey))
+    }
+
+    func testSignatureRejectsAnyChange() {
+        // Another version (replaying a genuine zip as a newer one).
+        XCTAssertFalse(UpdateSignature.isValid(signature: signature, version: "9.9.10",
+                                               sha256Hex: payloadSHA, publicKey: testPublicKey))
+        // Other bytes.
+        XCTAssertFalse(UpdateSignature.isValid(signature: signature, version: "9.9.9",
+                                               sha256Hex: String(payloadSHA.reversed()), publicKey: testPublicKey))
+        // The real release key didn't make it.
+        XCTAssertFalse(UpdateSignature.isValid(signature: signature, version: "9.9.9", sha256Hex: payloadSHA))
+        // A tampered signature.
+        var bad = signature
+        bad[0] ^= 1
+        XCTAssertFalse(UpdateSignature.isValid(signature: bad, version: "9.9.9",
+                                               sha256Hex: payloadSHA, publicKey: testPublicKey))
+    }
+
+    func testReleaseKeyIsWellFormed() throws {
+        let raw = try XCTUnwrap(Data(base64Encoded: UpdateSignature.publicKey))
+        XCTAssertEqual(raw.count, 32)
+    }
+
+    func testInstallableNeedsZipAndSignature() throws {
+        let both = #"{"tag_name":"v3.14.3","assets":[{"name":"Transcriberr-v3.14.3-macOS-arm64.zip"},{"name":"Transcriberr-v3.14.3-macOS-arm64.zip.sig"}]}"#
+        let zipOnly = #"{"tag_name":"v3.14.3","assets":[{"name":"Transcriberr-v3.14.3-macOS-arm64.zip"}]}"#
+        let r = try XCTUnwrap(UpdateChecker.parse(Data(both.utf8)))
+        XCTAssertTrue(r.installable)
+        XCTAssertEqual(r.zipURL.absoluteString,
+                       "https://github.com/Ihnatov-yuri/Macos-Transcriber/releases/download/v3.14.3/Transcriberr-v3.14.3-macOS-arm64.zip")
+        XCTAssertEqual(r.signatureURL.lastPathComponent, "Transcriberr-v3.14.3-macOS-arm64.zip.sig")
+        XCTAssertFalse(try XCTUnwrap(UpdateChecker.parse(Data(zipOnly.utf8))).installable)
+    }
+
+    /// The bundle check accepts this very app at its own version and
+    /// nothing else.
+    func testBundleCheck() throws {
+        let app = Bundle.main.bundleURL
+        let version = try XCTUnwrap(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+        XCTAssertNoThrow(try UpdateInstaller.checkBundle(app, version: version))
+        XCTAssertThrowsError(try UpdateInstaller.checkBundle(app, version: version + ".1"))
+        XCTAssertThrowsError(try UpdateInstaller.checkBundle(FileManager.default.temporaryDirectory, version: version))
+    }
+
+    func testRefusesToReplaceSomethingThatIsNotAnApp() {
+        XCTAssertThrowsError(try UpdateInstaller.checkCanReplace(URL(fileURLWithPath: "/tmp/Transcriberr")))
+        XCTAssertThrowsError(try UpdateInstaller.checkCanReplace(
+            URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/ABC/d/Transcriberr.app")))
+    }
+}

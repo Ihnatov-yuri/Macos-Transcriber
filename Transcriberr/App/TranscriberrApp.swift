@@ -39,7 +39,7 @@ struct TranscriberrApp: App {
                 Button("About Transcriberr") { Self.showAbout() }
                 Button("Check for Updates…") {
                     let updates = container.updates
-                    Task { @MainActor in Self.showUpdateResult(await updates.check()) }
+                    Task { @MainActor in Self.showUpdateResult(await updates.check(), container: container) }
                 }
             }
             CommandGroup(replacing: .newItem) {
@@ -81,15 +81,20 @@ struct TranscriberrApp: App {
 
     /// Result of a manual check from the app menu.
     @MainActor
-    private static func showUpdateResult(_ status: UpdateChecker.Status) {
+    private static func showUpdateResult(_ status: UpdateChecker.Status, container: AppContainer) {
         let alert = NSAlert()
         switch status {
         case .available(let r):
             alert.messageText = "Transcriberr \(r.version) is available"
             alert.informativeText = r.title.isEmpty ? "The release page has the download and what changed." : r.title
+            if r.installable { alert.addButton(withTitle: "Update Now") }
             alert.addButton(withTitle: "What's New…")
             alert.addButton(withTitle: "Later")
-            if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(r.pageURL) }
+            switch (alert.runModal(), r.installable) {
+            case (.alertFirstButtonReturn, true): container.installUpdate(r)
+            case (.alertFirstButtonReturn, false), (.alertSecondButtonReturn, true): NSWorkspace.shared.open(r.pageURL)
+            default: break
+            }
             return
         case .failed(let why):
             alert.messageText = why

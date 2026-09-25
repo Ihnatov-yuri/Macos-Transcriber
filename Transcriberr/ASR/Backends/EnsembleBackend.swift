@@ -374,7 +374,14 @@ actor EnsembleBackend: ASRBackend {
             longForm[id] = words
         }
         if splitTracks {
-            farSide = ((whisperTracks[0]?.words ?? []) + (parakeetTracks[0] ?? [])).sorted { $0.start < $1.start }
+            // The repaired far side too, not only the raw one: the mic's own
+            // Whisper words are the repaired reading, so an English stretch
+            // spliced into the mic matched nothing on a far side that still
+            // held the Ukrainian translation. The raw reading stays for the
+            // mic stretches repair left alone. A word in both is harmless:
+            // `echoFiltered` only asks whether ANY far-side word matches.
+            farSide = ((whisperTracks[0]?.words ?? []) + (longForm[0] ?? []) + (parakeetTracks[0] ?? []))
+                .sorted { $0.start < $1.start }
         }
         AppLog.info("ensemble", String(format: "timeline: whisper %d tracks / %d words, parakeet %d tracks, far side %d words, %.1fs",
                                        longForm.count, longForm.values.map(\.count).reduce(0, +),
@@ -414,19 +421,35 @@ actor EnsembleBackend: ASRBackend {
                   let english = try? await whisper.transcribeTimed(samples: audio, languages: ["English"]),
                   !english.words.isEmpty
             else { continue }
-            let offset = Double(a) / 16_000
-            let spliced = english.words.map { TimedWord(word: $0.word, start: $0.start + offset, end: $0.end + offset) }
+            guard let spliced = splice(english.words, offset: Double(a) / 16_000, into: seg, of: out) else { continue }
             AppLog.info("ensemble", String(format: "language repair @%.1fs (en %.2f): \"%@\" → \"%@\"",
                                            seg.start, lang.probability,
                                            joinSurfaces(mine.map(\.word.surface)).prefix(60) as CVarArg,
                                            english.text.prefix(60) as CVarArg))
-            out.removeAll(where: inSeg)
-            out.append(contentsOf: spliced)
-            out.sort { $0.start < $1.start }
+            out = spliced
             repaired += 1
         }
         if checked > 0 { AppLog.info("ensemble", "language repair: \(checked) segments checked, \(repaired) re-read in English") }
         return out
+    }
+
+    /// `words` with the segment's words replaced by a re-read of it
+    /// (`reread` timed from `offset` on the timeline); nil when the re-read
+    /// has nothing inside the segment. Only the words timed INSIDE the
+    /// segment go in — the span the removal clears. The re-read's 0.2 s pads
+    /// are there to give the decoder a run-up, not words: a neighbour's edge
+    /// word read from them was spliced in beside the neighbour's own copy.
+    /// This also keeps out what a short re-read writes over its zero padding
+    /// ("Thank you." past the end of the audio), which Whisper's phantom
+    /// guards only weigh on reads of 8 s or more.
+    static func splice(_ reread: [TimedWord], offset: Double, into seg: WhisperBackend.SegmentSpan,
+                       of words: [TimedWord]) -> [TimedWord]? {
+        let inSeg = { (w: TimedWord) in (w.start + w.end) / 2 >= seg.start && (w.start + w.end) / 2 < seg.end }
+        let spliced = reread
+            .map { TimedWord(word: $0.word, start: $0.start + offset, end: $0.end + offset) }
+            .filter(inSeg)
+        guard !spliced.isEmpty else { return nil }
+        return (words.filter { !inSeg($0) } + spliced).sorted { $0.start < $1.start }
     }
 
     /// Mic words that are the far side's words heard again. The tracks share
@@ -524,7 +547,7 @@ actor EnsembleBackend: ASRBackend {
             return RichChunk(text: "", agreement: 1, textA: "", textB: "")
         }
         if gemmaBenched {
-            return try await transcribeChunkSolo(samples: samples, languages: languages)
+            return try await transcribeChunkSolo(samples: samples, languages: languages, window: window)
         }
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
             async let taskA = detailed(pa, kind: kindA, samples: samples, languages: languages, window: window)
@@ -601,16 +624,21 @@ actor EnsembleBackend: ASRBackend {
 
     /// Single-engine escape hatch: a chunk whose audio wedges LiteRT twice
     /// still gets transcribed by the healthy engine instead of being lost.
+    /// `window` as in the pair path: without it a mic chunk of a split-track
+    /// meeting was read per chunk with the far side's echo left in, and
+    /// Whisper's timeline words for the chunk went unused.
     func transcribeChunkSolo(
         samples: [Float],
-        languages: Set<String>
+        languages: Set<String>,
+        window: ChunkWindow? = nil
     ) async throws -> RichChunk {
         guard isReady, let solo = soloEngine else {
             throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
         }
         let text: String
         if let d = solo as? DetailedTranscribing {
-            text = try await d.transcribeDetailed(samples: samples, languages: languages).text
+            let kind = kindA == .gemmaLiteRT ? kindB : kindA
+            text = try await detailed(d, kind: kind, samples: samples, languages: languages, window: window).text
         } else {
             text = try await solo.transcribeChunk(
                 samples: samples, languages: languages, translateTo: nil,

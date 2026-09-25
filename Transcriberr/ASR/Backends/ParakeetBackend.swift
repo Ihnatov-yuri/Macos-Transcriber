@@ -269,7 +269,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             let fallback = pieces.enumerated().map { k, w in TimedWord(word:
                 ScoredWord(
                     surface: String(w),
-                    norm: w.lowercased().filter { $0.isLetter || $0.isNumber },
+                    norm: TranscriptHygiene.wordKey(w),
                     // Capped below typical per-word confidences so an engine
                     // with REAL word-level scores (Whisper) can win specific
                     // rare terms without steamrolling the whole chunk.
@@ -317,7 +317,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             }
         }
         for i in out.indices {
-            out[i].word.norm = out[i].word.surface.lowercased().filter { $0.isLetter || $0.isNumber }
+            out[i].word.norm = TranscriptHygiene.wordKey(out[i].word.surface)
         }
         return out
     }

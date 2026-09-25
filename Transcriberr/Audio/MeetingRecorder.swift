@@ -393,10 +393,29 @@ final class MeetingRecorder: @unchecked Sendable {
             let n = min(frames, Int(b.mDataByteSize) / (4 * ch))
             let p = raw.assumingMemoryBound(to: Float.self)
             let isTap = tapIndex.map { bi == $0 } ?? (bi == list.count - 1)
+            // Average only the channels carrying signal in this buffer — the
+            // WavRecorder.downmixToMono rule. A plain average let the silent
+            // input 2 of a two-input interface halve a mic on input 1 (-6 dB),
+            // which also skewed the gate and the me-timeline against the user.
+            // A bitmask, not an array: this runs once per HAL cycle. Past 64
+            // channels (or all silent) it falls back to averaging everything.
+            var activeMask: UInt64 = 0
+            if ch > 1, ch <= 64 {
+                for c in 0..<ch {
+                    var energy: Float = 0
+                    var f = 0
+                    while f < n { let v = p[f * ch + c]; energy += v * v; f += 16 }
+                    if energy > 1e-9 { activeMask |= 1 << UInt64(c) }
+                }
+            }
+            let active = activeMask.nonzeroBitCount
+            let inv = 1 / Float(active == 0 ? ch : active)
             for f in 0..<n {
                 var s: Float = 0
-                for c in 0..<ch { s += p[f * ch + c] }
-                let m = s / Float(ch)
+                for c in 0..<ch where active == 0 || activeMask & (1 << UInt64(c)) != 0 {
+                    s += p[f * ch + c]
+                }
+                let m = s * inv
                 if isTap { sysMono[f] += m } else { micMono[f] += m }
             }
         }

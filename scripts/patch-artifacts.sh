@@ -20,10 +20,14 @@ set -euo pipefail
 # Run after every package resolve (setup.sh does; so should you after
 # `xcodebuild -resolvePackageDependencies` or a clean of SourcePackages):
 #   scripts/patch-artifacts.sh [SourcePackages dir]   (default .build/xcode/SourcePackages)
+# Xcode's own ⌘R builds use DerivedData/Transcriberr-*/SourcePackages, which
+# setup.sh patches as well.
 # Delete this script once FluidAudio ships a NemoTextProcessing artifact with
 # nested headers — the patch is a no-op when the layout is already nested.
 
-PKG_DIR="${1:-.build/xcode/SourcePackages}"
+# The default is anchored to the repo, not the cwd, so the script works when
+# called from anywhere.
+PKG_DIR="${1:-$(cd "$(dirname "$0")/.." && pwd)/.build/xcode/SourcePackages}"
 XCF="$PKG_DIR/artifacts/fluidaudio/NemoTextProcessing/NemoTextProcessing.xcframework"
 MODULE="CNemoTextProcessing"
 

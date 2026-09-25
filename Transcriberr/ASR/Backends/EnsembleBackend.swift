@@ -118,30 +118,34 @@ actor EnsembleBackend: ASRBackend {
         isReady = true
     }
 
-    /// A wedged chunk means (in practice) the LiteRT sub-engine hung —
-    /// recover the sub-engines individually instead of releasing the whole
-    /// ensemble under concurrently running chunks.
+    /// Recover from a wedged chunk: ask each engine (A, B and the arbiter,
+    /// each once) to heal, and each rebuilds only if one of its own native
+    /// calls is stuck. The ensemble cannot tell which engine hung, but each
+    /// engine can.
+    ///
+    /// The first version rebuilt every LiteRT engine it found and returned.
+    /// The Gemma arbiter is loaded on every Super run, so a Whisper call
+    /// that hung in pass 1 (where Gemma does nothing) reloaded the idle
+    /// Gemma, reset the gate under the running chunks, and retried on the
+    /// same hung Whisper: 240 s per wedge, and benching never kicked in
+    /// because Gemma was not a sub-engine.
     func recoverWedge(modelPath: URL?) async throws {
-        var healedLiteRT = false
-        if let g = engineA as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil); healedLiteRT = true }
-        if let g = engineB as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil); healedLiteRT = true }
-        if let g = arbiter as? GemmaLiteRTBackend { try await g.recoverWedge(modelPath: nil); healedLiteRT = true }
-        guard !healedLiteRT else { return }
-        // No LiteRT anywhere in this pair — the DEFAULT case, Parakeet v3 +
-        // v2. This method used to return having done nothing at all, so a
-        // wedged chunk cost 120 s, was "recovered" by a no-op, retried on the
-        // same wedged engine for another 120 s, and then had its audio
-        // dropped from the transcript — four minutes per affected chunk.
-        // Fall back to the protocol's own rebuild.
-        AppLog.warn("ensemble", "wedge recovery: rebuilding sub-engines (no LiteRT in this pair)")
-        if let a = engineA {
-            await a.release()
-            try await a.load(modelPath: nil)
+        var seen = Set<ObjectIdentifier>()
+        var subEngineError: Error?
+        for engine in [engineA, engineB, arbiter].compactMap({ $0 }) {
+            guard seen.insert(ObjectIdentifier(engine)).inserted else { continue }
+            do { try await engine.recoverWedge(modelPath: nil) } catch {
+                AppLog.warn("ensemble", "wedge recovery of \(engine.id) failed: \(error.localizedDescription)")
+                let isSubEngine = engine === engineA || engine === engineB
+                if isSubEngine {
+                    if subEngineError == nil { subEngineError = error }
+                } else {
+                    // Without an arbiter the merge keeps the voted text.
+                    arbiter = nil
+                }
+            }
         }
-        if let b = engineB {
-            await b.release()
-            try await b.load(modelPath: nil)
-        }
+        if let subEngineError { throw subEngineError }
     }
 
     /// The non-Gemma sub-engine (falls back to A when neither is Gemma).
@@ -370,7 +374,14 @@ actor EnsembleBackend: ASRBackend {
             longForm[id] = words
         }
         if splitTracks {
-            farSide = ((whisperTracks[0]?.words ?? []) + (parakeetTracks[0] ?? [])).sorted { $0.start < $1.start }
+            // The repaired far side too, not only the raw one: the mic's own
+            // Whisper words are the repaired reading, so an English stretch
+            // spliced into the mic matched nothing on a far side that still
+            // held the Ukrainian translation. The raw reading stays for the
+            // mic stretches repair left alone. A word in both is harmless:
+            // `echoFiltered` only asks whether ANY far-side word matches.
+            farSide = ((whisperTracks[0]?.words ?? []) + (longForm[0] ?? []) + (parakeetTracks[0] ?? []))
+                .sorted { $0.start < $1.start }
         }
         AppLog.info("ensemble", String(format: "timeline: whisper %d tracks / %d words, parakeet %d tracks, far side %d words, %.1fs",
                                        longForm.count, longForm.values.map(\.count).reduce(0, +),
@@ -410,19 +421,35 @@ actor EnsembleBackend: ASRBackend {
                   let english = try? await whisper.transcribeTimed(samples: audio, languages: ["English"]),
                   !english.words.isEmpty
             else { continue }
-            let offset = Double(a) / 16_000
-            let spliced = english.words.map { TimedWord(word: $0.word, start: $0.start + offset, end: $0.end + offset) }
+            guard let spliced = splice(english.words, offset: Double(a) / 16_000, into: seg, of: out) else { continue }
             AppLog.info("ensemble", String(format: "language repair @%.1fs (en %.2f): \"%@\" → \"%@\"",
                                            seg.start, lang.probability,
                                            joinSurfaces(mine.map(\.word.surface)).prefix(60) as CVarArg,
                                            english.text.prefix(60) as CVarArg))
-            out.removeAll(where: inSeg)
-            out.append(contentsOf: spliced)
-            out.sort { $0.start < $1.start }
+            out = spliced
             repaired += 1
         }
         if checked > 0 { AppLog.info("ensemble", "language repair: \(checked) segments checked, \(repaired) re-read in English") }
         return out
+    }
+
+    /// `words` with the segment's words replaced by a re-read of it
+    /// (`reread` timed from `offset` on the timeline); nil when the re-read
+    /// has nothing inside the segment. Only the words timed INSIDE the
+    /// segment go in — the span the removal clears. The re-read's 0.2 s pads
+    /// are there to give the decoder a run-up, not words: a neighbour's edge
+    /// word read from them was spliced in beside the neighbour's own copy.
+    /// This also keeps out what a short re-read writes over its zero padding
+    /// ("Thank you." past the end of the audio), which Whisper's phantom
+    /// guards only weigh on reads of 8 s or more.
+    static func splice(_ reread: [TimedWord], offset: Double, into seg: WhisperBackend.SegmentSpan,
+                       of words: [TimedWord]) -> [TimedWord]? {
+        let inSeg = { (w: TimedWord) in (w.start + w.end) / 2 >= seg.start && (w.start + w.end) / 2 < seg.end }
+        let spliced = reread
+            .map { TimedWord(word: $0.word, start: $0.start + offset, end: $0.end + offset) }
+            .filter(inSeg)
+        guard !spliced.isEmpty else { return nil }
+        return (words.filter { !inSeg($0) } + spliced).sorted { $0.start < $1.start }
     }
 
     /// Mic words that are the far side's words heard again. The tracks share
@@ -520,7 +547,7 @@ actor EnsembleBackend: ASRBackend {
             return RichChunk(text: "", agreement: 1, textA: "", textB: "")
         }
         if gemmaBenched {
-            return try await transcribeChunkSolo(samples: samples, languages: languages)
+            return try await transcribeChunkSolo(samples: samples, languages: languages, window: window)
         }
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
             async let taskA = detailed(pa, kind: kindA, samples: samples, languages: languages, window: window)
@@ -597,16 +624,21 @@ actor EnsembleBackend: ASRBackend {
 
     /// Single-engine escape hatch: a chunk whose audio wedges LiteRT twice
     /// still gets transcribed by the healthy engine instead of being lost.
+    /// `window` as in the pair path: without it a mic chunk of a split-track
+    /// meeting was read per chunk with the far side's echo left in, and
+    /// Whisper's timeline words for the chunk went unused.
     func transcribeChunkSolo(
         samples: [Float],
-        languages: Set<String>
+        languages: Set<String>,
+        window: ChunkWindow? = nil
     ) async throws -> RichChunk {
         guard isReady, let solo = soloEngine else {
             throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
         }
         let text: String
         if let d = solo as? DetailedTranscribing {
-            text = try await d.transcribeDetailed(samples: samples, languages: languages).text
+            let kind = kindA == .gemmaLiteRT ? kindB : kindA
+            text = try await detailed(d, kind: kind, samples: samples, languages: languages, window: window).text
         } else {
             text = try await solo.transcribeChunk(
                 samples: samples, languages: languages, translateTo: nil,

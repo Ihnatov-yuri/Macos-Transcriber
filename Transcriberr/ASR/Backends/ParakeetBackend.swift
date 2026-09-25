@@ -35,6 +35,24 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
 
     func load(modelPath: URL?) async throws {
         if isReady, manager != nil { return }
+        try await rebuild()
+    }
+
+    /// The build in progress, shared by concurrent loads and recoveries
+    /// (actor reentrancy let each start its own).
+    private var building: Task<Void, Error>?
+
+    private func rebuild() async throws {
+        if let building { return try await building.value }
+        let task = Task { try await self.buildManager() }
+        building = task
+        defer { building = nil }
+        try await task.value
+    }
+
+    /// Builds a fresh AsrManager and swaps it in, with no gap where
+    /// `manager` is nil.
+    private func buildManager() async throws {
         AppLog.info("parakeet", "loading Parakeet \(version == .v2 ? "v2" : "v3") models (downloads ~1 GB on first run)…")
         do {
             var lastLoggedPct = -1
@@ -55,6 +73,39 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             throw ASRError.modelLoadFailed(reason: String(describing: error))
         }
     }
+
+    /// Wedge recovery: build a fresh manager first, then swap it in. The
+    /// default release-then-load called `cleanup()` on the manager the other
+    /// in-flight chunks (and dictation, which shares this instance) were
+    /// still using, and left it nil for the reload. The old one is dropped,
+    /// not cleaned up; the hung call keeps it until it returns.
+    ///
+    /// Only when one of this engine's own calls is stuck: in Super the
+    /// runner cannot tell which engine hung, so it asks every engine, and
+    /// the healthy ones stay as they are.
+    func recoverWedge(modelPath: URL?) async throws {
+        let stuck = inFlight.filter { Date().timeIntervalSince($0.value) >= InferenceGate.stuckCallAge }
+        guard !stuck.isEmpty else {
+            try await load(modelPath: modelPath)
+            return
+        }
+        AppLog.warn("parakeet", "wedge recovery: \(stuck.count) call(s) stuck — rebuilding the manager")
+        try await rebuild()
+        for key in stuck.keys { inFlight[key] = nil }
+        await InferenceGate.shared.evictShared(owner: id)
+    }
+
+    /// Native calls running now, by call id, with their start time.
+    private var inFlight: [Int: Date] = [:]
+    private var nextCallId = 0
+
+    private func beginCall() -> Int {
+        nextCallId += 1
+        inFlight[nextCallId] = Date()
+        return nextCallId
+    }
+
+    private func endCall(_ call: Int) { inFlight[call] = nil }
 
     func release() async {
         if let manager { await manager.cleanup() }
@@ -85,8 +136,10 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         var state = try TdtDecoderState()
         // Shared hold: never overlaps LiteRT inference (see InferenceGate);
         // pass-through when no LiteRT engine is live.
-        let gateStamp = try await InferenceGate.shared.acquire()
+        let gateStamp = try await InferenceGate.shared.acquire(owner: id)
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
+        let call = beginCall()
+        defer { endCall(call) }
         let result = try await manager.transcribe(
             samples,
             decoderState: &state,
@@ -190,8 +243,10 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         var state = try TdtDecoderState()
         // Shared hold: never overlaps LiteRT inference (see InferenceGate);
         // pass-through when no LiteRT engine is live.
-        let gateStamp = try await InferenceGate.shared.acquire()
+        let gateStamp = try await InferenceGate.shared.acquire(owner: id)
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
+        let call = beginCall()
+        defer { endCall(call) }
         let result = try await manager.transcribe(
             samples,
             decoderState: &state,
@@ -214,7 +269,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             let fallback = pieces.enumerated().map { k, w in TimedWord(word:
                 ScoredWord(
                     surface: String(w),
-                    norm: w.lowercased().filter { $0.isLetter || $0.isNumber },
+                    norm: TranscriptHygiene.wordKey(w),
                     // Capped below typical per-word confidences so an engine
                     // with REAL word-level scores (Whisper) can win specific
                     // rare terms without steamrolling the whole chunk.
@@ -262,7 +317,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             }
         }
         for i in out.indices {
-            out[i].word.norm = out[i].word.surface.lowercased().filter { $0.isLetter || $0.isNumber }
+            out[i].word.norm = TranscriptHygiene.wordKey(out[i].word.surface)
         }
         return out
     }

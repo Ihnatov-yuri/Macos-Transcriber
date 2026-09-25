@@ -8,7 +8,8 @@ import Foundation
 /// the model. Rules are conservative on purpose:
 ///  - immediate word runs of 3+ always collapse to one
 ///  - word doubles collapse unless the word is a legitimate English double
-///    ("that that's", "had had", emphasis words)
+///    ("that that's", "had had", emphasis words) or a yes/no answered twice
+///    with a comma ("Так, так", "nee, nee")
 ///  - immediate phrase repeats of 2–4 words always collapse ("bring in bring
 ///    in", "present that present that")
 ///  - nothing collapses across a sentence boundary, so intentional repeats
@@ -24,6 +25,15 @@ enum TextDestutter {
     /// Words that repeat legitimately in fluent English at run length 2.
     private static let legitDoubles: Set<String> = [
         "that", "had", "very", "really", "no", "yes", "yeah", "bye", "ha", "so",
+    ]
+
+    /// Yes/no words doubled with a comma between them ("Так, так", "ні, ні",
+    /// "ja, ja", "nee, nee"): a deliberate answer, written that way by the
+    /// engines — the seam trim (`TranscriptHygiene.trimSeamRepeat`) keeps
+    /// the same pair for the same reason. Only with the comma: a bare
+    /// "так так" mid-sentence is as likely a stutter of "so".
+    private static let commaDoubles: Set<String> = [
+        "так", "ні", "да", "нет", "ja", "nee", "nein",
     ]
 
     /// Pure hesitation sounds — dropped outright before stutter collapse
@@ -99,7 +109,8 @@ enum TextDestutter {
             {
                 run += 1
             }
-            if run >= 2 || (run == 1 && !legitDoubles.contains(norm(last))) {
+            let answer = last.hasSuffix(",") && commaDoubles.contains(norm(last))
+            if run >= 2 || (run == 1 && !legitDoubles.contains(norm(last)) && !answer) {
                 // Keep the FIRST occurrence — it carries sentence-initial
                 // capitalization ("For for for" → "For"). A repeat carrying
                 // .!? can never match norm equality, so no punctuation is

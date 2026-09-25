@@ -237,7 +237,12 @@ final class TranscriptionRunner: @unchecked Sendable {
         // Whole-track readings before pass 1 (see EnsembleBackend.prepareTimeline):
         // long-form Whisper for non-English, the far side's timeline for
         // echo-by-timing in split-track meetings. Max quality path only.
-        let prepareTimeline = params.backend == .ensemble && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+        // Read ONCE per run: the whole-track reading below and the two-pass
+        // arbitration (`ensembleTwoPass`) are one mode. Read again minutes
+        // later, a toggle mid-run split it: the reading paid for and then no
+        // arbitration, or arbitration without the reading.
+        let superMaxQuality = params.backend == .ensemble && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+        let prepareTimeline = superMaxQuality
             && (EnsembleBackend.longFormEnabled(languages: params.languages)
                 || (AudioCompressor.sidecarURL(for: params.file, kind: "mic") != nil
                     && AudioCompressor.sidecarURL(for: params.file, kind: "sys") != nil))
@@ -380,8 +385,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             func set(_ idx: Int, _ v: EnsembleBackend.RichChunk) { lock.lock(); map[idx] = v; lock.unlock() }
             func all() -> [Int: EnsembleBackend.RichChunk] { lock.lock(); defer { lock.unlock() }; return map }
         }
-        let ensembleTwoPass = params.backend == .ensemble
-            && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
+        let ensembleTwoPass = superMaxQuality
         let richBox = RichBox()
         runWedgeCount = 0
         var perChunkParsed: [Int: [RawSegment]] = [:]
@@ -1245,7 +1249,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 try? await ens.recoverWedge(modelPath: nil)
                 return (try? await withChunkTimeout(seconds: timeout) {
                     try await ens.transcribeChunkSolo(
-                        samples: samples, languages: params.languages)
+                        samples: samples, languages: params.languages, window: window)
                 }) ?? EnsembleBackend.RichChunk(text: "", agreement: 1, textA: "", textB: "")
             }
         }

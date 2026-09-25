@@ -658,7 +658,16 @@ final class RecordingRepository: @unchecked Sendable {
     /// widen the crash window between "audio written to disk" and "the DB
     /// knows about it" from a few synchronous statements to a real,
     /// multi-second async transcode.
+    ///
+    /// Callers reach this after a multi-second rebuild/transcode, and nothing
+    /// stops the user deleting the recording meanwhile (Library, Detail) —
+    /// writing into a deleted model is a SwiftData crash, and the backup
+    /// rewrite would read one. Same guard as JobManager's.
     func updateAudioPath(_ url: URL, for recording: Recording) throws {
+        guard !recording.isDeleted, recording.modelContext != nil else {
+            AppLog.warn("repo", "recording deleted before its audio was repointed → \(url.lastPathComponent) left on disk")
+            return
+        }
         recording.audioPath = url.path
         try context.save()
         BackupService.backupRecording(recording)
@@ -686,7 +695,9 @@ final class RecordingRepository: @unchecked Sendable {
             translateTo: params.translateTo,
             diarize: params.diarize,
             expectedSpeakers: params.expectedSpeakers,
-            hybridDiarize: params.hybridDiarize
+            hybridDiarize: params.hybridDiarize,
+            // nil, not false, for an ordinary run: same as a pre-column row.
+            keepVisibleUntilDone: params.keepVisibleUntilDone ? true : nil
         ))
         try? context.save()
     }
@@ -746,22 +757,43 @@ final class RecordingRepository: @unchecked Sendable {
         try context.save()
     }
 
-    /// Replace any segments fully contained in [start, end] with the new ones.
-    /// Used by the second-pass refinement loop.
+    /// Which existing rows a second-pass refinement of [start, end] replaces:
+    /// those fully inside the window AND on the refined chunk's own track.
+    /// In a split-track meeting, mic and sys chunks share one timeline, so a
+    /// splice by time alone deleted the OTHER track's rows in that window —
+    /// the runner's own in-memory splice has been same-track only all along.
+    /// The event carries no track, but a mic chunk's rows are all "ME" by
+    /// construction and nothing else is before finalize, so the replacement
+    /// tells us. An EMPTY replacement can't, so it replaces nothing: the
+    /// run's `.done` payload is authoritative and reconciles it anyway.
+    static func refinementReplaces(
+        _ start: Double, _ end: Double, replacementSpeakers: [String?]
+    ) -> (_ segStart: Double, _ segEnd: Double, _ speaker: String?) -> Bool {
+        guard !replacementSpeakers.isEmpty else { return { _, _, _ in false } }
+        let micTrack = replacementSpeakers.contains("ME")
+        return { segStart, segEnd, speaker in
+            segStart >= start && segEnd <= end && (speaker == "ME") == micTrack
+        }
+    }
+
+    /// Replace the segments a refinement of [start, end] supersedes (see
+    /// `refinementReplaces`) with the new ones. Used by the second-pass
+    /// refinement loop.
     func replaceSegmentsInRange(
         _ start: Double,
         _ end: Double,
         with newSegments: [Segment],
         for recording: Recording
     ) throws {
+        let replaces = Self.refinementReplaces(start, end, replacementSpeakers: newSegments.map(\.speaker))
         let toDelete = recording.segments.filter {
-            $0.startSeconds >= start && $0.endSeconds <= end
+            replaces($0.startSeconds, $0.endSeconds, $0.speaker)
         }
         for old in toDelete {
             context.delete(old)
         }
         recording.segments.removeAll {
-            $0.startSeconds >= start && $0.endSeconds <= end
+            replaces($0.startSeconds, $0.endSeconds, $0.speaker)
         }
 
         // Re-apply speaker-name mappings (same as appendSegments).
@@ -960,6 +992,43 @@ final class RecordingRepository: @unchecked Sendable {
             }
         }
         return healed
+    }
+
+    /// Self-heal a crash between "compressor deleted <base>.wav" and "row
+    /// repointed at <base>.m4a" (post-record compression, merge, split): the
+    /// row points at a file that is gone while its compressed twin sits right
+    /// next to it — the Library can't play it and a resumed run drops it as
+    /// "audio missing". Also the reverse, for the mix rebuilder's backfill
+    /// (stale .m4a removed, rebuilt .wav in place, row not yet repointed).
+    /// Launch-time only, before pending runs resume. Returns how many were healed.
+    @discardableResult
+    func healMissingAudioPaths() -> Int {
+        guard let all = try? self.all() else { return 0 }
+        var healed = 0
+        for rec in all {
+            guard let url = Self.healedAudioURL(for: rec.audioPath,
+                                                fileExists: FileManager.default.fileExists(atPath:))
+            else { continue }
+            AppLog.info("repo", "repointed '\(rec.title)' at \(url.lastPathComponent) — \(URL(fileURLWithPath: rec.audioPath).lastPathComponent) is gone")
+            try? updateAudioPath(url, for: rec)
+            healed += 1
+        }
+        return healed
+    }
+
+    /// The sibling a missing main audio file was compressed to (or rebuilt
+    /// as), if any. nil while the file the row names still exists.
+    static func healedAudioURL(for path: String, fileExists: (String) -> Bool) -> URL? {
+        guard !fileExists(path) else { return nil }
+        let url = URL(fileURLWithPath: path)
+        let twin: String
+        switch url.pathExtension.lowercased() {
+        case "wav": twin = "m4a"
+        case "m4a": twin = "wav"
+        default: return nil
+        }
+        let candidate = url.deletingPathExtension().appendingPathExtension(twin)
+        return fileExists(candidate.path) ? candidate : nil
     }
 
     func deleteVersion(_ version: TranscriptVersion, from recording: Recording) throws {

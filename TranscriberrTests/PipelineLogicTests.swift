@@ -85,7 +85,10 @@ final class PipelineLogicTests: XCTestCase {
         var rng: UInt64 = 7
         func rand() -> Float {
             rng = rng &* 6364136223846793005 &+ 1442695040888963407
-            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3
+            // Zero-mean: a 0.15 DC offset outweighed the noise ~17:1 in
+            // power, and the filter cancelled a constant at ANY lag — the
+            // test passed with the delay estimate forced wrong.
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
         }
         let n = sr * 10
         var sys = [Float](repeating: 0, count: n)

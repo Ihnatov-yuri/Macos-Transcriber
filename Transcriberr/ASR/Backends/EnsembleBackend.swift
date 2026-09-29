@@ -961,12 +961,6 @@ actor EnsembleBackend: ASRBackend {
         return ruled
     }
 
-    /// Per-language trust multiplier for the ROVER vote. Parakeet reports
-    /// calibrated-high confidence even in languages it reads poorly, letting
-    /// it outvote Whisper's correct per-word readings (Ukrainian sweep:
-    /// Latin entity "NBE" lost to Cyrillic misreading "ДНБІ"). A 0.5 prior
-    /// means the weak-language engine only wins a divergent word when the
-    /// strong engine's own confidence is genuinely low.
     /// Share of the letters in `text` that are Arabic script.
     static func arabicShare(_ text: String) -> Double {
         var letters = 0, arabic = 0
@@ -977,6 +971,12 @@ actor EnsembleBackend: ASRBackend {
         return letters == 0 ? 0 : Double(arabic) / Double(letters)
     }
 
+    /// Per-language trust multiplier for the ROVER vote. Parakeet reports
+    /// calibrated-high confidence even in languages it reads poorly, letting
+    /// it outvote Whisper's correct per-word readings (Ukrainian sweep:
+    /// Latin entity "NBE" lost to Cyrillic misreading "ДНБІ"). A 0.5 prior
+    /// means the weak-language engine only wins a divergent word when the
+    /// strong engine's own confidence is genuinely low.
     static func votePrior(for kind: BackendFactory.Kind, languages: Set<String>) -> Float {
         guard languages.count == 1, let lang = languages.first?.lowercased() else { return 1 }
         switch kind {

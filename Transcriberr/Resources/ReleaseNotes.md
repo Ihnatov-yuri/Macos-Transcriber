@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.2
+- Long recordings in a chosen pair of languages are again read window by window, so a recording that switches language keeps both.
+
 ## 3.15.1
 - Arabic is no longer lost when the language is on Auto: Whisper's habit of calling it Maltese and spelling it in Latin letters is corrected, and Parakeet's Latin guesses no longer outvote a real Arabic reading. With two or more languages selected, Whisper now chooses only among those, never another language.
 

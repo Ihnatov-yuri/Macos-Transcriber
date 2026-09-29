@@ -581,6 +581,15 @@ actor EnsembleBackend: ASRBackend {
                 }
                 if a.text.isEmpty { return RichChunk(text: b.text, agreement: 1, textA: a.text, textB: b.text) }
                 if b.text.isEmpty { return RichChunk(text: a.text, agreement: 1, textA: a.text, textB: b.text) }
+                // Parakeet v3 has no Arabic: it spells Arabic speech in Latin
+                // letters. When the other engine wrote Arabic, that reading
+                // stands alone rather than being voted against the guess.
+                if Self.arabicShare(a.text) >= 0.5, Self.arabicShare(b.text) < 0.2, kindB == .parakeet {
+                    return RichChunk(text: a.text, agreement: 1, textA: a.text, textB: b.text)
+                }
+                if Self.arabicShare(b.text) >= 0.5, Self.arabicShare(a.text) < 0.2, kindA == .parakeet {
+                    return RichChunk(text: b.text, agreement: 1, textA: a.text, textB: b.text)
+                }
                 let priorA = Self.votePrior(for: kindA, languages: languages)
                 let priorB = Self.votePrior(for: kindB, languages: languages)
                 let preferredText = priorA >= priorB ? a.text : b.text
@@ -958,6 +967,16 @@ actor EnsembleBackend: ASRBackend {
     /// Latin entity "NBE" lost to Cyrillic misreading "ДНБІ"). A 0.5 prior
     /// means the weak-language engine only wins a divergent word when the
     /// strong engine's own confidence is genuinely low.
+    /// Share of the letters in `text` that are Arabic script.
+    static func arabicShare(_ text: String) -> Double {
+        var letters = 0, arabic = 0
+        for u in text.unicodeScalars where u.properties.isAlphabetic {
+            letters += 1
+            if (0x0600...0x06FF).contains(u.value) || (0x0750...0x077F).contains(u.value) { arabic += 1 }
+        }
+        return letters == 0 ? 0 : Double(arabic) / Double(letters)
+    }
+
     static func votePrior(for kind: BackendFactory.Kind, languages: Set<String>) -> Float {
         guard languages.count == 1, let lang = languages.first?.lowercased() else { return 1 }
         switch kind {

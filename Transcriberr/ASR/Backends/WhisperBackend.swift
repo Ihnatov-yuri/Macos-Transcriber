@@ -246,6 +246,24 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             audioProcessor: pipe.audioProcessor, audioEncoder: pipe.audioEncoder,
             featureExtractor: pipe.featureExtractor, segmentSeeker: pipe.segmentSeeker,
             textDecoder: pipe.textDecoder, tokenizer: tokenizer)
+        if options.language == nil {
+            // Several languages selected: Whisper chooses among THOSE only.
+            // Auto (none selected): its full guess, with Arabic rescued from
+            // the Maltese mislabel (see `resolveAutoLanguage`).
+            let allowed = Self.candidateCodes(from: languages)
+            if let d = try? await pipe.detectLangauge(audioArray: samples) {
+                let probs = d.langProbs.mapValues { exp(Double($0)) }
+                let code = allowed.isEmpty
+                    ? Self.resolveAutoLanguage(top: d.language, probs: probs)
+                    : Self.pickAllowed(allowed, probs: probs)
+                if code != d.language {
+                    AppLog.info("whisper", String(
+                        format: "language %@ (%.2f) → %@ (%.2f)",
+                        d.language, probs[d.language] ?? 0, code, probs[code] ?? 0))
+                }
+                options.language = code
+            }
+        }
         let results = [try await task.run(audioArray: samples, decodeOptions: options, callback: nil)]
 
         let isUkrainian = languages.count == 1 && languages.first?.lowercased() == "ukrainian"
@@ -431,6 +449,28 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             return "phantom line"
         }
         return nil
+    }
+
+    /// Whisper's auto-detect on Arabic speech often lands on Maltese (a
+    /// Latin-script cousin) or an Arabic-script neighbour, and then writes
+    /// Arabic in Latin letters or the wrong script. Seen on a Gulf Arabic
+    /// customer-service demo (2026-09-29): "u l-labtubat, u also minn STC".
+    /// None of these is a language this app's users record, so when one wins
+    /// and Arabic has a real share, Arabic it is.
+    static func resolveAutoLanguage(top: String, probs: [String: Double]) -> String {
+        let lookalikes: Set<String> = ["mt", "ur", "fa", "ps", "sd", "ug", "ku"]
+        guard lookalikes.contains(top), let ar = probs["ar"], ar >= 0.05 else { return top }
+        return "ar"
+    }
+
+    /// ISO codes of every selected language Whisper knows; empty = Auto.
+    static func candidateCodes(from languages: Set<String>) -> [String] {
+        languages.compactMap { languageCode(from: [$0]) }.sorted()
+    }
+
+    /// The most probable of the allowed languages.
+    static func pickAllowed(_ allowed: [String], probs: [String: Double]) -> String {
+        allowed.max { (probs[$0] ?? 0) < (probs[$1] ?? 0) } ?? allowed[0]
     }
 
     /// Whisper wants ISO-639-1 codes; nil = autodetect.

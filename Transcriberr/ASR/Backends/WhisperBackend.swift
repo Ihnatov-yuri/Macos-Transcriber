@@ -246,7 +246,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             audioProcessor: pipe.audioProcessor, audioEncoder: pipe.audioEncoder,
             featureExtractor: pipe.featureExtractor, segmentSeeker: pipe.segmentSeeker,
             textDecoder: pipe.textDecoder, tokenizer: tokenizer)
-        if options.language == nil {
+        if options.language == nil, Self.canPreDetect(sampleCount: samples.count) {
             // Several languages selected: Whisper chooses among THOSE only.
             // Auto (none selected): its full guess, with Arabic rescued from
             // the Maltese mislabel (see `resolveAutoLanguage`).
@@ -262,6 +262,8 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                         d.language, probs[d.language] ?? 0, code, probs[code] ?? 0))
                 }
                 options.language = code
+            } else if !allowed.isEmpty {
+                AppLog.warn("whisper", "language detection failed — selected languages not enforced on this chunk")
             }
         }
         let results = [try await task.run(audioArray: samples, decodeOptions: options, callback: nil)]
@@ -462,6 +464,11 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         guard lookalikes.contains(top), let ar = probs["ar"], ar >= 0.05 else { return top }
         return "ar"
     }
+
+    /// Detection reads one 30 s window. Longer audio (a whole-track reading)
+    /// is left to WhisperKit, which detects per window; forcing the first
+    /// window's language on it would flatten a recording that switches.
+    static func canPreDetect(sampleCount: Int) -> Bool { sampleCount <= 32 * 16_000 }
 
     /// ISO codes of every selected language Whisper knows; empty = Auto.
     static func candidateCodes(from languages: Set<String>) -> [String] {

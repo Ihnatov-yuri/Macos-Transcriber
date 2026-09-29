@@ -30,4 +30,9 @@ final class ArabicLanguageTests: XCTestCase {
         XCTAssertEqual(WhisperBackend.pickAllowed(allowed, probs: ["en": 0.8, "ar": 0.1]), "en")
         XCTAssertTrue(WhisperBackend.candidateCodes(from: []).isEmpty)
     }
+
+    func testOnlyOneWindowOfAudioIsPreDetected() {
+        XCTAssertTrue(WhisperBackend.canPreDetect(sampleCount: 26 * 16_000))
+        XCTAssertFalse(WhisperBackend.canPreDetect(sampleCount: 30 * 60 * 16_000))
+    }
 }

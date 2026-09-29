@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.1
+- Arabic is no longer lost when the language is on Auto: Whisper's habit of calling it Maltese and spelling it in Latin letters is corrected, and Parakeet's Latin guesses no longer outvote a real Arabic reading. With two or more languages selected, Whisper now chooses only among those, never another language.
+
 ## 3.15.0
 - A recording cut short by a crash is repaired on the next launch and comes back in the library as "Recovered recording" or "Recovered meeting".
 - Unplugging the mic during a meeting now stops the meeting and saves everything recorded so far, instead of showing RECORDING over a dead device.

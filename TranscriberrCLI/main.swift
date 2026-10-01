@@ -559,16 +559,19 @@ func cmdLangID(path: String, window: Double) async -> Int32 {
     guard let samples = try? await AudioDecoder().decodeAll(file: url) else { print("decode failed"); return 1 }
     do {
         let pipe = try await WhisperKit(WhisperKitConfig(model: "large-v3", verbose: false, prewarm: true))
+        if pipe.modelState != .loaded { try await pipe.loadModels() }
         let hop = window / 2
         var t = 0.0
         while t + window <= Double(samples.count) / 16_000 {
             let a = Int(t * 16_000), b = Int((t + window) * 16_000)
             let slice = Array(samples[a..<b])
             if (WhisperBackend.peakWindowRMS(slice) ?? 0) >= 0.01 {
-                let r = try await pipe.detectLangauge(audioArray: slice)
-                let top = r.langProbs.sorted { $0.value > $1.value }.prefix(3)
+                guard let tokenizer = pipe.tokenizer else { print("no tokenizer"); return 1 }
+                let r = try await WhisperLanguageProbe.detect(pipe: pipe, tokenizer: tokenizer, samples: slice)
+                let top = r.probs.sorted { $0.value > $1.value }.prefix(3)
                     .map { "\($0.key) \(String(format: "%.2f", $0.value))" }.joined(separator: ", ")
-                print(String(format: "%6.1f  %@  [%@]", t, r.language, top))
+                let pair = WhisperBackend.pickAllowed(["ar", "en"], probs: r.probs)
+                print(String(format: "%6.1f  %@  [%@]  en+ar → %@", t, r.top, top, pair))
             }
             t += hop
         }

@@ -163,8 +163,22 @@ final class DictationController: @unchecked Sendable {
 
     /// Passages recognized while another app was in front. They wait for
     /// their target app and paste when the user returns to it.
-    private struct HeldPassage { let bundleId: String; let text: String }
+    /// Held text goes stale: after `heldPassageLifetime` the user has moved
+    /// on (another chat, another document) and it stays in the pad only.
+    private struct HeldPassage { let bundleId: String; let text: String; let at: Date }
     private var heldPassages: [HeldPassage] = []
+    private static let heldPassageLifetime: TimeInterval = 10 * 60
+
+    /// Held passages for `bundleId` that are still fresh, removed from the
+    /// queue. Stale ones for any app are dropped on the way.
+    @MainActor
+    private func takeHeld(for bundleId: String) -> [HeldPassage] {
+        let now = Date()
+        heldPassages.removeAll { now.timeIntervalSince($0.at) > Self.heldPassageLifetime }
+        let held = heldPassages.filter { $0.bundleId == bundleId }
+        heldPassages.removeAll { $0.bundleId == bundleId }
+        return held
+    }
 
     init(
         settings: DictationSettings,
@@ -212,8 +226,8 @@ final class DictationController: @unchecked Sendable {
 
     /// The user is back in an app that has dictation waiting: paste it.
     /// Settles briefly first so the focus lands in the field, and does
-    /// nothing while recognition is still running (the next delivery
-    /// carries the held text in front of its own).
+    /// nothing while a session is running (its delivery carries the held
+    /// text in front of its own) or when the focus is a password field.
     @MainActor
     private func pasteHeld(for bundleId: String) {
         guard heldPassages.contains(where: { $0.bundleId == bundleId }) else { return }
@@ -222,14 +236,25 @@ final class DictationController: @unchecked Sendable {
             guard let self,
                   NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleId,
                   !(NSApp.isActive && self.paneVisible) else { return }
-            let held = self.heldPassages.filter { $0.bundleId == bundleId }
+            switch self.phase {
+            case .listening, .transcribing, .inserting: return
+            case .idle, .message: break
+            }
+            if DictationContext.capture(readText: false).isSecure {
+                AppLog.info("dictation", "held passage not pasted — focus is a password field")
+                return
+            }
+            let held = self.takeHeld(for: bundleId)
             guard !held.isEmpty else { return }
-            self.heldPassages.removeAll { $0.bundleId == bundleId }
             let joined = held.map(\.text).reduce("") { DictationText.join(existing: $0, new: $1) }
             let preceding = self.settings.spacing == .auto ? FocusedTextContext.textBeforeCaret() : nil
             let payload = DictationText.forInsertion(joined, spacing: self.settings.spacing, preceding: preceding)
             AppLog.info("dictation", "pasting \(held.count) held passage(s) into \(bundleId)")
-            _ = TextInserter.insert(payload, restoreClipboard: self.settings.restoreClipboard)
+            if TextInserter.insert(payload, restoreClipboard: self.settings.restoreClipboard) == .pasted {
+                // "Scratch that" can take it back like any other passage.
+                self.lastInsertion = LastInsertion(target: .frontmostApp, inserted: payload, paneLength: 0,
+                                                   app: bundleId, at: Date())
+            }
         }
     }
 
@@ -986,15 +1011,14 @@ final class DictationController: @unchecked Sendable {
                 AppLog.warn("dictation", "target app changed (\(expected) → \(current)) — holding passage for the target")
                 if !secret {
                     paneText = DictationText.join(existing: paneText, new: text)
-                    heldPassages.append(HeldPassage(bundleId: expected, text: text))
+                    heldPassages.append(HeldPassage(bundleId: expected, text: text, at: Date()))
                 }
                 lastInsertion = nil
                 return .appChanged
             }
             // Back in the target app: earlier held passages go first.
-            let held = heldPassages.filter { $0.bundleId == expected }
+            let held = takeHeld(for: expected)
             if !held.isEmpty {
-                heldPassages.removeAll { $0.bundleId == expected }
                 text = (held.map(\.text) + [text]).reduce("") { DictationText.join(existing: $0, new: $1) }
             }
         }

@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.5
+- Dictation held for another app expires after ten minutes, so old text no longer appears in a chat or document you have since moved on to. It is never pasted into a password field, and "scratch that" can take it back.
+- Running the test suite next to the app no longer starts a second dictation hotkey, touches your library or writes into your log.
+
 ## 3.15.4
 - Dictation you speak while you are in another app is no longer lost. Passages recognized while another app is in front wait for the app you started in and paste, in order, when you switch back to it.
 

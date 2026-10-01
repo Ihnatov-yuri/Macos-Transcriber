@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import SwiftUI
@@ -38,6 +39,12 @@ final class RecordModel {
     var meetingActive: Bool { activeMeeting }
     private var isStopping = false
     var lastError: String?
+    /// A plain message for the record screen (not an error).
+    var notice: String?
+    /// When the Mac went to sleep mid-recording; nil otherwise. Only a pause
+    /// the app made for sleep is resumed on wake — never the user's own.
+    private var sleptAt: Date?
+    private var powerObservers: [NSObjectProtocol] = []
 
     init(container: AppContainer) {
         self.container = container
@@ -50,6 +57,59 @@ final class RecordModel {
         self.liveEngine = container.uiPrefs.liveEngine
         self.liveLanguages = container.uiPrefs.lastLanguages
         self.meetingMode = UserDefaults.standard.bool(forKey: "ui.meetingMode")
+        watchSleep()
+    }
+
+    /// Closing the lid sleeps the Mac and the audio stops arriving, but the
+    /// session used to stay on RECORDING with nothing said about it
+    /// (2026-10-01: a meeting ran 50 min on the clock, 30 min on disk).
+    /// Now the recording pauses for the sleep and carries on after wake.
+    private func watchSleep() {
+        let center = NSWorkspace.shared.notificationCenter
+        powerObservers.append(center.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleWillSleep() }
+        })
+        powerObservers.append(center.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleDidWake() }
+        })
+    }
+
+    private func handleWillSleep() {
+        guard uiState == .recording else { return }
+        AppLog.info("recorder", "Mac going to sleep — pausing the \(activeMeeting ? "meeting" : "recording")")
+        pause()
+        sleptAt = Date()
+    }
+
+    private func handleDidWake() {
+        guard let since = sleptAt else { return }
+        sleptAt = nil
+        guard uiState == .paused else { return }
+        let slept = Self.sleepNotice(from: since, to: Date())
+        Task { @MainActor [weak self] in
+            // Audio devices come back a moment after the wake notification.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, self.uiState == .paused else { return }
+            self.resume()
+            if !self.activeMeeting, case .failed(let reason) = self.container.recorder.state {
+                AppLog.warn("recorder", "resume after sleep failed: \(reason)")
+                self.lastError = reason
+                return
+            }
+            AppLog.info("recorder", "Mac woke — recording resumed (\(slept))")
+            self.notice = slept
+        }
+    }
+
+    /// "Paused while your Mac slept · 13:59–14:18".
+    static func sleepNotice(from: Date, to: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return "Paused while your Mac slept · \(f.string(from: from))–\(f.string(from: to))"
     }
 
     var elapsedMs: Int64 { activeMeeting ? container.meetingRecorder.elapsedMs : container.recorder.elapsedMs }
@@ -93,6 +153,7 @@ final class RecordModel {
         isStarting = true
         defer { isStarting = false }
         lastError = nil
+        notice = nil
         // Dictation already refuses to start while a recording is running;
         // without the mirror image, ⌘N (or the Record button) during a
         // dictation session opened a second engine — and a second

@@ -1,4 +1,5 @@
 import CoreML
+import os
 import Foundation
 import WhisperKit
 
@@ -94,6 +95,58 @@ enum WhisperLanguageProbe {
             let total = exps.reduce(0) { $0 + $1.1 }
             guard total > 0 else { return [:] }
             return Dictionary(exps.map { ($0.0, $0.1 / total) }, uniquingKeysWith: +)
+        }
+    }
+}
+
+/// Chunks where the language Whisper decoded in differs from its own first
+/// guess, counted per run so the finished run can say so in one line.
+/// Super runs are serial (JobManager), so one shared tally is enough.
+enum LanguageOverrideLog {
+    struct Entry: Equatable { let from: String; let to: String; let count: Int }
+
+    private static let tally = OSAllocatedUnfairLock(initialState: [String: Int]())
+
+    static func record(from: String, to: String) {
+        tally.withLock { $0["\(from)>\(to)", default: 0] += 1 }
+    }
+
+    static func reset() { tally.withLock { $0.removeAll() } }
+
+    static func take() -> [Entry] {
+        let all = tally.withLock { t -> [String: Int] in defer { t.removeAll() }; return t }
+        return all.compactMap { key, count in
+            let p = key.split(separator: ">").map(String.init)
+            return p.count == 2 ? Entry(from: p[0], to: p[1], count: count) : nil
+        }
+        .sorted { ($0.count, $1.from) > ($1.count, $0.from) }
+    }
+
+    /// "Whisper first heard Norwegian Nynorsk in 4 parts and Turkish in
+    /// 1 part, and transcribed them as English."
+    static func message(_ entries: [Entry]) -> String? {
+        guard !entries.isEmpty else { return nil }
+        var heard: [(String, Int)] = []
+        for e in entries {
+            if let i = heard.firstIndex(where: { $0.0 == e.from }) { heard[i].1 += e.count }
+            else { heard.append((e.from, e.count)) }
+        }
+        heard.sort { $0.1 > $1.1 }
+        var targets: [String] = []
+        for e in entries where !targets.contains(e.to) { targets.append(e.to) }
+        let heardText = list(heard.map { "\(name($0.0)) in \($0.1) \($0.1 == 1 ? "part" : "parts")" })
+        return "Whisper first heard \(heardText), and transcribed them as \(list(targets.map(name)))."
+    }
+
+    private static func name(_ code: String) -> String {
+        Locale(identifier: "en").localizedString(forLanguageCode: code) ?? code
+    }
+
+    private static func list(_ items: [String]) -> String {
+        switch items.count {
+        case 0: return ""
+        case 1: return items[0]
+        default: return items.dropLast().joined(separator: ", ") + " and " + items.last!
         }
     }
 }

@@ -57,6 +57,26 @@ final class ArabicLanguageTests: XCTestCase {
         XCTAssertEqual(probs["en"] ?? 0, exp(2) / (exp(2) + 1), accuracy: 1e-6)
     }
 
+    func testRunNoteNamesWhatWhisperHeardAndWhatWasUsed() {
+        LanguageOverrideLog.reset()
+        for _ in 0..<4 { LanguageOverrideLog.record(from: "nn", to: "en") }
+        LanguageOverrideLog.record(from: "tr", to: "en")
+        XCTAssertEqual(LanguageOverrideLog.message(LanguageOverrideLog.take()),
+                       "Whisper first heard Norwegian Nynorsk in 4 parts and Turkish in 1 part, and transcribed them as English.")
+        XCTAssertTrue(LanguageOverrideLog.take().isEmpty, "take() empties the tally")
+        XCTAssertNil(LanguageOverrideLog.message([]))
+    }
+
+    @MainActor
+    func testSleepNoticeShowsTheGap() {
+        var c = DateComponents()
+        c.year = 2026; c.month = 10; c.day = 1; c.hour = 13; c.minute = 59
+        let cal = Calendar.current
+        let from = cal.date(from: c)!
+        let to = from.addingTimeInterval(19 * 60 + 31)
+        XCTAssertEqual(RecordModel.sleepNotice(from: from, to: to), "Paused while your Mac slept · 13:59–14:18")
+    }
+
     func testOnlyOneWindowOfAudioIsPreDetected() {
         XCTAssertTrue(WhisperBackend.canPreDetect(sampleCount: 26 * 16_000))
         XCTAssertFalse(WhisperBackend.canPreDetect(sampleCount: 30 * 60 * 16_000))

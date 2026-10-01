@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.8
+- Closing the lid during a recording pauses it, and opening the lid carries on in the same recording. The record screen then says "Paused while your Mac slept" with the times.
+- After a Super run, a short message on the recording says when Whisper first heard a different language than the one it transcribed in, for example "Whisper first heard Norwegian Nynorsk in 4 parts, and transcribed them as English."
+
 ## 3.15.7
 - With two or more languages selected (for example English and Arabic), Super no longer reads English speech as Arabic. When Whisper's first guess was a language you had not selected, the choice between yours was effectively alphabetical. It now uses Whisper's real confidence for each of your languages.
 - Arabic on Auto is now rescued from Whisper's Maltese and Persian guesses as 3.15.1 intended. The rescue never fired before.

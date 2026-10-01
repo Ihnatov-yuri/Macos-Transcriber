@@ -27,6 +27,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
         /// A background refinement: the transcript on screen is the finished
         /// draft, not this run's output.
         var background = false
+        /// A plain message for the finished run (language choices).
+        var note: String? = nil
     }
 
     private(set) var statuses: [UUID: Status] = [:]
@@ -339,6 +341,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
             recording.sourceLanguage = params.languages.count == 1 ? params.languages.first : nil
         }
         AppLog.info("job", "starting recording=\(recording.id.uuidString) backend=\(params.backend.rawValue)")
+        LanguageOverrideLog.reset()
 
         var wipedOldTranscript = false
         let stream = runner.run(params)
@@ -515,8 +518,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         AppLog.warn("job", "version snapshot failed: \(error.localizedDescription)")
                     }
                     try? TranscriptExporter.export(recording: recording)
+                    let note = LanguageOverrideLog.message(LanguageOverrideLog.take())
+                    if let note { AppLog.info("job", "language note: \(note)") }
                     statuses[recording.id] = Status(
-                        id: recording.id, stage: "Done.", fraction: 1.0, failed: false, failureReason: nil
+                        id: recording.id, stage: "Done.", fraction: 1.0, failed: false, failureReason: nil,
+                        note: note
                     )
                     // Auto-title: only if the title still looks like a default.
                     if !allSegments.isEmpty, shouldAutoTitle(recording.title) {

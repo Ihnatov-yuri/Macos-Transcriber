@@ -720,6 +720,11 @@ struct DetailView: View {
                         .uiLabel(9, color: AppColor.statusError)
                         .padding(.horizontal, AppMetric.sheetPadding)
                         .padding(.top, 8)
+                } else if let note = m.status?.note {
+                    Text(note)
+                        .uiLabel(9, color: AppColor.ink3)
+                        .padding(.horizontal, AppMetric.sheetPadding)
+                        .padding(.top, 8)
                 }
                 // Reuses InverseFooter — this IS its motivating example
                 // (RUN TRANSCRIPTION) — rather than a second hand-rolled

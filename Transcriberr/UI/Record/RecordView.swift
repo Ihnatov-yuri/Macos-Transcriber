@@ -80,6 +80,14 @@ struct RecordView: View {
                 .padding(.horizontal, AppMetric.sheetPadding)
                 .padding(.vertical, 6)
                 .background(AppColor.baseDeep)
+            } else if let note = model.notice {
+                HStack {
+                    Text(note).uiLabel(9, color: AppColor.ink3)
+                    Spacer()
+                }
+                .padding(.horizontal, AppMetric.sheetPadding)
+                .padding(.vertical, 6)
+                .background(AppColor.baseDeep)
             }
             recordFooter(model)
         }

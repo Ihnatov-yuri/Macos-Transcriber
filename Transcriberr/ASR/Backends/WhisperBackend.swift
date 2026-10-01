@@ -257,6 +257,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                     ? Self.resolveAutoLanguage(top: d.top, probs: probs)
                     : Self.pickAllowed(allowed, probs: probs)
                 if code != d.top {
+                    LanguageOverrideLog.record(from: d.top, to: code)
                     AppLog.info("whisper", String(
                         format: "language %@ (%.2f) → %@ (%.2f)",
                         d.top, probs[d.top] ?? 0, code, probs[code] ?? 0))

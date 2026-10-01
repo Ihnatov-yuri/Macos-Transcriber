@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.3
+- An idle Transcriberr no longer uses 15-30% of a CPU core: the pulsing dots on the Record, Dictate and Run transcription buttons stopped animating while nothing is running.
+
 ## 3.15.2
 - Long recordings in a chosen pair of languages are again read window by window, so a recording that switches language keeps both.
 

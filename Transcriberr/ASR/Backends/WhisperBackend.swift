@@ -67,8 +67,8 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// Default `ane` again since v3.15.9: on 2026-10-01 two long Super runs
     /// with the decoder on the GPU froze the Mac (GPU page faults, then
     /// screen artifacts). `split` stays selectable (`whisper.compute`).
-    /// It was the default from v3.13.0. With both halves on the Neural Engine
-    /// (WhisperKit's default) a Super read used ~0.5 of 12 CPU cores and
+    /// It was the default from v3.13.0. Why it was chosen: with both halves on
+    /// the Neural Engine (WhisperKit's default) a Super read used ~0.5 of 12 CPU cores and
     /// left the GPU idle, and two tracks read "in parallel" queued for the
     /// one Neural Engine. Measured with `transcriberrcli whisperbench` on
     /// the uk-a slice's two 5-min tracks (M3 Pro):
@@ -106,9 +106,9 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
 
     private let placement: Placement?
 
-    /// Wall time one call may decode. A healthy 28 s chunk takes seconds; the
-    /// runner's own deadline is 120 s, and giving up first keeps a slow
-    /// decode from ever looking like a hang.
+    /// Wall time one chunk call may decode. A healthy 26 s chunk takes 20-40 s
+    /// with several in flight; the runner's own deadline is 120 s, and giving
+    /// up first keeps a slow decode from ever looking like a hang.
     static var decodeBudget: TimeInterval { setting("TRANSCRIBERR_WHISPER_BUDGET", "whisper.decodeBudget", 100) }
 
     /// Native calls allowed at once. One Neural Engine (or GPU) serves every

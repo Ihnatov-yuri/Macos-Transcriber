@@ -465,7 +465,7 @@ struct DictationView: View {
                             ? "or hold \(c.settings.hotkey.glyph) in any app"
                             : (c.settings.hotkey == .off ? "Global hotkey off" : "Grant Accessibility for the global hotkey"),
                           action: { c.begin(target: .pane) }) {
-                PulseDot()
+                PulseDot(animated: false)
             } right: {
                 Rectangle()
                     .fill(AppColor.accent)

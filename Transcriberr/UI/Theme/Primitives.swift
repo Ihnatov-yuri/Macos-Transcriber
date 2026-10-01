@@ -259,6 +259,10 @@ struct LedgerRow<Body: View, Meta: View>: View {
 /// recording open burned about half a core in SwiftUI layout.
 struct PulseDot: View {
     var diameter: CGFloat = 8
+    /// Idle call-to-action footers pass false: a repeat-forever animation
+    /// redraws the window every display frame (120 Hz on ProMotion), which
+    /// cost 15-30% of a core in an app that was doing nothing.
+    var animated: Bool = true
     @State private var phase: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -274,7 +278,7 @@ struct PulseDot: View {
         }
         .frame(width: diameter * 2.4, height: diameter * 2.4)
         .onAppear {
-            guard !reduceMotion else { return }
+            guard animated, !reduceMotion else { return }
             withAnimation(.linear(duration: 1.8).repeatForever(autoreverses: false)) {
                 phase = 1
             }

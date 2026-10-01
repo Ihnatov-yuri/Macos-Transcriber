@@ -324,7 +324,7 @@ struct RecordView: View {
                 subtitle: m.autoTranscribe ? "Auto-transcribe on stop" : "Manual run",
                 action: { triggerToggleRecord(m) }
             ) {
-                PulseDot()
+                PulseDot(animated: false)
             } right: {
                 Rectangle()
                     .fill(AppColor.accent)

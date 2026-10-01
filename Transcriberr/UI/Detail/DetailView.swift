@@ -728,7 +728,7 @@ struct DetailView: View {
                     m.status == nil ? "Run transcription" : "Re-run transcription",
                     action: { m.run() }
                 ) {
-                    PulseDot(diameter: 6)
+                    PulseDot(diameter: 6, animated: false)
                 } right: {
                     Text("→").font(AppFont.display(20, weight: .semibold))
                         .foregroundStyle(AppColor.accent)

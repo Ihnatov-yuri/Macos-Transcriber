@@ -181,6 +181,6 @@ struct TagEditorRow: View {
         let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = ""
         guard !name.isEmpty else { return }
-        try? container.repository.addTag(named: name, to: recording)
+        _ = try? container.repository.addTag(named: name, to: recording)
     }
 }

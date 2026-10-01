@@ -48,11 +48,11 @@ final class WavRecorder: @unchecked Sendable {
     /// Audio I/O happens off main. `audioFile` and the chunk buffer live here.
     private let ioQueue = DispatchQueue(label: "WavRecorder.io", qos: .userInitiated)
 
-    nonisolated(unsafe) private var converter: AVAudioConverter?
-    nonisolated(unsafe) private var audioFile: AVAudioFile?
-    nonisolated(unsafe) private var chunkBuffer: [Float] = []
-    nonisolated(unsafe) private var totalSamplesWritten: Int = 0
-    nonisolated(unsafe) private var inputFormat: AVAudioFormat?
+    private var converter: AVAudioConverter?
+    private var audioFile: AVAudioFile?
+    private var chunkBuffer: [Float] = []
+    private var totalSamplesWritten: Int = 0
+    private var inputFormat: AVAudioFormat?
 
     private let targetFormat: AVAudioFormat = {
         AVAudioFormat(
@@ -102,7 +102,7 @@ final class WavRecorder: @unchecked Sendable {
 
     // MARK: - Public API
 
-    nonisolated(unsafe) private var isStarting = false
+    private var isStarting = false
 
     /// A capture is starting or has a file open. Launch-time crash repair
     /// (`WavRepair`) must not run while this is true.
@@ -592,7 +592,7 @@ final class WavRecorder: @unchecked Sendable {
     /// converter pulls from here; we return `.noDataNow` when it's empty so
     /// the converter keeps its filter state ALIVE across taps (continuous
     /// streaming resample). Only touched on `ioQueue`.
-    nonisolated(unsafe) private var pendingInputs: [AVAudioPCMBuffer] = []
+    private var pendingInputs: [AVAudioPCMBuffer] = []
 
     nonisolated private func ingest(buffer: AVAudioPCMBuffer) {
         guard buffer.frameLength > 0 else { return }
@@ -723,10 +723,10 @@ final class WavRecorder: @unchecked Sendable {
     /// of loads and stores, never across the MainActor hop. ioQueue is not
     /// the render thread (the tap callback only enqueues onto it).
     private let meterLock = NSLock()
-    nonisolated(unsafe) private var pendingRMS: Float = 0
-    nonisolated(unsafe) private var pendingPeak: Float = 0
-    nonisolated(unsafe) private var lastPublishMs: Int64 = 0
-    nonisolated(unsafe) private var publishScheduled: Bool = false
+    private var pendingRMS: Float = 0
+    private var pendingPeak: Float = 0
+    private var lastPublishMs: Int64 = 0
+    private var publishScheduled: Bool = false
 
     nonisolated private func coalescePeak(rms: Float, peak: Float) {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)

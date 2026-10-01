@@ -38,27 +38,27 @@ final class MeetingRecorder: @unchecked Sendable {
     /// Rolling per-callback peak history, same shape as WavRecorder's so the
     /// Record-screen waveform can render either source.
     private(set) var peakHistory: [Float] = Array(repeating: 0, count: 64)
-    nonisolated(unsafe) private var lastPublishMs: Int64 = 0
+    private var lastPublishMs: Int64 = 0
 
     /// Live-caption chunk feed: same 5-second 16 kHz chunks WavRecorder
     /// emits, cut from the converted output right before it hits the file.
     private var chunkContinuation: AsyncStream<WavRecorder.Chunk>.Continuation?
     private(set) var chunks: AsyncStream<WavRecorder.Chunk>
-    nonisolated(unsafe) private var chunkBuffer: [Float] = []
-    nonisolated(unsafe) private var chunkTotal16k: Int64 = 0
+    private var chunkBuffer: [Float] = []
+    private var chunkTotal16k: Int64 = 0
 
     /// "Me" timeline: intervals where the MIC was louder than the system tap.
     /// The aggregate delivers mic and tap as separate buffers, so before the
     /// downmix we know exactly which side the energy came from — ground truth
     /// no clustering can give. Saved as <recording>.me.json; after
     /// transcription the best-overlapping speaker gets the user's name.
-    nonisolated(unsafe) private var meIntervals: [[Double]] = []
-    nonisolated(unsafe) private var meOpenAt: Double? = nil
+    private var meIntervals: [[Double]] = []
+    private var meOpenAt: Double? = nil
 
     /// Echo duck: while the system tap is loud and the mic is NOT dominant,
     /// the mic is mostly hearing the speakers — its contribution to the mix
     /// (and the mic track) is attenuated. Smoothed so it never pumps.
-    nonisolated(unsafe) private var micGain: Float = 1
+    private var micGain: Float = 1
 
     init() {
         chunks = AsyncStream<WavRecorder.Chunk> { _ in }
@@ -89,23 +89,23 @@ final class MeetingRecorder: @unchecked Sendable {
     private var aggID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
     private var tapDesc: CATapDescription?
-    nonisolated(unsafe) private var converter: AVAudioConverter?
-    nonisolated(unsafe) private var audioFile: AVAudioFile?
+    private var converter: AVAudioConverter?
+    private var audioFile: AVAudioFile?
     /// Raw per-source tracks saved alongside the mix: <base>.mic.wav (you)
     /// and <base>.sys.wav (everyone else). The mix stays the primary
     /// recording; the tracks preserve ground truth for split-track
     /// (re-)transcription — even for meetings recorded before that ships.
-    nonisolated(unsafe) private var micConverter: AVAudioConverter?
-    nonisolated(unsafe) private var micFile: AVAudioFile?
-    nonisolated(unsafe) private var sysConverter: AVAudioConverter?
-    nonisolated(unsafe) private var sysFile: AVAudioFile?
-    nonisolated(unsafe) private var paused = false
-    nonisolated(unsafe) private var framesSeen: Int64 = 0
+    private var micConverter: AVAudioConverter?
+    private var micFile: AVAudioFile?
+    private var sysConverter: AVAudioConverter?
+    private var sysFile: AVAudioFile?
+    private var paused = false
+    private var framesSeen: Int64 = 0
     /// Channel count the system tap was created with — chosen per session
     /// so it never equals the microphone's (see `tapChannelCount`). The IO
     /// callback tells the two sources apart by it.
-    nonisolated(unsafe) private var tapChannels = 2
-    nonisolated(unsafe) private var warnedPositionalFallback = false
+    private var tapChannels = 2
+    private var warnedPositionalFallback = false
     private var nativeRate: Double = 48_000
     private var fileURL: URL?
     /// Exposed read-only so dictation can refuse to open a second input

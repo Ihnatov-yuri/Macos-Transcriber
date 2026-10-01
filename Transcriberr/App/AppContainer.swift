@@ -72,6 +72,9 @@ final class AppContainer: @unchecked Sendable {
     /// mic prewarm, no writes to the user's real library, no model loads.
     static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
+    /// Built once, by the App's own init, on the main actor — the main
+    /// ModelContext and the `@MainActor` job manager are created right here.
+    @MainActor
     init() {
         let schema = Schema(TranscriberrSchema.models)
         let config = ModelConfiguration("Transcriberr", schema: schema)
@@ -89,7 +92,7 @@ final class AppContainer: @unchecked Sendable {
         // context — a silent no-op in SwiftData. One shared context ends
         // that entire class.
         repository = RecordingRepository(
-            context: MainActor.assumeIsolated { mc.mainContext },
+            context: mc.mainContext,
             postProcessTracker: audioPostProcessTracker
         )
 
@@ -122,14 +125,7 @@ final class AppContainer: @unchecked Sendable {
             presets: presetStore,
             snippets: snippetStore
         )
-        // Same `assumeIsolated` shape as the main ModelContext above: the
-        // job manager is `@MainActor` now, and this init only ever runs from
-        // the App's own init, which is already on the main actor.
-        let runnerForJobs = transcriptionRunner
-        let repoForJobs = repository
-        jobManager = MainActor.assumeIsolated {
-            TranscriptionJobManager(runner: runnerForJobs, repository: repoForJobs)
-        }
+        jobManager = TranscriptionJobManager(runner: transcriptionRunner, repository: repository)
 
         dictationSettings = DictationSettings()
         dictation = DictationController(
@@ -153,20 +149,18 @@ final class AppContainer: @unchecked Sendable {
 
         // Wire auto-titler after construction so we can capture `self`.
         let jobs = jobManager
-        MainActor.assumeIsolated {
-            jobs.autoTitler = { [weak self] recording, segments, params in
-                guard let self else { return }
-                await self.generateAutoTitle(for: recording, segments: segments, params: params)
-            }
-            // Hand the multi-gigabyte LiteRT engine back once the queue has
-            // been quiet for a while — it is the only thing holding the
-            // process-wide inference gate down.
-            jobs.waitForAudio = { [weak self] id in
-                await self?.audioPostProcessTracker.waitUntilIdle(id)
-            }
-            jobs.onIdle = { [weak self] in
-                await self?.backendFactory.releaseLiteRTIfIdle() ?? true
-            }
+        jobs.autoTitler = { [weak self] recording, segments, params in
+            guard let self else { return }
+            await self.generateAutoTitle(for: recording, segments: segments, params: params)
+        }
+        // Hand the multi-gigabyte LiteRT engine back once the queue has
+        // been quiet for a while — it is the only thing holding the
+        // process-wide inference gate down.
+        jobs.waitForAudio = { [weak self] id in
+            await self?.audioPostProcessTracker.waitUntilIdle(id)
+        }
+        jobs.onIdle = { [weak self] in
+            await self?.backendFactory.releaseLiteRTIfIdle() ?? true
         }
 
         // Anonymous new-release check (see UpdateChecker). Not under the
@@ -320,9 +314,9 @@ final class AppContainer: @unchecked Sendable {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         let updates = self.updates
+        let blocker: @MainActor @Sendable () -> String? = { [weak self] in self?.updateBlocker() }
         Task {
-            await updates.installer.install(release, currentVersion: updates.currentVersion,
-                                            blocker: { [weak self] in self?.updateBlocker() })
+            await updates.installer.install(release, currentVersion: updates.currentVersion, blocker: blocker)
         }
     }
 

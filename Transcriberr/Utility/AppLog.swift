@@ -81,7 +81,7 @@ enum AppLog {
         }
         try? fm.setAttributes(ownerOnly, ofItemAtPath: logFileURL.path)
         if let h = try? FileHandle(forWritingTo: logFileURL) {
-            try? h.seekToEnd()
+            _ = try? h.seekToEnd()
             handle = h
         }
     }

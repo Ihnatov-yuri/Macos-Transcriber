@@ -163,21 +163,17 @@ final class BackendFactory: @unchecked Sendable {
     /// Idle housekeeping: skip while a preset, auto-title or dictation polish
     /// is generating. Returns false when it skipped.
     func releaseLiteRTIfIdle() async -> Bool {
-        cacheLock.lock()
-        let litert = sharedLiteRT
-        cacheLock.unlock()
+        let litert = cacheLock.withLock { sharedLiteRT }
         if let litert, await litert.isBusy { return false }
         await releaseLiteRT()
         return true
     }
 
     func releaseLiteRT() async {
-        cacheLock.lock()
-        let ens = sharedEnsemble
-        let litert = sharedLiteRT
-        sharedEnsemble = nil
-        sharedLiteRT = nil
-        cacheLock.unlock()
+        let (ens, litert) = cacheLock.withLock {
+            defer { sharedEnsemble = nil; sharedLiteRT = nil }
+            return (sharedEnsemble, sharedLiteRT)
+        }
         guard litert != nil || ens != nil else { return }
         await ens?.release()
         await litert?.release()

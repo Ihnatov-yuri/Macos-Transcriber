@@ -73,7 +73,7 @@ final class PostProcessor: @unchecked Sendable {
             return
         }
         guard let preset = presets.preset(presetId) else {
-            await setStatus(key, .failed("Unknown preset \(presetId)"))
+            setStatus(key, .failed("Unknown preset \(presetId)"))
             AppLog.error("postproc", "unknown preset \(presetId)")
             return
         }
@@ -82,7 +82,7 @@ final class PostProcessor: @unchecked Sendable {
                $0.backend == .gemmaLiteRT
                    && ModelCatalog.cachedRepoDirectory(huggingFaceID: $0.huggingFaceID) != nil
            }) {
-            await setStatus(key, .failed("LiteRT Gemma model not downloaded — Settings → Models."))
+            setStatus(key, .failed("LiteRT Gemma model not downloaded — Settings → Models."))
             return
         }
         // Enqueue behind whatever is already generating and return — the
@@ -139,7 +139,7 @@ final class PostProcessor: @unchecked Sendable {
         // the RAW text so a short-but-real recording isn't misreported as
         // empty just because destutter shrank it.
         guard rawTranscript.count >= 40 else {
-            await setStatus(key, .failed("Transcript is empty — run transcription first."))
+            setStatus(key, .failed("Transcript is empty — run transcription first."))
             AppLog.warn("postproc", "preset=\(presetId) skipped: transcript only \(transcript.count) chars")
             return
         }
@@ -196,10 +196,9 @@ final class PostProcessor: @unchecked Sendable {
             } else {
                 // Snippets expand in the template only: a literal
                 // `{snippet:…}` spoken into the transcript stays text.
-                var user = snippets.substitute(preset.userTemplate)
+                let user = vocabPrefix + snippets.substitute(preset.userTemplate)
                     .replacingOccurrences(of: "{transcript_with_speakers}", with: transcriptWithSpeakers)
                     .replacingOccurrences(of: "{transcript}", with: transcript)
-                user = vocabPrefix + user
                 let maxTokens = 1500
                 let timeout: TimeInterval = max(360, Double(maxTokens) / 4.0 + 120)
                 AppLog.info("postproc", "preset=\(presetId) single-shot (user=\(user.count)ch maxTokens=\(maxTokens) timeout=\(Int(timeout))s)")
@@ -224,10 +223,10 @@ final class PostProcessor: @unchecked Sendable {
             }
             try persist(markdown: markdown, preset: preset, recording: recording)
             AppLog.info("postproc", "preset=\(presetId) done (\(markdown.count) chars)")
-            await setStatus(key, .done)
+            setStatus(key, .done)
         } catch {
             AppLog.error("postproc", "preset=\(presetId) failed: \(error.localizedDescription)")
-            await setStatus(key, .failed(error.localizedDescription))
+            setStatus(key, .failed(error.localizedDescription))
         }
     }
 
@@ -296,20 +295,20 @@ final class PostProcessor: @unchecked Sendable {
         var stitched: [String] = []
         var failures = 0
         for (i, w) in windows.enumerated() {
-            var user = snippets.substitute(preset.userTemplate)
+            var body = snippets.substitute(preset.userTemplate)
                 .replacingOccurrences(of: "{transcript_with_speakers}", with: w)
                 .replacingOccurrences(of: "{transcript}", with: w)
             if let prev = stitched.last {
                 let tail = String(prev.suffix(Self.historyTailChars))
-                user = """
+                body = """
                 CONTEXT — the already-processed text immediately before this \
                 part. Use it only for continuity (names, spellings, sentence \
                 flow); do NOT repeat or re-output any of it:
                 «\(tail)»
 
-                """ + user
+                """ + body
             }
-            user = vocabPrefix + user
+            let user = vocabPrefix + body
             let maxTokens = min(2500, max(600, w.count * 125 / 300 + 200))
             let timeout: TimeInterval = max(180, Double(maxTokens) / 4.0 + 90)
             AppLog.info("postproc", "preset=\(preset.id) chunk \(i + 1)/\(windows.count) (\(w.count)ch maxTokens=\(maxTokens))")

@@ -69,11 +69,16 @@ final class AudioPlayerController: @unchecked Sendable {
         // peaks are ready — until then the player bar shows the plain track.
         waveformTask = Task.detached(priority: .utility) { [weak self] in
             let peaks = await WaveformLoader.extractPeaks(from: url, buckets: 200)
-            await MainActor.run {
-                guard let self, self.player.map(ObjectIdentifier.init) == loaded else { return }
-                self.waveform = peaks
-            }
+            await self?.applyWaveform(peaks, loaded: loaded)
         }
+    }
+
+    /// Peaks for the file that is still loaded; a slower extraction of the
+    /// previous file is dropped.
+    @MainActor
+    private func applyWaveform(_ peaks: [Float], loaded: ObjectIdentifier) {
+        guard player.map(ObjectIdentifier.init) == loaded else { return }
+        waveform = peaks
     }
 
     func play() {

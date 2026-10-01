@@ -1,5 +1,50 @@
 import Foundation
+import os
 import WhisperKit
+
+/// One native Whisper call's liveness: WhisperKit reports every token it
+/// decodes, so a call that is slow can be told from one that is hung.
+final class WhisperCallProgress: @unchecked Sendable {
+    private let last = OSAllocatedUnfairLock(initialState: Date())
+    let started = Date()
+    /// Set when the decode budget ended the call.
+    let gaveUp = OSAllocatedUnfairLock(initialState: false)
+    func touch() { last.withLock { $0 = Date() } }
+    var sinceLastToken: TimeInterval { Date().timeIntervalSince(last.withLock { $0 }) }
+    var elapsed: TimeInterval { Date().timeIntervalSince(started) }
+}
+
+/// FIFO counting semaphore for Whisper's native calls; a waiter leaves the
+/// queue when its task is cancelled.
+actor WhisperCallLimiter {
+    private var free: Int
+    private var waiters: [(id: Int, c: CheckedContinuation<Void, Error>)] = []
+    private var nextId = 0
+
+    init(width: Int) { free = max(1, width) }
+
+    func acquire() async throws {
+        if free > 0 { free -= 1; return }
+        let id = nextId; nextId += 1
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { c.resume(throwing: CancellationError()); return }
+                waiters.append((id, c))
+            }
+        } onCancel: {
+            Task { [weak self] in await self?.drop(id) }
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty { free += 1 } else { waiters.removeFirst().c.resume() }
+    }
+
+    private func drop(_ id: Int) {
+        guard let i = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: i).c.resume(throwing: CancellationError())
+    }
+}
 
 /// OpenAI Whisper large-v3 running locally via WhisperKit (CoreML / ANE).
 ///
@@ -19,7 +64,10 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
 
     /// Which chip runs Whisper's two halves.
     ///
-    /// Default `split` since v3.13.0. With both halves on the Neural Engine
+    /// Default `ane` again since v3.15.9: on 2026-10-01 two long Super runs
+    /// with the decoder on the GPU froze the Mac (GPU page faults, then
+    /// screen artifacts). `split` stays selectable (`whisper.compute`).
+    /// It was the default from v3.13.0. With both halves on the Neural Engine
     /// (WhisperKit's default) a Super read used ~0.5 of 12 CPU cores and
     /// left the GPU idle, and two tracks read "in parallel" queued for the
     /// one Neural Engine. Measured with `transcriberrcli whisperbench` on
@@ -52,11 +100,36 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         static var configured: Placement {
             let raw = ProcessInfo.processInfo.environment["TRANSCRIBERR_WHISPER_COMPUTE"]
                 ?? UserDefaults.standard.string(forKey: "whisper.compute")
-            return raw.flatMap(Placement.init(rawValue:)) ?? .split
+            return raw.flatMap(Placement.init(rawValue:)) ?? .ane
         }
     }
 
     private let placement: Placement?
+
+    /// Wall time one call may decode. A healthy 28 s chunk takes seconds; the
+    /// runner's own deadline is 120 s, and giving up first keeps a slow
+    /// decode from ever looking like a hang.
+    static var decodeBudget: TimeInterval { setting("TRANSCRIBERR_WHISPER_BUDGET", "whisper.decodeBudget", 100) }
+
+    /// Native calls allowed at once. One Neural Engine (or GPU) serves every
+    /// call, so more of them in flight only make each slower and fight
+    /// Parakeet and the diarizer for the CPU; 0 = no limit.
+    static var callWidth: Int { Int(setting("TRANSCRIBERR_WHISPER_WIDTH", "whisper.width", 0)) }
+
+    /// Higher-temperature re-decodes of a chunk Whisper doubts (WhisperKit's
+    /// default is 5, i.e. up to six decodes of one chunk).
+    static var fallbackCount: Int { Int(setting("TRANSCRIBERR_WHISPER_FALLBACKS", "whisper.fallbacks", 2)) }
+
+    private static func setting(_ env: String, _ key: String, _ fallback: Double) -> Double {
+        if let raw = ProcessInfo.processInfo.environment[env], let v = Double(raw) { return v }
+        let d = UserDefaults.standard.double(forKey: key)
+        return UserDefaults.standard.object(forKey: key) == nil ? fallback : d
+    }
+
+    private let limiter: WhisperCallLimiter? = {
+        let n = WhisperBackend.callWidth
+        return n > 0 ? WhisperCallLimiter(width: n) : nil
+    }()
 
     /// `placement` nil = the configured one, read at load.
     init(placement: Placement? = nil) { self.placement = placement }
@@ -130,7 +203,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// runner cannot tell which engine hung, so it asks every engine, and
     /// the healthy ones stay as they are.
     func recoverWedge(modelPath: URL?) async throws {
-        let stuck = inFlight.filter { Date().timeIntervalSince($0.value) >= InferenceGate.stuckCallAge }
+        let stuck = inFlight.filter { $0.value.sinceLastToken >= InferenceGate.stuckCallAge }
         guard !stuck.isEmpty else {
             try await load(modelPath: modelPath)
             return
@@ -141,13 +214,13 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         await InferenceGate.shared.evictShared(owner: id)
     }
 
-    /// Native calls running now, by call id, with their start time.
-    private var inFlight: [Int: Date] = [:]
+    /// Native calls running now, by call id.
+    private var inFlight: [Int: WhisperCallProgress] = [:]
     private var nextCallId = 0
 
-    private func beginCall() -> Int {
+    private func beginCall(_ progress: WhisperCallProgress) -> Int {
         nextCallId += 1
-        inFlight[nextCallId] = Date()
+        inFlight[nextCallId] = progress
         return nextCallId
     }
 
@@ -213,6 +286,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         var options = DecodingOptions()
         options.task = .transcribe
         options.temperature = 0
+        options.temperatureFallbackCount = Self.fallbackCount
         options.wordTimestamps = true          // per-word probabilities for the merge
         options.language = Self.languageCode(from: languages)
         // NO vocabulary prompt (`promptTokens`), deliberately. Measured on a
@@ -225,9 +299,12 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         // Shared hold: runs alongside other Whisper/Parakeet calls, but never
         // while LiteRT Gemma infers — that pairing wedges LiteRT's native
         // call (see InferenceGate). Pass-through when no Gemma is loaded.
+        if let limiter { try await limiter.acquire() }
+        defer { if let limiter { Task { await limiter.release() } } }
         let gateStamp = try await InferenceGate.shared.acquire(owner: id)
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
-        let call = beginCall()
+        let callProgress = WhisperCallProgress()
+        let call = beginCall(callProgress)
         defer { endCall(call) }
         // Our own TranscribeTask with its own Progress, not `pipe.transcribe`.
         // Chunks run three at a time on ONE WhisperKit (shared gate since
@@ -267,7 +344,41 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                 AppLog.warn("whisper", "language detection failed — selected languages not enforced on this chunk")
             }
         }
-        let results = [try await task.run(audioArray: samples, decodeOptions: options, callback: nil)]
+        // Called for every decoded token. It tells wedge recovery the call is
+        // alive, and ends a decode that has run past its budget.
+        // Chunks only: a whole-track reading (Ukrainian and other long-form
+        // languages) legitimately runs for minutes and is watched by token
+        // progress alone. A short budget on it doubled the Ukrainian WER.
+        let budget: TimeInterval = samples.count > 60 * 16_000 ? .infinity : Self.decodeBudget
+        let callback: TranscriptionCallback = { _ in
+            callProgress.touch()
+            if callProgress.elapsed > budget {
+                callProgress.gaveUp.withLock { $0 = true }
+                return false
+            }
+            return nil
+        }
+        let results = [try await task.run(audioArray: samples, decodeOptions: options, callback: callback)]
+        let decodeSeconds = callProgress.elapsed
+        if callProgress.gaveUp.withLock({ $0 }) {
+            // A chunk that keeps failing WhisperKit's own quality checks is
+            // decoded again at up to five higher temperatures, a minute and
+            // more of CPU for text that is nearly always a hallucination. The
+            // runner took that for a wedge at 120 s, rebuilt the 3 GB pipeline
+            // next to the still-running decode, and lost the chunk (log of
+            // 2026-10-01: 5 recoveries in 15 minutes; the Mac froze). Parakeet's
+            // reading of the chunk stands in the vote.
+            AppLog.warn("whisper", String(
+                format: "gave up on a %.0fs chunk after %.0fs (decode budget) — Parakeet's reading stands",
+                Double(samples.count) / 16_000, decodeSeconds))
+            return ("", [], [])
+        }
+        if decodeSeconds > 20, let t = results.first?.timings {
+            AppLog.info("whisper", String(
+                format: "slow chunk: %.0fs audio took %.0fs — %d decode loops, %.0f fallbacks, %.0fs of it in fallbacks",
+                Double(samples.count) / 16_000, decodeSeconds,
+                Int(t.totalDecodingLoops), t.totalDecodingFallbacks, t.decodingFallback))
+        }
 
         let isUkrainian = languages.count == 1 && languages.first?.lowercased() == "ukrainian"
         let chunkSeconds = Double(samples.count) / 16_000
@@ -368,7 +479,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         }
         let gateStamp = try await InferenceGate.shared.acquire(owner: id)
         defer { Task { await InferenceGate.shared.release(gateStamp) } }
-        let call = beginCall()
+        let call = beginCall(WhisperCallProgress())
         defer { endCall(call) }
         let r = try await pipe.detectLangauge(audioArray: samples)
         return (r.language, exp(Double(r.langProbs[r.language] ?? -.infinity)))

@@ -251,15 +251,15 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             // Auto (none selected): its full guess, with Arabic rescued from
             // the Maltese mislabel (see `resolveAutoLanguage`).
             let allowed = Self.candidateCodes(from: languages)
-            if let d = try? await pipe.detectLangauge(audioArray: samples) {
-                let probs = d.langProbs.mapValues { exp(Double($0)) }
+            if let d = try? await WhisperLanguageProbe.detect(pipe: pipe, tokenizer: tokenizer, samples: samples) {
+                let probs = d.probs
                 let code = allowed.isEmpty
-                    ? Self.resolveAutoLanguage(top: d.language, probs: probs)
+                    ? Self.resolveAutoLanguage(top: d.top, probs: probs)
                     : Self.pickAllowed(allowed, probs: probs)
-                if code != d.language {
+                if code != d.top {
                     AppLog.info("whisper", String(
                         format: "language %@ (%.2f) → %@ (%.2f)",
-                        d.language, probs[d.language] ?? 0, code, probs[code] ?? 0))
+                        d.top, probs[d.top] ?? 0, code, probs[code] ?? 0))
                 }
                 options.language = code
             } else if !allowed.isEmpty {

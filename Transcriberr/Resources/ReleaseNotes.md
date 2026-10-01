@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.7
+- With two or more languages selected (for example English and Arabic), Super no longer reads English speech as Arabic. When Whisper's first guess was a language you had not selected, the choice between yours was effectively alphabetical. It now uses Whisper's real confidence for each of your languages.
+- Arabic on Auto is now rescued from Whisper's Maltese and Persian guesses as 3.15.1 intended. The rescue never fired before.
+- A cancelled transcription is now recorded in the log.
+
 ## 3.15.6
 - Under-the-hood stability work: code that could be reached from two threads at once is now locked or kept on the main thread. The project builds with no compiler warnings, the first step towards Swift 6's data-race checking.
 

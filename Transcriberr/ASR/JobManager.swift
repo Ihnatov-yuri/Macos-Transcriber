@@ -532,6 +532,9 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     )
                 }
             }
+            // A cancelled consumer ends the stream quietly instead of
+            // throwing, so the catch below never saw a user's Cancel.
+            if Task.isCancelled { AppLog.warn("job", "cancelled") }
         } catch is CancellationError {
             AppLog.warn("job", "cancelled")
             statuses[recording.id] = Status(

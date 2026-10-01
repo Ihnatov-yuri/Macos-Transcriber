@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 
 /// Two-headed logger: writes to Apple's unified log (so `log show` works)
-/// AND appends to `~/Documents/Transcriberr/transcriberr.log` so we can
+/// AND appends to `~/Library/Logs/Transcriberr/transcriberr.log` so we can
 /// inspect it after a crash or silent failure.
 enum AppLog {
     private static let subsystem = "nl.ihnatov.Transcriberr"
@@ -17,7 +17,10 @@ enum AppLog {
             .urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs/Transcriberr", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("transcriberr.log")
+        // The unit-test host is this same app: its fixtures and fake
+        // failures belong in a log of their own, not the user's.
+        let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        return dir.appendingPathComponent(isTestHost ? "transcriberr-tests.log" : "transcriberr.log")
     }()
 
     /// One header line per app launch.

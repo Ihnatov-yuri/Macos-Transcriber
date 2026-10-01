@@ -67,6 +67,11 @@ final class AppContainer: @unchecked Sendable {
     private(set) var dictatePaneRequested = 0
     var pendingNewRecording = false
 
+    /// The unit-test host launches this same app. It must not act like a
+    /// second running copy: no global hotkey (both copies would paste), no
+    /// mic prewarm, no writes to the user's real library, no model loads.
+    static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     init() {
         let schema = Schema(TranscriberrSchema.models)
         let config = ModelConfiguration("Transcriberr", schema: schema)
@@ -140,8 +145,10 @@ final class AppContainer: @unchecked Sendable {
         // the first run-loop turn rather than doing AppKit work inside init.
         dictation.onShowPane = { [weak self] in self?.requestDictatePane() }
         AppContainer.shared = self
-        Task { @MainActor [weak self] in
-            self?.dictation.bootstrap()
+        if !Self.isTestHost {
+            Task { @MainActor [weak self] in
+                self?.dictation.bootstrap()
+            }
         }
 
         // Wire auto-titler after construction so we can capture `self`.
@@ -164,23 +171,23 @@ final class AppContainer: @unchecked Sendable {
 
         // Anonymous new-release check (see UpdateChecker). Not under the
         // unit-test host.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+        if !Self.isTestHost {
             updates.start()
             ModelCatalog.excludeModelsFromBackup()
         }
 
         // Self-heal transcripts lost to interrupted runs (app updated or
-        // quit mid-transcription after the run's initial wipe).
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let healed = self.repository.healEmptyTranscripts()
-            if healed > 0 { AppLog.info("app", "restored \(healed) transcript(s) from versions") }
-            // Before resuming runs: a row left pointing at a WAV the
-            // compressor already deleted would be dropped as "audio missing".
-            let repointed = self.repository.healMissingAudioPaths()
-            if repointed > 0 { AppLog.info("app", "repointed \(repointed) recording(s) at their compressed audio") }
-            // Not under the unit-test host: it opens the user's real store.
-            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+        // quit mid-transcription after the run's initial wipe). Not under
+        // the unit-test host: it opens the user's real store.
+        if !Self.isTestHost {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let healed = self.repository.healEmptyTranscripts()
+                if healed > 0 { AppLog.info("app", "restored \(healed) transcript(s) from versions") }
+                // Before resuming runs: a row left pointing at a WAV the
+                // compressor already deleted would be dropped as "audio missing".
+                let repointed = self.repository.healMissingAudioPaths()
+                if repointed > 0 { AppLog.info("app", "repointed \(repointed) recording(s) at their compressed audio") }
                 self.jobManager.resumePendingTasks()
                 // Recordings cut short by a crash: fix their WAV headers and
                 // give them a library row. The candidate list is taken here,
@@ -198,12 +205,14 @@ final class AppContainer: @unchecked Sendable {
         // Pre-warm Parakeet (the default speech-to-text engine). First-ever
         // launch downloads ~1 GB of CoreML models from HuggingFace; after
         // that this is a fast cache load, and every Run/live session starts
-        // instantly.
-        Task { [weak self] in
-            guard let self else { return }
-            let backend = self.backendFactory.backend(for: .parakeet)
-            if await !backend.isReady {
-                try? await backend.load(modelPath: nil)
+        // instantly. Tests that need an engine load their own.
+        if !Self.isTestHost {
+            Task { [weak self] in
+                guard let self else { return }
+                let backend = self.backendFactory.backend(for: .parakeet)
+                if await !backend.isReady {
+                    try? await backend.load(modelPath: nil)
+                }
             }
         }
     }

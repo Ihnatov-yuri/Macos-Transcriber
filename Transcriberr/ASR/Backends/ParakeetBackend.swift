@@ -1,5 +1,6 @@
 import Foundation
 import FluidAudio
+import os
 
 /// Real speech-to-text backend: NVIDIA Parakeet TDT 0.6B v3 running on the
 /// Apple Neural Engine via FluidAudio's CoreML port.
@@ -63,13 +64,16 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         AppLog.info("parakeet", "loading Parakeet \(version == .v2 ? "v2" : "v3") models (downloads ~1 GB on first run)…")
         let mgr: AsrManager
         do {
-            var lastLoggedPct = -1
+            // The progress handler can fire from any thread.
+            let lastLoggedPct = OSAllocatedUnfairLock(initialState: -1)
             let models = try await AsrModels.downloadAndLoad(version: version) { progress in
                 let pct = Int(progress.fractionCompleted * 100)
-                if pct / 10 != lastLoggedPct / 10 {   // log every 10%
-                    lastLoggedPct = pct
-                    AppLog.info("parakeet", "model download/load \(pct)%")
+                let shouldLog = lastLoggedPct.withLock { last in
+                    guard pct / 10 != last / 10 else { return false }   // log every 10%
+                    last = pct
+                    return true
                 }
+                if shouldLog { AppLog.info("parakeet", "model download/load \(pct)%") }
             }
             mgr = AsrManager(config: .default)
             try await mgr.loadModels(models)

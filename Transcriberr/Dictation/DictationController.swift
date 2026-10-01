@@ -262,7 +262,7 @@ final class DictationController: @unchecked Sendable {
     private func watchHotkeySetting() {
         withObservationTracking {
             _ = settings.hotkey
-        } onChange: {
+        } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.armHotkey()
@@ -1253,14 +1253,16 @@ final class DictationController: @unchecked Sendable {
         Task.detached(priority: .utility) { [weak self] in
             let t0 = Date()
             let terms = VocabularyHarvester.harvest(items, existingVocabulary: existing)
-            await MainActor.run {
-                guard let self else { return }
-                self.settings.learnedTerms = terms
-                self.settings.learnedAt = Date()
-                AppLog.info("dictation", String(format: "learned %d names from %d transcripts in %.2fs",
-                                                terms.count, items.count, Date().timeIntervalSince(t0)))
-            }
+            await self?.storeLearnedTerms(terms, from: items.count, since: t0)
         }
+    }
+
+    @MainActor
+    private func storeLearnedTerms(_ terms: [VocabularyHarvester.Term], from transcripts: Int, since t0: Date) {
+        settings.learnedTerms = terms
+        settings.learnedAt = Date()
+        AppLog.info("dictation", String(format: "learned %d names from %d transcripts in %.2fs",
+                                        terms.count, transcripts, Date().timeIntervalSince(t0)))
     }
 
     /// Capitalized words / acronyms in a passage that no vocabulary knows yet.

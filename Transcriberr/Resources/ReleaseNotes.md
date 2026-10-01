@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.6
+- Under-the-hood stability work: code that could be reached from two threads at once is now locked or kept on the main thread. The project builds with no compiler warnings, the first step towards Swift 6's data-race checking.
+
 ## 3.15.5
 - Dictation held for another app expires after ten minutes, so old text no longer appears in a chat or document you have since moved on to. It is never pasted into a password field, and "scratch that" can take it back.
 - Running the test suite next to the app no longer starts a second dictation hotkey, touches your library or writes into your log.

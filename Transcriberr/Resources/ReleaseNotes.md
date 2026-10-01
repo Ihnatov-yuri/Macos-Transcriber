@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.9
+- Super no longer freezes the Mac on long meetings. Whisper goes back to the Neural Engine, as before 3.13.0 (the GPU setting made two long runs freeze the screen).
+- A chunk that Whisper keeps failing is given up after 100 seconds and Parakeet's reading is used, instead of the engine being rebuilt over and over and the chunk being lost. Whisper also retries a doubtful chunk twice instead of five times.
+- A slow Whisper chunk is logged with how long it took and how many retries it needed.
+
 ## 3.15.8
 - Closing the lid during a recording pauses it, and opening the lid carries on in the same recording. The record screen then says "Paused while your Mac slept" with the times.
 - After a Super run, a short message on the recording says when Whisper first heard a different language than the one it transcribed in, for example "Whisper first heard Norwegian Nynorsk in 4 parts, and transcribed them as English."

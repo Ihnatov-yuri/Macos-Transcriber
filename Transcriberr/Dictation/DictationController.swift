@@ -159,6 +159,12 @@ final class DictationController: @unchecked Sendable {
     /// session's loops must not drain or snapshot that session's audio.
     private var captureSession: Int?
     private var activationObserver: NSObjectProtocol?
+    private var appSwitchObserver: NSObjectProtocol?
+
+    /// Passages recognized while another app was in front. They wait for
+    /// their target app and paste when the user returns to it.
+    private struct HeldPassage { let bundleId: String; let text: String }
+    private var heldPassages: [HeldPassage] = []
 
     init(
         settings: DictationSettings,
@@ -194,6 +200,36 @@ final class DictationController: @unchecked Sendable {
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refreshTrust() }
+        }
+        appSwitchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard let id = app?.bundleIdentifier else { return }
+            Task { @MainActor [weak self] in self?.pasteHeld(for: id) }
+        }
+    }
+
+    /// The user is back in an app that has dictation waiting: paste it.
+    /// Settles briefly first so the focus lands in the field, and does
+    /// nothing while recognition is still running (the next delivery
+    /// carries the held text in front of its own).
+    @MainActor
+    private func pasteHeld(for bundleId: String) {
+        guard heldPassages.contains(where: { $0.bundleId == bundleId }) else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard let self,
+                  NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleId,
+                  !(NSApp.isActive && self.paneVisible) else { return }
+            let held = self.heldPassages.filter { $0.bundleId == bundleId }
+            guard !held.isEmpty else { return }
+            self.heldPassages.removeAll { $0.bundleId == bundleId }
+            let joined = held.map(\.text).reduce("") { DictationText.join(existing: $0, new: $1) }
+            let preceding = self.settings.spacing == .auto ? FocusedTextContext.textBeforeCaret() : nil
+            let payload = DictationText.forInsertion(joined, spacing: self.settings.spacing, preceding: preceding)
+            AppLog.info("dictation", "pasting \(held.count) held passage(s) into \(bundleId)")
+            _ = TextInserter.insert(payload, restoreClipboard: self.settings.restoreClipboard)
         }
     }
 
@@ -903,7 +939,7 @@ final class DictationController: @unchecked Sendable {
                 finalMessage("Copied — press ⌘V. Grant Accessibility to auto-insert.")
             case .appChanged:
                 finalMessage(secret ? "You switched apps — password not inserted"
-                                    : "You switched apps — kept it in the Dictate pad")
+                                    : "You switched apps — pastes when you return")
             }
         } else if outcome == .copiedOnly {
             // Keep listening, but tell the user once.
@@ -941,13 +977,26 @@ final class DictationController: @unchecked Sendable {
         // the line), a password field, somebody else's chat window. The
         // secure-field and mode decisions were all made for the old app too,
         // so a passage cleared for a normal field could land in a secure one.
+        var text = text
         if let expected = passage.context.bundleId,
-           let current = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
-           current != expected {
-            AppLog.warn("dictation", "target app changed mid-recognition (\(expected) → \(current)) — not pasting")
-            if !secret { paneText = DictationText.join(existing: paneText, new: text) }
-            lastInsertion = nil
-            return .appChanged
+           let current = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+            if current != expected {
+                // Hold the passage for the target app and paste it when the
+                // user comes back, in spoken order. A password is never held.
+                AppLog.warn("dictation", "target app changed (\(expected) → \(current)) — holding passage for the target")
+                if !secret {
+                    paneText = DictationText.join(existing: paneText, new: text)
+                    heldPassages.append(HeldPassage(bundleId: expected, text: text))
+                }
+                lastInsertion = nil
+                return .appChanged
+            }
+            // Back in the target app: earlier held passages go first.
+            let held = heldPassages.filter { $0.bundleId == expected }
+            if !held.isEmpty {
+                heldPassages.removeAll { $0.bundleId == expected }
+                text = (held.map(\.text) + [text]).reduce("") { DictationText.join(existing: $0, new: $1) }
+            }
         }
         // Context-aware join: look at what's left of the caret when the
         // target app exposes it through Accessibility. Never for a password:

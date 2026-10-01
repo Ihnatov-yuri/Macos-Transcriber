@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.4
+- Dictation you speak while you are in another app is no longer lost. Passages recognized while another app is in front wait for the app you started in and paste, in order, when you switch back to it.
+
 ## 3.15.3
 - An idle Transcriberr no longer uses 15-30% of a CPU core: the pulsing dots on the Record, Dictate and Run transcription buttons stopped animating while nothing is running.
 

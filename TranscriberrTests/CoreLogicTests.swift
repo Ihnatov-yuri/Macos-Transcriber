@@ -377,6 +377,74 @@ final class CoreLogicTests: XCTestCase {
         }
     }
 
+    // MARK: - EchoGate (playback mix when the echo path is not cancellable)
+
+    /// Bursty zero-mean noise: on for 0.4 s, off for 0.2 s — speech-like
+    /// enough for 20 ms frame levels, with gaps for the tail to show.
+    private func bursts(seconds: Int, seed: UInt64, amp: Float) -> [Float] {
+        var rng = seed
+        let sr = 16_000
+        return (0..<(sr * seconds)).map { i in
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            let on = (i % (sr * 6 / 10)) < sr * 4 / 10
+            return on ? (Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 - 0.5) * 2 * amp : 0
+        }
+    }
+
+    /// Measured case: a Bluetooth speaker 124 ms away whose echo the linear
+    /// filter could not follow. The gate must mute the echo-only stretches,
+    /// leave the user alone untouched, and let the user through when they
+    /// talk over the far side louder than its echo.
+    func testEchoGateMutesEchoKeepsUser() {
+        let sr = 16_000
+        let n = sr * 40
+        var ref = [Float](repeating: 0, count: n)
+        let far = bursts(seconds: 20, seed: 3, amp: 0.3)
+        for i in 0..<(sr * 20) { ref[i] = far[i] }                     // far side talks 0-20 s
+        for i in (sr * 30)..<n { ref[i] = far[i - sr * 30] }           // and 30-40 s
+        let d = 1984
+        var mic = [Float](repeating: 0, count: n)
+        // Echo with a level that wanders ±40% — what defeats a linear filter
+        // and must not defeat the gate.
+        for i in 0..<(n - d) {
+            let wobble: Float = 1 + 0.4 * sin(Float(i) / Float(sr) * 1.3)
+            mic[i + d] = 0.1 * wobble * ref[i]
+        }
+        let user = bursts(seconds: 10, seed: 8, amp: 0.25)
+        for i in 0..<(sr * 8) { mic[sr * 21 + i] += user[i] }          // alone, 21-29 s
+        for i in 0..<(sr * 5) { mic[sr * 34 + i] += user[i] }          // over the far side, 34-39 s
+        let userOver = (0..<(sr * 5)).map { user[$0] }
+
+        let g = EchoGate.gains(mic: mic, ref: ref, delay: d)
+        XCTAssertEqual(g.count, mic.count)
+        func energy(_ x: [Float], _ w: [Float]?, _ a: Int, _ b: Int) -> Double {
+            var e = 0.0
+            for i in a..<b { let v = x[i] * (w?[i] ?? 1); e += Double(v * v) }
+            return e
+        }
+        let echoBefore = energy(mic, nil, sr * 2, sr * 20)
+        let echoAfter = energy(mic, g, sr * 2, sr * 20)
+        XCTAssertLessThan(echoAfter, echoBefore * 0.01, "echo-only stretches should lose ≥20 dB")
+        let aloneAfter = energy(mic, g, sr * 21, sr * 29), aloneBefore = energy(mic, nil, sr * 21, sr * 29)
+        XCTAssertGreaterThan(aloneAfter, aloneBefore * 0.95, "the user alone must pass")
+        var kept = 0.0, total = 0.0
+        for i in 0..<(sr * 5) {
+            let u = userOver[i]
+            total += Double(u * u)
+            kept += Double(u * g[sr * 34 + i] * u * g[sr * 34 + i])
+        }
+        XCTAssertGreaterThan(kept, total * 0.8, "the user talking over the far side must pass")
+    }
+
+    func testEchoGateIsTransparentWithoutFarSide() {
+        let mic = bursts(seconds: 5, seed: 4, amp: 0.2)
+        let ref = [Float](repeating: 0, count: mic.count)
+        let out = EchoGate.apply(mic: mic, ref: ref, delay: 1000)
+        var before = 0.0, after = 0.0
+        for i in mic.indices { before += Double(mic[i] * mic[i]); after += Double(out[i] * out[i]) }
+        XCTAssertGreaterThan(after, before * 0.97)
+    }
+
     func testEchoCancellerDoesNoHarmWithoutEcho() {
         let sr = 16_000
         let n = sr * 5

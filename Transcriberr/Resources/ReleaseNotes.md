@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.15.10
+- Meeting playback no longer plays the other person twice when you use speakers instead of headphones. When the echo is too unsteady to cancel (a Bluetooth speaker, for example), your microphone is now muted while only the other side talks and opens again as soon as you speak. On two real calls the echo dropped from 8-10 dB to 21-25 dB below their voice.
+- The old fallback let the full echo through whenever the speaker was loud.
+
 ## 3.15.9
 - Super no longer freezes the Mac on long meetings. Whisper goes back to the Neural Engine, as before 3.13.0 (the GPU setting made two long runs freeze the screen).
 - A chunk that Whisper keeps failing is given up after 100 seconds and Parakeet's reading is used, instead of the engine being rebuilt over and over and the chunk being lost. Whisper also retries a doubtful chunk twice instead of five times.

@@ -8,7 +8,8 @@ import AVFoundation
 /// adaptive filter. `EchoCanceller` does the real job, but offline, from the
 /// `.mic`/`.sys` sidecars. This stitches the two together after recording
 /// stops: cancel, remix, and swap the result in for the file the user
-/// actually plays back.
+/// actually plays back. When the echo path is beyond the canceller,
+/// `EchoGate` mutes the mic's echo-only stretches instead.
 ///
 /// Sidecars are located via `AudioCompressor.sidecarURL` (checks `.m4a`
 /// before falling back to `.wav`) rather than a literal `.wav` path, and the
@@ -20,10 +21,34 @@ import AVFoundation
 /// rebuilt `.wav` is safely in place — never before).
 enum MeetingMixRebuilder {
     /// `nil` for anything that isn't a meeting recording with both
-    /// `.mic`/`.sys` sidecars still on disk, or if the rebuild fails for any
-    /// reason — callers fall back to `mainURL` unchanged. On success, returns
+    /// `.mic`/`.sys` sidecars still on disk, or if the rebuild fails —
+    /// callers fall back to `mainURL` unchanged. On success, returns
     /// the rebuilt file's URL, which the caller must use as the recording's
     /// new `audioPath` when it differs from `mainURL` (the migration case).
+    /// The mix the user plays back: the echo-cancelled (or, when the echo is
+    /// beyond the canceller, echo-gated) mic plus the far side.
+    static func playbackMix(mic rawMic: [Float], sys: [Float]) -> [Float] {
+        var (cleanedMic, outcome, echoDelay) = EchoCanceller.cancelDetailed(mic: rawMic, ref: sys)
+        // The canceller gave up on an echo it could not remove: a mix of
+        // the raw mic and the far side plays every far-side word twice.
+        // This used to keep the live-gated mix instead, on the theory that
+        // it was the better file. It was not: with a loud speaker the live
+        // gate passed the echo in full (see EchoGate). Gate the raw mic
+        // offline, where the echo level and delay are known. (The
+        // transcript is not affected: it reads the sidecars and removes
+        // that echo by timing.)
+        if outcome == .echoKept {
+            cleanedMic = EchoGate.apply(mic: cleanedMic, ref: sys, delay: echoDelay)
+            AppLog.info("aec", "echo not cancellable — mix built from the echo-gated mic (delay \(echoDelay) smp)")
+        }
+        let n = min(cleanedMic.count, sys.count)
+        var mix = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            mix[i] = max(-1, min(1, cleanedMic[i] + sys[i]))
+        }
+        return mix
+    }
+
     static func rebuildMix(mainURL: URL) async -> URL? {
         guard let micURL = AudioCompressor.sidecarURL(for: mainURL, kind: "mic"),
               let sysURL = AudioCompressor.sidecarURL(for: mainURL, kind: "sys")
@@ -36,23 +61,8 @@ enum MeetingMixRebuilder {
             async let sysTask = decoder.decodeAll(file: sysURL)
             let rawMic = try await rawMicTask
             let sys = try await sysTask
-            let (cleanedMic, outcome) = EchoCanceller.cancelDetailed(mic: rawMic, ref: sys)
-            // The canceller gave up on an echo it could not remove: a mix of
-            // the raw mic and the far side plays every far-side word twice,
-            // 30-50 ms apart, and the live-gated mix already on disk is the
-            // better file. (The transcript is not affected: it reads the
-            // sidecars and removes that echo by timing.)
-            if outcome == .echoKept {
-                AppLog.info("aec", "mix rebuild skipped — echo not cancellable, keeping the live-gated mix")
-                return nil
-            }
-
-            let n = min(cleanedMic.count, sys.count)
-            guard n > 0 else { return nil }
-            var mix = [Float](repeating: 0, count: n)
-            for i in 0..<n {
-                mix[i] = max(-1, min(1, cleanedMic[i] + sys[i]))
-            }
+            let mix = playbackMix(mic: rawMic, sys: sys)
+            guard !mix.isEmpty else { return nil }
 
             guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                           sampleRate: AudioDecoder.sampleRate,
@@ -101,7 +111,7 @@ enum MeetingMixRebuilder {
                 try FileManager.default.moveItem(at: tmp, to: outputURL)
                 try? FileManager.default.removeItem(at: mainURL)
             }
-            AppLog.info("aec", "rebuilt meeting mix from cancelled mic + sys (\(n) samples)")
+            AppLog.info("aec", "rebuilt meeting mix from cancelled mic + sys (\(mix.count) samples)")
             return outputURL
         } catch {
             AppLog.warn("aec", "mix rebuild failed, keeping live-gated mix: \(error.localizedDescription)")

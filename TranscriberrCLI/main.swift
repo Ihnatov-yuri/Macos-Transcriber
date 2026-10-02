@@ -633,6 +633,19 @@ func cmdAEC(base: String) async -> Int32 {
             }
         }
         print("[aec] ✓ \(String(format: "%.1f", Date().timeIntervalSince(t0)))s — mic energy reduced by \(String(format: "%.1f", erle)) dB (echo removed; user speech preserved)")
+        // The file the app would play back, written beside the cleaned
+        // track; the recording itself is not touched.
+        let mix = MeetingMixRebuilder.playbackMix(mic: m, sys: r)
+        if let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
+           let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(mix.count)) {
+            buf.frameLength = AVAudioFrameCount(mix.count)
+            mix.withUnsafeBufferPointer { src in buf.floatChannelData![0].update(from: src.baseAddress!, count: mix.count) }
+            let outURL = baseURL.deletingPathExtension().appendingPathExtension("mix.wav")
+            if let f = try? AVAudioFile(forWriting: outURL, settings: fmt.settings, commonFormat: .pcmFormatFloat32, interleaved: false) {
+                try? f.write(from: buf)
+                print("[aec] playback mix → \(outURL.lastPathComponent)")
+            }
+        }
         return 0
     } catch {
         print("[aec] ❌ \(error)")

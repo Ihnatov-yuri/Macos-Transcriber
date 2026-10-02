@@ -126,9 +126,11 @@ enum EchoCanceller {
         case echoKept
     }
 
-    static func cancelDetailed(mic: [Float], ref: [Float]) -> (samples: [Float], outcome: Outcome) {
+    /// `echoDelay` is the speaker→mic delay the correlation search found,
+    /// in samples (0 when it found no echo path).
+    static func cancelDetailed(mic: [Float], ref: [Float]) -> (samples: [Float], outcome: Outcome, echoDelay: Int) {
         let n = min(mic.count, ref.count)
-        guard n > 16_000 else { return (mic, .noEcho) }
+        guard n > 16_000 else { return (mic, .noEcho, 0) }
 
         // ---- 1. Bulk delay via cross-correlation (8× decimated, ≤60 s) ----
         // Searched inside the LOUDEST stretches of the reference, not the
@@ -150,7 +152,7 @@ enum EchoCanceller {
             tried.append(String(format: "%.0fs:%.3f", Double(start) / 16_000, peak.corr))
             if peak.corr > bestCorr { bestCorr = peak.corr; delay = peak.delay; searchStart = start }
         }
-        AppLog.info("aec", "delay search windows \(tried.joined(separator: " "))")
+        AppLog.info("aec", "delay search windows \(tried.joined(separator: " ")) → \(delay) smp")
         // Mic and reference aren't related: headphones, or a mic the speakers
         // don't reach. Measured peaks — 0.32 on a real call recorded over
         // speakers and 1.0 on synthetic echo, against 0.03 for uncorrelated
@@ -161,8 +163,9 @@ enum EchoCanceller {
         // it, which the energy check at the end would wave straight through.
         guard bestCorr >= minCorrelation else {
             AppLog.info("aec", String(format: "no echo path (peak correlation %.3f) — keeping original mic track", bestCorr))
-            return (mic, .noEcho)
+            return (mic, .noEcho, 0)
         }
+        let echoDelay = delay
 
         // The taps reach only FORWARD from `delay`, covering lags
         // [delay+1, delay+taps]. An unwhitened correlation peak on speech is
@@ -272,7 +275,7 @@ enum EchoCanceller {
             if !blockERLE.isEmpty, linearERLE < minLinearERLE {
                 AppLog.info("aec", String(format: "linear stage removed only %.1f dB (median of %d far-end seconds, corr %.3f) — no usable echo path, keeping raw mic for echo-by-timing",
                                           linearERLE, blockERLE.count, bestCorr))
-                return (mic, .echoKept)
+                return (mic, .echoKept, echoDelay)
             }
         }
 
@@ -330,8 +333,8 @@ enum EchoCanceller {
         // original rather than inject filter noise.
         guard erle > 0.5 else {
             AppLog.info("aec", "no echo to cancel — keeping original mic track")
-            return (mic, .noEcho)
+            return (mic, .noEcho, echoDelay)
         }
-        return (out, .cancelled)
+        return (out, .cancelled, echoDelay)
     }
 }

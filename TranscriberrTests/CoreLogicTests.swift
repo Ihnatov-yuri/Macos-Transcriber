@@ -413,36 +413,72 @@ final class CoreLogicTests: XCTestCase {
         let user = bursts(seconds: 10, seed: 8, amp: 0.25)
         for i in 0..<(sr * 8) { mic[sr * 21 + i] += user[i] }          // alone, 21-29 s
         for i in 0..<(sr * 5) { mic[sr * 34 + i] += user[i] }          // over the far side, 34-39 s
-        let userOver = (0..<(sr * 5)).map { user[$0] }
 
-        let g = EchoGate.gains(mic: mic, ref: ref, delay: d)
-        XCTAssertEqual(g.count, mic.count)
-        func energy(_ x: [Float], _ w: [Float]?, _ a: Int, _ b: Int) -> Double {
+        // Gains decided on the real mixture, applied to each part on its own.
+        let g = EchoGate.frameGains(mic: mic, ref: ref, delay: d)
+        XCTAssertEqual(g.count, n / EchoGate.frame)
+        var gatedMic = mic
+        EchoGate.applyGains(g, to: &gatedMic)
+        var userAlone = [Float](repeating: 0, count: n)
+        for i in 0..<(sr * 8) { userAlone[sr * 21 + i] = user[i] }
+        var userOverFar = [Float](repeating: 0, count: n)
+        for i in 0..<(sr * 5) { userOverFar[sr * 34 + i] = user[i] }
+        let aloneBefore = userAlone, overBefore = userOverFar
+        EchoGate.applyGains(g, to: &userAlone)
+        EchoGate.applyGains(g, to: &userOverFar)
+        func energy(_ x: [Float], _ a: Int, _ b: Int) -> Double {
             var e = 0.0
-            for i in a..<b { let v = x[i] * (w?[i] ?? 1); e += Double(v * v) }
+            for i in a..<b { e += Double(x[i] * x[i]) }
             return e
         }
-        let echoBefore = energy(mic, nil, sr * 2, sr * 20)
-        let echoAfter = energy(mic, g, sr * 2, sr * 20)
-        XCTAssertLessThan(echoAfter, echoBefore * 0.01, "echo-only stretches should lose ≥20 dB")
-        let aloneAfter = energy(mic, g, sr * 21, sr * 29), aloneBefore = energy(mic, nil, sr * 21, sr * 29)
-        XCTAssertGreaterThan(aloneAfter, aloneBefore * 0.95, "the user alone must pass")
-        var kept = 0.0, total = 0.0
-        for i in 0..<(sr * 5) {
-            let u = userOver[i]
-            total += Double(u * u)
-            kept += Double(u * g[sr * 34 + i] * u * g[sr * 34 + i])
-        }
-        XCTAssertGreaterThan(kept, total * 0.8, "the user talking over the far side must pass")
+        XCTAssertLessThan(energy(gatedMic, sr * 2, sr * 20), energy(mic, sr * 2, sr * 20) * 0.01,
+                          "echo-only stretches should lose ≥20 dB")
+        XCTAssertGreaterThan(energy(userAlone, 0, n), energy(aloneBefore, 0, n) * 0.95, "the user alone must pass")
+        XCTAssertGreaterThan(energy(userOverFar, 0, n), energy(overBefore, 0, n) * 0.8,
+                             "the user talking over the far side must pass")
     }
 
+    /// Quiet mic frames (soft speech, room tone) pass untouched while the
+    /// far side is silent — there is no echo there to remove.
     func testEchoGateIsTransparentWithoutFarSide() {
-        let mic = bursts(seconds: 5, seed: 4, amp: 0.2)
-        let ref = [Float](repeating: 0, count: mic.count)
-        let out = EchoGate.apply(mic: mic, ref: ref, delay: 1000)
-        var before = 0.0, after = 0.0
-        for i in mic.indices { before += Double(mic[i] * mic[i]); after += Double(out[i] * out[i]) }
-        XCTAssertGreaterThan(after, before * 0.97)
+        let loud = bursts(seconds: 5, seed: 4, amp: 0.2)
+        let quiet = bursts(seconds: 5, seed: 6, amp: 0.002)
+        for mic in [loud, quiet] {
+            let ref = [Float](repeating: 0, count: mic.count)
+            var out = mic
+            EchoGate.apply(&out, ref: ref, delay: 1000)
+            XCTAssertEqual(out, mic)
+        }
+    }
+
+    /// Gain ramps between frame centres: continuous, no 20 ms steps, and
+    /// samples past the last whole frame take its gain.
+    func testEchoGateGainsRampBetweenFrames() {
+        var x = [Float](repeating: 1, count: EchoGate.frame * 3 + 100)
+        EchoGate.applyGains([0, 1, 1], to: &x)
+        let half = EchoGate.frame / 2
+        XCTAssertEqual(x[0], 0)
+        XCTAssertEqual(x[half + EchoGate.frame / 2], 0.5, accuracy: 0.01)
+        XCTAssertEqual(x[x.count - 1], 1)
+        for i in 1..<x.count { XCTAssertLessThan(abs(x[i] - x[i - 1]), 0.01) }
+    }
+
+    /// When the canceller gives up, the playback mix must use the gated mic,
+    /// not the raw one — the wiring this release exists for.
+    func testPlaybackMixGatesMicOnlyWhenEchoKept() {
+        let sr = 16_000
+        let sys = bursts(seconds: 10, seed: 3, amp: 0.3)
+        let d = 1984
+        var mic = [Float](repeating: 0, count: sys.count)
+        for i in 0..<(sys.count - d) { mic[i + d] = 0.1 * sys[i] }
+        func echoEnergy(_ mix: [Float]) -> Double {
+            var e = 0.0
+            for i in (sr * 2)..<mix.count { let v = mix[i] - sys[i]; e += Double(v * v) }
+            return e
+        }
+        let kept = MeetingMixRebuilder.playbackMix(cleanedMic: mic, outcome: .echoKept, echoDelay: d, sys: sys)
+        let cancelled = MeetingMixRebuilder.playbackMix(cleanedMic: mic, outcome: .cancelled, echoDelay: d, sys: sys)
+        XCTAssertLessThan(echoEnergy(kept), echoEnergy(cancelled) * 0.01)
     }
 
     func testEchoCancellerDoesNoHarmWithoutEcho() {

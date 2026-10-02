@@ -2,7 +2,7 @@ import Foundation
 import AVFoundation
 
 /// Replaces a meeting recording's live-gated main mix with one built from
-/// offline echo cancellation. `MeetingRecorder`'s live mix only *gates* the
+/// offline echo cancellation (or, failing that, an offline echo gate). `MeetingRecorder`'s live mix only *gates* the
 /// mic while the far side talks — a cheap, imperfect defense against room
 /// echo — because a live CoreAudio IO callback is the wrong place to run an
 /// adaptive filter. `EchoCanceller` does the real job, but offline, from the
@@ -28,7 +28,14 @@ enum MeetingMixRebuilder {
     /// The mix the user plays back: the echo-cancelled (or, when the echo is
     /// beyond the canceller, echo-gated) mic plus the far side.
     static func playbackMix(mic rawMic: [Float], sys: [Float]) -> [Float] {
-        var (cleanedMic, outcome, echoDelay) = EchoCanceller.cancelDetailed(mic: rawMic, ref: sys)
+        let (cleanedMic, outcome, echoDelay) = EchoCanceller.cancelDetailed(mic: rawMic, ref: sys)
+        return playbackMix(cleanedMic: cleanedMic, outcome: outcome, echoDelay: echoDelay, sys: sys)
+    }
+
+    /// The same from a canceller result already in hand.
+    static func playbackMix(cleanedMic: [Float], outcome: EchoCanceller.Outcome,
+                            echoDelay: Int, sys: [Float]) -> [Float] {
+        var mic = cleanedMic
         // The canceller gave up on an echo it could not remove: a mix of
         // the raw mic and the far side plays every far-side word twice.
         // This used to keep the live-gated mix instead, on the theory that
@@ -38,13 +45,13 @@ enum MeetingMixRebuilder {
         // transcript is not affected: it reads the sidecars and removes
         // that echo by timing.)
         if outcome == .echoKept {
-            cleanedMic = EchoGate.apply(mic: cleanedMic, ref: sys, delay: echoDelay)
+            EchoGate.apply(&mic, ref: sys, delay: echoDelay)
             AppLog.info("aec", "echo not cancellable — mix built from the echo-gated mic (delay \(echoDelay) smp)")
         }
-        let n = min(cleanedMic.count, sys.count)
+        let n = min(mic.count, sys.count)
         var mix = [Float](repeating: 0, count: n)
         for i in 0..<n {
-            mix[i] = max(-1, min(1, cleanedMic[i] + sys[i]))
+            mix[i] = max(-1, min(1, mic[i] + sys[i]))
         }
         return mix
     }
@@ -111,7 +118,7 @@ enum MeetingMixRebuilder {
                 try FileManager.default.moveItem(at: tmp, to: outputURL)
                 try? FileManager.default.removeItem(at: mainURL)
             }
-            AppLog.info("aec", "rebuilt meeting mix from cancelled mic + sys (\(mix.count) samples)")
+            AppLog.info("aec", "rebuilt meeting mix from mic + sys sidecars (\(mix.count) samples)")
             return outputURL
         } catch {
             AppLog.warn("aec", "mix rebuild failed, keeping live-gated mix: \(error.localizedDescription)")

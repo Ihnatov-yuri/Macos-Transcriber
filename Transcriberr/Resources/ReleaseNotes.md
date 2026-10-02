@@ -7,7 +7,7 @@
 # change. The how and the learning belong in the GitHub release.
 
 ## 3.15.10
-- Meeting playback no longer plays the other person twice when you use speakers instead of headphones. When the echo is too unsteady to cancel (a Bluetooth speaker, for example), your microphone is now muted while only the other side talks and opens again as soon as you speak. On two real calls the echo dropped from 8-10 dB to 21-25 dB below their voice.
+- Meeting playback no longer plays the other person twice when you use speakers instead of headphones. When the echo is too unsteady to cancel (a Bluetooth speaker, for example), your microphone is now muted while only the other side talks and opens again as soon as you speak. On two real calls the echo dropped from 8-10 dB to 20-24 dB below their voice.
 - The old fallback let the full echo through whenever the speaker was loud.
 
 ## 3.15.9

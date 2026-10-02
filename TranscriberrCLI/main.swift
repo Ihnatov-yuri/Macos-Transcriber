@@ -616,7 +616,7 @@ func cmdAEC(base: String) async -> Int32 {
         let r = try await decoder.decodeAll(file: sys)
         print("[aec] mic \(m.count) smp, sys \(r.count) smp — running NLMS…")
         let t0 = Date()
-        let cleaned = EchoCanceller.cancel(mic: m, ref: r)
+        let (cleaned, outcome, echoDelay) = EchoCanceller.cancelDetailed(mic: m, ref: r)
         var ein = 0.0, eout = 0.0
         for v in m { ein += Double(v * v) }
         for v in cleaned { eout += Double(v * v) }
@@ -635,7 +635,7 @@ func cmdAEC(base: String) async -> Int32 {
         print("[aec] ✓ \(String(format: "%.1f", Date().timeIntervalSince(t0)))s — mic energy reduced by \(String(format: "%.1f", erle)) dB (echo removed; user speech preserved)")
         // The file the app would play back, written beside the cleaned
         // track; the recording itself is not touched.
-        let mix = MeetingMixRebuilder.playbackMix(mic: m, sys: r)
+        let mix = MeetingMixRebuilder.playbackMix(cleanedMic: cleaned, outcome: outcome, echoDelay: echoDelay, sys: r)
         if let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
            let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(mix.count)) {
             buf.frameLength = AVAudioFrameCount(mix.count)

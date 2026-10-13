@@ -135,6 +135,10 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         if let old { await old.cleanup() }
     }
 
+    /// Live captions re-read the open phrase about once a second; they log
+    /// their own finished lines instead of every read.
+    @TaskLocal static var logsChunks = true
+
     // MARK: - Audio in
 
     func transcribeChunk(
@@ -167,11 +171,13 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             decoderState: &state,
             language: Self.languageHint(from: languages)
         )
-        AppLog.info("parakeet", String(
-            format: "chunk %.1fs → %d chars (conf %.2f, %.2fs compute)",
-            Double(samples.count) / 16_000.0,
-            result.text.count, result.confidence, result.processingTime
-        ))
+        if Self.logsChunks {
+            AppLog.info("parakeet", String(
+                format: "chunk %.1fs → %d chars (conf %.2f, %.2fs compute)",
+                Double(samples.count) / 16_000.0,
+                result.text.count, result.confidence, result.processingTime
+            ))
+        }
 
         // Diarization: unlike LLM backends, Parakeet can't be *prompted* to
         // label speakers — but it returns per-token timestamps, and the

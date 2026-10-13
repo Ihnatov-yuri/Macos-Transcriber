@@ -6,6 +6,13 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.16.0
+- Live captions show the whole conversation while you record, not just the last few words. Text appears as it is spoken, in a lighter shade until the sentence is finished, and the panel keeps the newest line in view.
+- Live captions work in meetings again, and switching Live on during a recording starts it straight away. Before, the switch only took effect from the next recording.
+- Captions follow pauses in speech instead of cutting every five seconds, so words are no longer split in half.
+- Super waits while you record. When meetings follow each other, the previous meeting's Super run no longer keeps three to four processor cores busy during the next call; it carries on as soon as you press Stop.
+- The record screen uses less processor time while recording: the level meter no longer redraws the whole screen 30 times a second.
+
 ## 3.15.10
 - Meeting playback no longer plays the other person twice when you use speakers instead of headphones. When the echo is too unsteady to cancel (a Bluetooth speaker, for example), your microphone is now muted while only the other side talks and opens again as soon as you speak. On two real calls the echo dropped from 8-10 dB to 20-24 dB below their voice.
 - The old fallback let the full echo through whenever the speaker was loud.

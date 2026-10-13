@@ -3,8 +3,8 @@ import Foundation
 import Observation
 
 /// Records from the default input device, converts to 16 kHz mono Float32 PCM,
-/// writes a standards-compliant WAV file, and publishes 5-second chunk events
-/// for the live-transcription path.
+/// writes a standards-compliant WAV file, and publishes one-second chunk
+/// events for the live-transcription path.
 ///
 /// All I/O happens on a private serial queue so AVAudioFile writes stay
 /// in-order. Only `level` / `elapsedMs` / `state` are mutated on MainActor.
@@ -39,7 +39,9 @@ final class WavRecorder: @unchecked Sendable {
     private(set) var peakHistory: [Float] = Array(repeating: 0, count: 64)
 
     static let sampleRate: Double = 16_000
-    static let chunkSeconds: Double = 5
+    /// Live-caption feed granularity. One second (was 5 until v3.15.10): the
+    /// live worker finds phrase ends in the audio itself and needs it fresh.
+    static let chunkSeconds: Double = 1
 
     // MARK: - Internals
 
@@ -86,13 +88,14 @@ final class WavRecorder: @unchecked Sendable {
     /// recording of the app session onward (yields into a finished
     /// continuation are just dropped, no error).
 
-    /// Live captions consume these 5-second chunks in real time; if the
-    /// consumer falls behind (a file job holding the inference gate, a slow
-    /// engine), an unbounded stream grew ~320 KB per chunk for the whole
-    /// session and the captions fell further and further behind the audio.
-    /// Dropping the oldest backlog keeps captions near the live edge — the
-    /// transcript of record comes from the file, not from this feed.
-    static let liveChunkBacklog = 8
+    /// Live captions consume these one-second chunks in real time; if the
+    /// consumer falls behind (a stalled main thread), an unbounded stream
+    /// grew for the whole session and the captions fell further and further
+    /// behind the audio. Dropping the oldest backlog keeps captions near the
+    /// live edge — the transcript of record comes from the file, not from
+    /// this feed. The live worker only appends on arrival, so 40 s of slack
+    /// is never reached in normal use.
+    static let liveChunkBacklog = 40
 
     private func makeChunkStream() {
         var continuation: AsyncStream<Chunk>.Continuation!

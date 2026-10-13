@@ -368,3 +368,115 @@ final class InferenceGateTests: XCTestCase {
         XCTAssertFalse(EnsembleBackend.isSilent(quiet))
     }
 }
+
+/// Live captions: phrase ends, paragraphs, and Super held during a recording.
+final class LiveCaptionTests: XCTestCase {
+    private let sr = LiveTranscriber.sampleRate
+
+    /// `speech` seconds of a 200 Hz tone at -14 dB, then `pause` seconds of
+    /// -60 dB room tone, repeated.
+    private func audio(_ parts: [(speech: Double, pause: Double)]) -> [Float] {
+        var out: [Float] = []
+        for p in parts {
+            for i in 0..<Int(p.speech * Double(sr)) {
+                out.append(0.2 * sin(2 * .pi * 200 * Float(i) / Float(sr)))
+            }
+            for i in 0..<Int(p.pause * Double(sr)) {
+                out.append(0.001 * (i % 2 == 0 ? 1 : -1))
+            }
+        }
+        return out
+    }
+
+    private func end(_ samples: [Float]) -> Int? {
+        LiveTranscriber.phraseEnd(frames: LiveTranscriber.frameRMS(samples), sampleCount: samples.count)
+    }
+
+    func testPauseAfterAPhraseClosesIt() throws {
+        let cut = try XCTUnwrap(end(audio([(2.0, 0.6), (1.0, 0)])))
+        let seconds = Double(cut) / Double(sr)
+        // Inside the pause, not in either stretch of speech.
+        XCTAssertGreaterThan(seconds, 2.0)
+        XCTAssertLessThan(seconds, 2.6)
+    }
+
+    func testShortPauseKeepsThePhraseOpen() {
+        XCTAssertNil(end(audio([(2.0, 0.2), (2.0, 0)])))
+    }
+
+    func testPauseBeforeMinimumPhraseDoesNotClose() {
+        XCTAssertNil(end(audio([(0.8, 0.6), (0.5, 0)])))
+    }
+
+    func testTrailingPauseClosesThePhrase() {
+        XCTAssertNotNil(end(audio([(3.0, 0.5)])))
+    }
+
+    func testUnbrokenSpeechClosesAtTheLimit() throws {
+        XCTAssertNil(end(audio([(14.0, 0)])))
+        let cut = try XCTUnwrap(end(audio([(16.0, 0)])))
+        XCTAssertGreaterThanOrEqual(Double(cut) / Double(sr), 10)
+        XCTAssertLessThanOrEqual(cut, 16 * sr)
+    }
+
+    func testRoomToneIsNotSpeech() {
+        XCTAssertFalse(LiveTranscriber.hasSpeech(LiveTranscriber.frameRMS(audio([(0, 3)]))))
+        XCTAssertTrue(LiveTranscriber.hasSpeech(LiveTranscriber.frameRMS(audio([(1, 2)]))))
+    }
+
+    func testParagraphsJoinCloseLinesOnly() {
+        typealias L = LiveTranscriber.LiveLine
+        let lines = [
+            L(startSeconds: 0, endSeconds: 3, text: "Hello"),
+            L(startSeconds: 3.5, endSeconds: 6, text: "there."),
+            L(startSeconds: 12, endSeconds: 14, text: "Next topic."),
+        ]
+        let p = LivePanel.paragraphs(lines)
+        XCTAssertEqual(p.map(\.text), ["Hello there.", "Next topic."])
+        XCTAssertEqual(p.first?.endSeconds, 6)
+    }
+
+    func testParagraphsStopGrowingAtTheLimit() {
+        typealias L = LiveTranscriber.LiveLine
+        let lines = (0..<20).map { L(startSeconds: Double($0) * 4, endSeconds: Double($0) * 4 + 3.5, text: "w\($0)") }
+        let p = LivePanel.paragraphs(lines)
+        XCTAssertGreaterThan(p.count, 1)
+        XCTAssertTrue(p.allSatisfy { $0.endSeconds - $0.startSeconds < LivePanel.maxParagraphSeconds })
+    }
+
+    @MainActor
+    func testSuperWaitsForTheRecordingToEnd() async throws {
+        let activity = RecordingActivity.shared
+        activity.begin()
+        defer { activity.end() }
+        var released = false
+        let waiter = Task { @MainActor in
+            try await activity.waitUntilIdle()
+            released = true
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(released)
+        activity.end()
+        try await waiter.value
+        XCTAssertTrue(released)
+    }
+
+    @MainActor
+    func testCancelledWaiterLeavesTheHold() async throws {
+        let activity = RecordingActivity.shared
+        activity.begin()
+        defer { activity.end() }
+        let waiter = Task { @MainActor in try await activity.waitUntilIdle() }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        waiter.cancel()
+        do {
+            try await waiter.value
+            XCTFail("a cancelled wait must throw")
+        } catch is CancellationError {}
+        XCTAssertTrue(activity.isRecording)
+    }
+
+    func testNotRecordingDoesNotWait() async throws {
+        try await RecordingActivity.shared.waitUntilIdle()
+    }
+}

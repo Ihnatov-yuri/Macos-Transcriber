@@ -19,8 +19,23 @@ final class RecordModel {
 
     var uiState: UIState = .idle
     var autoTranscribe: Bool { didSet { container.uiPrefs.autoTranscribe = autoTranscribe } }
-    var liveEnabled: Bool { didSet { container.uiPrefs.liveEnabled = liveEnabled } }
-    var liveEngine: BackendFactory.Kind { didSet { container.uiPrefs.liveEngine = liveEngine } }
+    /// Both reach a recording already running: Live switched on mid-meeting
+    /// used to do nothing until the next recording (only `beginRecording`
+    /// looked at it), which read as "live does not work".
+    var liveEnabled: Bool {
+        didSet {
+            container.uiPrefs.liveEnabled = liveEnabled
+            guard liveEnabled != oldValue else { return }
+            Task { @MainActor in await self.applyLiveToRunningSession(restart: false) }
+        }
+    }
+    var liveEngine: BackendFactory.Kind {
+        didSet {
+            container.uiPrefs.liveEngine = liveEngine
+            guard liveEngine != oldValue else { return }
+            Task { @MainActor in await self.applyLiveToRunningSession(restart: true) }
+        }
+    }
     var liveLanguages: Set<String> {
         didSet {
             container.uiPrefs.lastLanguages = liveLanguages
@@ -29,8 +44,7 @@ final class RecordModel {
         }
     }
     /// Meeting mode: capture system audio (the other participants, tapped
-    /// digitally) alongside the mic. Live transcription is unavailable in
-    /// this mode — the live worker feeds off WavRecorder's chunk stream.
+    /// digitally) alongside the mic. Live captions read the meeting mix.
     var meetingMode: Bool { didSet { UserDefaults.standard.set(meetingMode, forKey: "ui.meetingMode") } }
     /// Which recorder the CURRENT session started with (the toggle may move
     /// mid-recording; stop must go to the recorder that started).
@@ -180,27 +194,45 @@ final class RecordModel {
                 try await container.recorder.start()
             }
             uiState = .recording
+            RecordingActivity.shared.begin()
 
-            if liveEnabled {
-                liveWorker.attach(activeMeeting ? container.meetingRecorder : container.recorder)
-                liveWorker.clear()
-                await liveWorker.start(
-                    engine: liveEngine,
-                    languages: liveLanguages,
-                    translateTo: nil,
-                    modelDirectory: nil
-                )
-                // Stop can land while the live model is still loading: the
-                // session is gone (or going) by the time start returns, and
-                // the worker must not stay attached to a stopped recorder.
-                if isStopping || (uiState != .recording && uiState != .paused) {
-                    await liveWorker.stop()
-                }
-            }
+            liveWorker.clear()
+            if liveEnabled { await startLive(resetCaptions: true) }
         } catch {
             lastError = error.localizedDescription
             uiState = .idle
             activeMeeting = false
+        }
+    }
+
+    private var sessionRunning: Bool { uiState == .recording || uiState == .paused }
+
+    private func startLive(resetCaptions: Bool) async {
+        liveWorker.attach(activeMeeting ? container.meetingRecorder : container.recorder)
+        await liveWorker.start(
+            engine: liveEngine,
+            languages: liveLanguages,
+            translateTo: nil,
+            modelDirectory: nil,
+            resetCaptions: resetCaptions
+        )
+        // Stop can land while the live model is still loading: the
+        // session is gone (or going) by the time start returns, and
+        // the worker must not stay attached to a stopped recorder.
+        if isStopping || !sessionRunning || !liveEnabled {
+            await liveWorker.stop()
+        }
+    }
+
+    /// Live toggled, or its engine changed, while a recording runs. Earlier
+    /// captions stay on screen. `beginRecording` and `endRecording` own the
+    /// worker while they run.
+    private func applyLiveToRunningSession(restart: Bool) async {
+        guard sessionRunning, !isStarting, !isStopping else { return }
+        if liveEnabled {
+            if restart || liveWorker.status != .running { await startLive(resetCaptions: false) }
+        } else {
+            await liveWorker.stop()
         }
     }
 
@@ -209,7 +241,12 @@ final class RecordModel {
         // double-press must not run a second stop and save a duplicate row.
         guard !isStopping else { return }
         isStopping = true
-        defer { isStopping = false }
+        defer {
+            isStopping = false
+            // Held Super runs carry on (see RecordingActivity) — on every
+            // exit, failed stops included.
+            RecordingActivity.shared.end()
+        }
         lastError = nil
         await liveWorker.stop()
         do {

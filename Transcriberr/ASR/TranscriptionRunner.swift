@@ -217,6 +217,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
     ) async throws {
         AppLog.info("runner", "start \(params.file.lastPathComponent) backend=\(params.backend.rawValue) modelDir=\(params.modelDirectory?.path ?? "nil") diarize=\(params.diarize) hybrid=\(params.hybridDiarize) translate=\(params.translateTo ?? "—")")
+        try await holdWhileRecording(params, continuation: continuation)
 
         // ---------- decode + chunk ----------
         // Meeting recordings carry raw per-source tracks (<base>.mic.wav /
@@ -320,6 +321,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         }
 
         if prepareTimeline, let ens = backend as? EnsembleBackend {
+            try await holdWhileRecording(params, continuation: continuation)
             continuation.yield(.stage(text: "Reading the whole recording…", fraction: 0.15))
             var tracks: [(id: Int, samples: [Float])] = [(0, samples)]
             if let cleanedMic { tracks.append((1, cleanedMic)) }
@@ -530,6 +532,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                         return (idx, raw)
                     }
                 }
+                try await holdWhileRecording(params, continuation: continuation)
                 while submitted < min(pipelineWidth, chunks.count) { submit(submitted); submitted += 1 }
                 // Consume the finished in-order prefix as results arrive, so
                 // text appears while pass 1 runs. Consuming only after the
@@ -544,7 +547,11 @@ final class TranscriptionRunner: @unchecked Sendable {
                         text: "Chunk \(min(finished, chunks.count))/\(chunks.count)",
                         fraction: chunkBaseFraction + chunkSpan * Double(finished) / Double(max(chunks.count, 1))
                     ))
-                    if submitted < chunks.count { submit(submitted); submitted += 1 }
+                    if submitted < chunks.count {
+                        try await holdWhileRecording(params, continuation: continuation)
+                        submit(submitted)
+                        submitted += 1
+                    }
                     while let ready = pipelineResults.removeValue(forKey: nextToConsume) {
                         try Task.checkCancellation()
                         consume(nextToConsume, raw: ready)
@@ -556,6 +563,7 @@ final class TranscriptionRunner: @unchecked Sendable {
 
         for (idx, chunk) in chunks.enumerated() where pipelineWidth <= 1 {
             try Task.checkCancellation()
+            try await holdWhileRecording(params, continuation: continuation)
             let progress = chunkBaseFraction + chunkSpan * Double(idx) / Double(max(chunks.count, 1))
             continuation.yield(.stage(
                 text: "Chunk \(idx + 1)/\(chunks.count) (\(formatTime(chunk.startSeconds))–\(formatTime(chunk.endSeconds)))",
@@ -639,6 +647,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             AppLog.info("runner", "max-quality pass: \(disputes.count) disputed chunks of \(chunks.count)")
             for (k, idx) in disputes.enumerated() {
                 try Task.checkCancellation()
+                try await holdWhileRecording(params, continuation: continuation)
                 guard let info = rich[idx] else { continue }
                 let chunk = chunks[idx]
                 continuation.yield(.stage(
@@ -1047,6 +1056,7 @@ final class TranscriptionRunner: @unchecked Sendable {
 
         for (i, entry) in flagged.enumerated() {
             try Task.checkCancellation()
+            try await holdWhileRecording(params, continuation: continuation)
             let progress = 0.96 + 0.03 * Double(i) / Double(max(flagged.count, 1))
             continuation.yield(.stage(
                 text: "Refine \(i + 1)/\(flagged.count) — \(formatTime(entry.chunk.startSeconds))",
@@ -1147,6 +1157,20 @@ final class TranscriptionRunner: @unchecked Sendable {
     }
 
     // MARK: - Chunk loop with retry
+
+    /// Super is a background pass and holds while a recording is in
+    /// progress (see `RecordingActivity`); every other engine runs as before.
+    @MainActor
+    private func holdWhileRecording(
+        _ params: Params,
+        continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
+    ) async throws {
+        guard params.backend == .ensemble, RecordingActivity.shared.isRecording else { return }
+        AppLog.info("runner", "Super held — a recording is in progress")
+        continuation.yield(.stage(text: "Waiting for the recording to end…", fraction: -1))
+        try await RecordingActivity.shared.waitUntilIdle()
+        AppLog.info("runner", "Super carries on")
+    }
 
     @MainActor
     private func runChunkWithRetry(

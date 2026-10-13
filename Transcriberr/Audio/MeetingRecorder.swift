@@ -40,7 +40,7 @@ final class MeetingRecorder: @unchecked Sendable {
     private(set) var peakHistory: [Float] = Array(repeating: 0, count: 64)
     private var lastPublishMs: Int64 = 0
 
-    /// Live-caption chunk feed: same 5-second 16 kHz chunks WavRecorder
+    /// Live-caption chunk feed: same one-second 16 kHz chunks WavRecorder
     /// emits, cut from the converted output right before it hits the file.
     private var chunkContinuation: AsyncStream<WavRecorder.Chunk>.Continuation?
     private(set) var chunks: AsyncStream<WavRecorder.Chunk>
@@ -71,13 +71,14 @@ final class MeetingRecorder: @unchecked Sendable {
     /// recording of the app session onward. Exact mirror of the identical
     /// WavRecorder fix (v2.5.4), which this class never got.
 
-    /// Live captions consume these 5-second chunks in real time; if the
-    /// consumer falls behind (a file job holding the inference gate, a slow
-    /// engine), an unbounded stream grew ~320 KB per chunk for the whole
-    /// session and the captions fell further and further behind the audio.
-    /// Dropping the oldest backlog keeps captions near the live edge — the
-    /// transcript of record comes from the file, not from this feed.
-    static let liveChunkBacklog = 8
+    /// Live captions consume these one-second chunks in real time; if the
+    /// consumer falls behind (a stalled main thread), an unbounded stream
+    /// grew for the whole session and the captions fell further and further
+    /// behind the audio. Dropping the oldest backlog keeps captions near the
+    /// live edge — the transcript of record comes from the file, not from
+    /// this feed. The live worker only appends on arrival, so 40 s of slack
+    /// is never reached in normal use.
+    static let liveChunkBacklog = 40
 
     private func makeChunkStream() {
         var continuation: AsyncStream<WavRecorder.Chunk>.Continuation!

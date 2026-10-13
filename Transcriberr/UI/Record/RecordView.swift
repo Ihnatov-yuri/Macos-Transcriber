@@ -57,15 +57,13 @@ struct RecordView: View {
                     HairlineSoft()
                     Spacer().frame(height: AppMetric.m)
 
-                    timerStrip(model)
-                    waveform(model)
-                    waveformAxis(model)
+                    RecordMeter(model: model)
 
                     Spacer().frame(height: AppMetric.l)
                     HairlineSoft()
                     Spacer().frame(height: AppMetric.m)
 
-                    lastHeardCard(model)
+                    LivePanel(model: model)
                         .padding(.horizontal, AppMetric.sheetPadding)
 
                     Spacer().frame(height: AppMetric.xl)
@@ -117,109 +115,6 @@ struct RecordView: View {
         let engine = m.liveEngine.displayName
         let langs = m.liveLanguages.isEmpty ? "auto-detect" : m.liveLanguages.sorted().joined(separator: ", ")
         return "Live engine: \(engine). Language: \(langs)."
-    }
-
-    // MARK: - Timer + level
-
-    @ViewBuilder
-    private func timerStrip(_ m: RecordModel) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Hairline()
-            HStack(alignment: .top) {
-                BigNumber(formatElapsed(m.elapsedMs), size: 66)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(String(format: "%.0f dB", max(-60, 20 * log10(max(0.0001, Double(m.level))))))
-                        .font(AppFont.display(17, weight: .semibold))
-                        .tracking(0.2)
-                        .foregroundStyle(AppColor.ink)
-                    Text("Level · \(m.level > 0.6 ? "hot" : "clean")")
-                        .uiLabel(9, color: AppColor.ink2)
-                    Text("16 kHz · mono")
-                        .uiLabel(9, color: AppColor.ink3)
-                }
-            }
-            .padding(.horizontal, AppMetric.sheetPadding)
-            .padding(.vertical, AppMetric.sheetVerticalPadding)
-            Hairline()
-        }
-    }
-
-    // MARK: - Waveform
-
-    @ViewBuilder
-    private func waveform(_ m: RecordModel) -> some View {
-        // 64-bar rolling history from WavRecorder.peakHistory. Newest bar at
-        // the right gets the accent; older bars fade into a soft ink. Mirrors
-        // the Android record-screen meter rhythm.
-        GeometryReader { geo in
-            let bars = m.meetingActive ? m.container.meetingRecorder.peakHistory
-                                       : m.container.recorder.peakHistory
-            let cols = bars.count
-            let gap: CGFloat = 2
-            let barWidth = max(2, (geo.size.width - CGFloat(cols - 1) * gap) / CGFloat(cols))
-            HStack(alignment: .center, spacing: gap) {
-                ForEach(Array(bars.enumerated()), id: \.offset) { idx, peak in
-                    let isLast = idx == cols - 1
-                    // Perceptual (dB) scaling. Linear amplitude makes anything
-                    // below ~-30 dB collapse to the 2px floor (a flat dashed
-                    // line); mapping -60…0 dB onto 0…1 keeps speech visible.
-                    let db = 20 * log10(max(1e-4, Double(peak)))
-                    let normalized = max(0, min(1, CGFloat((db + 60) / 60)))
-                    let height = max(2, geo.size.height * 0.92 * normalized)
-                    Rectangle()
-                        .fill(isLast ? AppColor.accent : AppColor.ink.opacity(0.85))
-                        .frame(width: barWidth, height: height)
-                }
-            }
-            .frame(maxHeight: .infinity, alignment: .center)
-        }
-        .frame(height: 72)
-        .padding(.horizontal, AppMetric.sheetPadding)
-        .padding(.vertical, AppMetric.s)
-    }
-
-    @ViewBuilder
-    private func waveformAxis(_ m: RecordModel) -> some View {
-        HStack {
-            Text("−5 s").uiLabel(9, color: AppColor.ink2)
-            Spacer()
-            Text("\(formatElapsed(m.elapsedMs)) ▸ now").uiLabel(9)
-        }
-        .padding(.horizontal, AppMetric.sheetPadding)
-    }
-
-    // MARK: - Last heard
-
-    @ViewBuilder
-    private func lastHeardCard(_ m: RecordModel) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Last heard\(statusSuffix(m.liveWorker.status))")
-                .uiLabel(10, color: AppColor.ink2)
-
-            let last = m.liveWorker.lines.last
-            Text(last?.text ?? "Live captions will appear here while recording.")
-                .font(AppFont.text(22))
-                .lineSpacing(4)
-                .tracking(-0.2)
-                .foregroundStyle(last == nil ? AppColor.ink2 : AppColor.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            if let last {
-                Text("\(formatElapsed(Int64(last.startSeconds * 1000))) · live")
-                    .uiLabel(9, color: AppColor.ink3)
-            }
-        }
-    }
-
-    private func statusSuffix(_ s: LiveTranscriber.Status) -> String {
-        switch s {
-        case .idle:                return ""
-        case .loading:             return " · loading model"
-        case .running:             return " · live"
-        case .modelMissing(let b): return " · model missing (\(b))"
-        case .failed(let r):       return " · failed \(r)"
-        }
     }
 
     // MARK: - Options row
@@ -402,13 +297,200 @@ struct RecordView: View {
             }
         }
     }
+}
 
-    private func formatElapsed(_ ms: Int64) -> String {
-        let total = max(0, ms / 1000)
-        let h = total / 3600
-        let mins = (total % 3600) / 60
-        let secs = total % 60
-        if h > 0 { return String(format: "%d:%02d:%02d", h, mins, secs) }
-        return String(format: "%02d:%02d", mins, secs)
+private func formatElapsed(_ ms: Int64) -> String {
+    let total = max(0, ms / 1000)
+    let h = total / 3600
+    let mins = (total % 3600) / 60
+    let secs = total % 60
+    if h > 0 { return String(format: "%d:%02d:%02d", h, mins, secs) }
+    return String(format: "%02d:%02d", mins, secs)
+}
+
+// MARK: - Timer, level, waveform
+
+/// Its own view so the recorder's ~30 Hz level and waveform updates
+/// re-evaluate only this strip. Read inside `RecordView.body`, every tick
+/// rebuilt the whole sheet — options, footer and the live transcript.
+private struct RecordMeter: View {
+    let model: RecordModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            timerStrip
+            waveform
+            waveformAxis
+        }
+    }
+
+    private var timerStrip: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Hairline()
+            HStack(alignment: .top) {
+                BigNumber(formatElapsed(model.elapsedMs), size: 66)
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(String(format: "%.0f dB", max(-60, 20 * log10(max(0.0001, Double(model.level))))))
+                        .font(AppFont.display(17, weight: .semibold))
+                        .tracking(0.2)
+                        .foregroundStyle(AppColor.ink)
+                    Text("Level · \(model.level > 0.6 ? "hot" : "clean")")
+                        .uiLabel(9, color: AppColor.ink2)
+                    Text("16 kHz · mono")
+                        .uiLabel(9, color: AppColor.ink3)
+                }
+            }
+            .padding(.horizontal, AppMetric.sheetPadding)
+            .padding(.vertical, AppMetric.sheetVerticalPadding)
+            Hairline()
+        }
+    }
+
+    private var waveform: some View {
+        // 64-bar rolling history from the recorder's peakHistory. Newest bar
+        // at the right gets the accent; older bars fade into a soft ink.
+        GeometryReader { geo in
+            let bars = model.meetingActive ? model.container.meetingRecorder.peakHistory
+                                           : model.container.recorder.peakHistory
+            let cols = bars.count
+            let gap: CGFloat = 2
+            let barWidth = max(2, (geo.size.width - CGFloat(cols - 1) * gap) / CGFloat(cols))
+            HStack(alignment: .center, spacing: gap) {
+                ForEach(Array(bars.enumerated()), id: \.offset) { idx, peak in
+                    let isLast = idx == cols - 1
+                    // Perceptual (dB) scaling. Linear amplitude makes anything
+                    // below ~-30 dB collapse to the 2px floor (a flat dashed
+                    // line); mapping -60…0 dB onto 0…1 keeps speech visible.
+                    let db = 20 * log10(max(1e-4, Double(peak)))
+                    let normalized = max(0, min(1, CGFloat((db + 60) / 60)))
+                    let height = max(2, geo.size.height * 0.92 * normalized)
+                    Rectangle()
+                        .fill(isLast ? AppColor.accent : AppColor.ink.opacity(0.85))
+                        .frame(width: barWidth, height: height)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
+        }
+        .frame(height: 72)
+        .padding(.horizontal, AppMetric.sheetPadding)
+        .padding(.vertical, AppMetric.s)
+    }
+
+    private var waveformAxis: some View {
+        HStack {
+            Text("−5 s").uiLabel(9, color: AppColor.ink2)
+            Spacer()
+            Text("\(formatElapsed(model.elapsedMs)) ▸ now").uiLabel(9)
+        }
+        .padding(.horizontal, AppMetric.sheetPadding)
+    }
+}
+
+// MARK: - Live captions
+
+/// Everything said so far in this recording, grouped into paragraphs, with
+/// the phrase still being spoken in a lighter ink. Pinned to the newest
+/// line. Used to show only the newest five-second fragment.
+struct LivePanel: View {
+    let model: RecordModel
+
+    struct Paragraph: Identifiable {
+        let id: UUID
+        let startSeconds: Double
+        var endSeconds: Double
+        var text: String
+    }
+
+    /// Phrases closer than this join one paragraph…
+    static let joinGapSeconds = 1.5
+    /// …until it runs this long.
+    static let maxParagraphSeconds = 40.0
+
+    static func paragraphs(_ lines: [LiveTranscriber.LiveLine]) -> [Paragraph] {
+        var out: [Paragraph] = []
+        for line in lines {
+            if let last = out.last,
+               line.startSeconds - last.endSeconds < joinGapSeconds,
+               line.endSeconds - last.startSeconds < maxParagraphSeconds {
+                out[out.count - 1].text += " " + line.text
+                out[out.count - 1].endSeconds = line.endSeconds
+            } else {
+                out.append(Paragraph(id: line.id, startSeconds: line.startSeconds,
+                                     endSeconds: line.endSeconds, text: line.text))
+            }
+        }
+        return out
+    }
+
+    var body: some View {
+        let worker = model.liveWorker
+        var paragraphs = Self.paragraphs(worker.lines)
+        // The open phrase continues the last paragraph when it follows it
+        // closely; otherwise it starts its own row.
+        let partial = worker.partial
+        let partialJoins = partial.map { p in
+            paragraphs.last.map {
+                p.startSeconds - $0.endSeconds < Self.joinGapSeconds
+                    && p.endSeconds - $0.startSeconds < Self.maxParagraphSeconds
+            } ?? false
+        } ?? false
+        let tail = partialJoins ? paragraphs.popLast() : nil
+
+        return VStack(alignment: .leading, spacing: AppMetric.s) {
+            Text("Live\(statusSuffix(worker.status))")
+                .uiLabel(10, color: AppColor.ink2)
+
+            if paragraphs.isEmpty && tail == nil && partial == nil {
+                Text(model.liveEnabled
+                     ? "Live captions will appear here while recording."
+                     : "Live is off. Turn it on above to read along while you record.")
+                    .font(AppFont.text(17))
+                    .foregroundStyle(AppColor.ink3)
+                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: AppMetric.m) {
+                        ForEach(paragraphs) { p in
+                            row(p.startSeconds, Text(p.text))
+                        }
+                        if let tail, let partial {
+                            row(tail.startSeconds,
+                                Text("\(tail.text) \(Text(partial.text).foregroundStyle(AppColor.ink3))"))
+                        } else if let partial {
+                            row(partial.startSeconds, Text(partial.text).foregroundStyle(AppColor.ink3))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .frame(height: 380)
+            }
+        }
+    }
+
+    private func row(_ start: Double, _ text: Text) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: AppMetric.m) {
+            Text(formatElapsed(Int64(start * 1000)))
+                .uiLabel(9, color: AppColor.ink3)
+                .frame(width: 52, alignment: .leading)
+            text
+                .font(AppFont.text(17))
+                .lineSpacing(4)
+                .foregroundStyle(AppColor.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func statusSuffix(_ s: LiveTranscriber.Status) -> String {
+        switch s {
+        case .idle:                return ""
+        case .loading:             return " · loading model"
+        case .running:             return " · listening"
+        case .modelMissing(let b): return " · model missing (\(b))"
+        case .failed(let r):       return " · failed \(r)"
+        }
     }
 }

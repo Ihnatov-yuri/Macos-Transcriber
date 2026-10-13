@@ -438,7 +438,7 @@ struct LivePanel: View {
         let tail = partialJoins ? paragraphs.popLast() : nil
 
         return VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("Live\(statusSuffix(worker.status))")
+            Text("Live\(statusSuffix(worker.status, heardAudio: worker.heardAudio))")
                 .uiLabel(10, color: AppColor.ink2)
 
             if paragraphs.isEmpty && tail == nil && partial == nil {
@@ -484,11 +484,11 @@ struct LivePanel: View {
         }
     }
 
-    private func statusSuffix(_ s: LiveTranscriber.Status) -> String {
+    private func statusSuffix(_ s: LiveTranscriber.Status, heardAudio: Bool) -> String {
         switch s {
         case .idle:                return ""
         case .loading:             return " · loading model"
-        case .running:             return " · listening"
+        case .running:             return heardAudio ? " · listening" : " · waiting for audio"
         case .modelMissing(let b): return " · model missing (\(b))"
         case .failed(let r):       return " · failed \(r)"
         }

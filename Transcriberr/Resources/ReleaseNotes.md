@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.16.1
+- Switching Live off and on again during a recording works: captions carry on below the earlier text. Before, they stopped for the rest of the recording.
+- Live captions no longer stay empty when one reading of the audio gets stuck: a reading that takes longer than 10 seconds is dropped and the audio is read again.
+- The live panel says "waiting for audio" until the first sound arrives, and live reconnects to the recording by itself if nothing arrives within 5 seconds.
+
 ## 3.16.0
 - Live captions show the whole conversation while you record, not just the last few words. Text appears as it is spoken, in a lighter shade until the sentence is finished, and the panel keeps the newest line in view.
 - Live captions work in meetings again, and switching Live on during a recording starts it straight away. Before, the switch only took effect from the next recording.

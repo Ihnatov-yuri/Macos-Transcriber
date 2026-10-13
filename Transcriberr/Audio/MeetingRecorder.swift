@@ -42,8 +42,7 @@ final class MeetingRecorder: @unchecked Sendable {
 
     /// Live-caption chunk feed: same one-second 16 kHz chunks WavRecorder
     /// emits, cut from the converted output right before it hits the file.
-    private var chunkContinuation: AsyncStream<WavRecorder.Chunk>.Continuation?
-    private(set) var chunks: AsyncStream<WavRecorder.Chunk>
+    let liveFeed = LiveChunkFeed(backlog: MeetingRecorder.liveChunkBacklog)
     private var chunkBuffer: [Float] = []
     private var chunkTotal16k: Int64 = 0
 
@@ -60,16 +59,7 @@ final class MeetingRecorder: @unchecked Sendable {
     /// (and the mic track) is attenuated. Smoothed so it never pumps.
     private var micGain: Float = 1
 
-    init() {
-        chunks = AsyncStream<WavRecorder.Chunk> { _ in }
-        makeChunkStream()
-    }
-
-    /// `stop()` finishes the chunk continuation (an `AsyncStream` can't be
-    /// un-finished), so every `start()` needs a fresh stream — otherwise live
-    /// transcription silently stops working from the second meeting
-    /// recording of the app session onward. Exact mirror of the identical
-    /// WavRecorder fix (v2.5.4), which this class never got.
+    init() {}
 
     /// Live captions consume these one-second chunks in real time; if the
     /// consumer falls behind (a stalled main thread), an unbounded stream
@@ -79,12 +69,6 @@ final class MeetingRecorder: @unchecked Sendable {
     /// this feed. The live worker only appends on arrival, so 40 s of slack
     /// is never reached in normal use.
     static let liveChunkBacklog = 40
-
-    private func makeChunkStream() {
-        var continuation: AsyncStream<WavRecorder.Chunk>.Continuation!
-        self.chunks = AsyncStream<WavRecorder.Chunk>(bufferingPolicy: .bufferingNewest(Self.liveChunkBacklog)) { continuation = $0 }
-        self.chunkContinuation = continuation
-    }
 
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggID = AudioObjectID(kAudioObjectUnknown)
@@ -225,7 +209,7 @@ final class MeetingRecorder: @unchecked Sendable {
         let finalMs = finishCapture()
         let elapsed = await MainActor.run { () -> Int64 in
             if finalMs > 0 { elapsedMs = finalMs }
-            chunkContinuation?.finish()
+            liveFeed.finishAll()
             return elapsedMs
         }
         AppLog.info("meeting", "stopped after \(elapsed / 1000)s → \(fileURL?.lastPathComponent ?? "?")")
@@ -456,10 +440,7 @@ final class MeetingRecorder: @unchecked Sendable {
             self.meOpenAt = nil
             self.micGain = 1
         }
-        await MainActor.run {
-            makeChunkStream()
-            elapsedMs = 0
-        }
+        await MainActor.run { elapsedMs = 0 }
 
         // 4. IO callback on our serial queue.
         var pid: AudioDeviceIOProcID?
@@ -680,10 +661,7 @@ final class MeetingRecorder: @unchecked Sendable {
             let head = Array(chunkBuffer.prefix(chunkSize))
             chunkBuffer.removeFirst(chunkSize)
             let startSec = Double(chunkTotal16k - Int64(chunkBuffer.count) - Int64(chunkSize)) / WavRecorder.sampleRate
-            DispatchQueue.main.async { [weak self] in
-                self?.chunkContinuation?.yield(
-                    WavRecorder.Chunk(samples: head, startTimeSeconds: max(0, startSec)))
-            }
+            liveFeed.yield(WavRecorder.Chunk(samples: head, startTimeSeconds: max(0, startSec)))
         }
     }
 

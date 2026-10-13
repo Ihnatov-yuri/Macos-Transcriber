@@ -1,12 +1,69 @@
+import os
 import Foundation
 
 /// Anything that emits the recorder's one-second 16 kHz chunk feed. Lets the
 /// live worker consume the mic recorder OR the meeting recorder unchanged.
 protocol LiveChunkSource: AnyObject {
-    var chunks: AsyncStream<WavRecorder.Chunk> { get }
+    /// A new stream of the chunks from now on, for this subscriber alone.
+    func subscribeChunks() -> AsyncStream<WavRecorder.Chunk>
 }
-extension WavRecorder: LiveChunkSource {}
-extension MeetingRecorder: LiveChunkSource {}
+extension WavRecorder: LiveChunkSource {
+    func subscribeChunks() -> AsyncStream<WavRecorder.Chunk> { liveFeed.subscribe() }
+}
+extension MeetingRecorder: LiveChunkSource {
+    func subscribeChunks() -> AsyncStream<WavRecorder.Chunk> { liveFeed.subscribe() }
+}
+
+/// Fans a recorder's live chunks out, one `AsyncStream` per subscriber.
+///
+/// Until v3.16.1 each recorder had ONE stream for the whole recording, and
+/// cancelling the task that iterates an `AsyncStream` terminates the stream.
+/// So switching Live off mid-recording killed the feed for good: switched
+/// back on, live listened to a dead stream and never showed another word.
+/// Now stopping live ends only its own subscription.
+///
+/// Thread-safe: chunks are yielded on the recorder's IO queue, subscriptions
+/// come from the main actor, terminations from anywhere.
+final class LiveChunkFeed: @unchecked Sendable {
+    private let lock = NSLock()
+    private var subscribers: [Int: AsyncStream<WavRecorder.Chunk>.Continuation] = [:]
+    private var nextId = 0
+    private let backlog: Int
+
+    init(backlog: Int) { self.backlog = backlog }
+
+    func subscribe() -> AsyncStream<WavRecorder.Chunk> {
+        var continuation: AsyncStream<WavRecorder.Chunk>.Continuation!
+        let stream = AsyncStream<WavRecorder.Chunk>(bufferingPolicy: .bufferingNewest(backlog)) { continuation = $0 }
+        let id: Int = lock.withLock {
+            nextId += 1
+            subscribers[nextId] = continuation
+            return nextId
+        }
+        continuation.onTermination = { [weak self] _ in
+            guard let self else { return }
+            self.lock.withLock { _ = self.subscribers.removeValue(forKey: id) }
+        }
+        return stream
+    }
+
+    func yield(_ chunk: WavRecorder.Chunk) {
+        let targets = lock.withLock { Array(subscribers.values) }
+        for c in targets { c.yield(chunk) }
+    }
+
+    /// The recording ended: every subscriber's stream finishes.
+    func finishAll() {
+        let targets = lock.withLock { () -> [AsyncStream<WavRecorder.Chunk>.Continuation] in
+            defer { subscribers.removeAll() }
+            return Array(subscribers.values)
+        }
+        for c in targets { c.finish() }
+    }
+
+    var subscriberCount: Int { lock.withLock { subscribers.count } }
+}
+
 import Observation
 
 /// Live captions over the recorder's one-second chunk feed, phrase by phrase.
@@ -47,6 +104,9 @@ final class LiveTranscriber: @unchecked Sendable {
     private(set) var lines: [LiveLine] = []
     /// The phrase still being spoken, as last read; nil between phrases.
     private(set) var partial: LiveLine?
+    /// Audio has arrived in this session (the panel says "waiting for audio"
+    /// until it has).
+    private(set) var heardAudio = false
 
     private let factory: BackendFactory
     private weak var source: (any LiveChunkSource)?
@@ -71,8 +131,17 @@ final class LiveTranscriber: @unchecked Sendable {
     private var pendingStart: Double = 0
     /// `pending.count` at the last partial read.
     private var lastPartialRead = 0
-    /// A read loop is running; new audio only has to be appended.
-    private var reading = false
+    /// The session whose read loop is running; new audio for it only has to
+    /// be appended. Per session, so a read left hanging by an earlier
+    /// session can never keep a new one from reading.
+    private var readingSession: Int?
+
+    // Diagnostics: the heartbeat line in the log.
+    private var heardSeconds = 0.0
+    private var heardPeak: Float = 0
+    private var readCount = 0
+    private var lastReadMs = 0
+    private var nextHeartbeat = 30.0
 
     nonisolated static let sampleRate = 16_000
     /// 20 ms analysis frames for the pause finder.
@@ -88,6 +157,10 @@ final class LiveTranscriber: @unchecked Sendable {
     /// How long a read may wait for the inference gate (Gemma running for a
     /// background job) before this pass is skipped and retried later.
     nonisolated static let gatePatience: TimeInterval = 3
+    /// A read taking longer than this is abandoned; the audio is read again.
+    nonisolated static let readDeadline: TimeInterval = 10
+    /// No audio this long after start: subscribe to the recorder again.
+    nonisolated static let audioWatchdogSeconds: TimeInterval = 5
 
     init(factory: BackendFactory, recorder: any LiveChunkSource) {
         self.factory = factory
@@ -128,7 +201,19 @@ final class LiveTranscriber: @unchecked Sendable {
         streamsPartials = engine == .parakeet || engine == .parakeetV2
         status = .running
         AppLog.info("live", "started · \(engine.rawValue) · \(streamsPartials ? "streaming" : "phrase by phrase")")
-        let chunkStream = source.chunks
+        subscribe(to: source, session: token)
+        // Self-check: a session that hears nothing has lost its feed.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.audioWatchdogSeconds * 1_000_000_000))
+            guard let self, token == self.startToken, !self.heardAudio, let source = self.source else { return }
+            AppLog.warn("live", "no audio from the recorder after \(Int(Self.audioWatchdogSeconds)) s — subscribing again")
+            self.consumer?.cancel()
+            self.subscribe(to: source, session: token)
+        }
+    }
+
+    private func subscribe(to source: any LiveChunkSource, session token: Int) {
+        let chunkStream = source.subscribeChunks()
         consumer = Task { @MainActor [weak self] in
             for await chunk in chunkStream {
                 guard let self else { break }
@@ -147,6 +232,11 @@ final class LiveTranscriber: @unchecked Sendable {
         // on screen until the next session clears it.
         pending.removeAll()
         lastPartialRead = 0
+        heardAudio = false
+        heardSeconds = 0
+        heardPeak = 0
+        readCount = 0
+        nextHeartbeat = 30
         if status == .running || status == .loading {
             status = .idle
         }
@@ -161,15 +251,36 @@ final class LiveTranscriber: @unchecked Sendable {
 
     private func append(_ chunk: WavRecorder.Chunk, session: Int) {
         guard session == startToken else { return }
+        if !heardAudio {
+            heardAudio = true
+            AppLog.info("live", String(format: "first audio · chunk @%.1fs", chunk.startTimeSeconds))
+        }
+        noteHeard(chunk.samples)
         if pending.isEmpty { pendingStart = chunk.startTimeSeconds }
         pending.append(contentsOf: chunk.samples)
-        guard !reading else { return }
-        reading = true
+        guard readingSession != session else { return }
+        readingSession = session
         Task { @MainActor [weak self] in
             guard let self else { return }
             while session == self.startToken, await self.step(session: session) {}
-            self.reading = false
+            if self.readingSession == session { self.readingSession = nil }
         }
+    }
+
+    /// Every 30 s of audio: what live heard and did. When captions go quiet,
+    /// this line says whether audio arrived, how loud it was, and whether
+    /// the engine was reading.
+    private func noteHeard(_ samples: [Float]) {
+        heardSeconds += Double(samples.count) / Double(Self.sampleRate)
+        for s in samples { heardPeak = max(heardPeak, abs(s)) }
+        guard heardSeconds >= nextHeartbeat else { return }
+        nextHeartbeat += 30
+        AppLog.info("live", String(
+            format: "%.0f s heard · peak %.0f dB · %d reads (last %d ms) · %d lines · open phrase %.1f s%@",
+            heardSeconds, 20 * log10(max(1e-5, heardPeak)), readCount, lastReadMs, lines.count,
+            Double(pending.count) / Double(Self.sampleRate),
+            readingSession == nil ? "" : " · reading"))
+        heardPeak = 0
     }
 
     /// One unit of work on the open phrase. Returns false when there is
@@ -233,24 +344,33 @@ final class LiveTranscriber: @unchecked Sendable {
     private enum ReadResult { case text(String), silent, busy, gone }
 
     private func read(_ samples: [Float], backend: ASRBackend, session: Int) async -> ReadResult {
+        let languages = languages
+        let translateTo = translateTo
+        let started = Date()
         do {
             // Interactive with bounded patience, as dictation does: a Gemma
             // call from a background job must not leave captions minutes
-            // behind (see InferenceGate).
-            let text = try await InferenceGate.$interactive.withValue(true) {
-                try await InferenceGate.$patience.withValue(Self.gatePatience) {
-                    try await ParakeetBackend.$logsChunks.withValue(false) {
-                        try await backend.transcribeChunk(
-                            samples: samples,
-                            languages: languages,
-                            translateTo: translateTo,
-                            diarize: false,
-                            previousContext: nil,
-                            speakerHints: []
-                        )
+            // behind (see InferenceGate). Bounded in time as well: a read
+            // that never returns must not stop live for the rest of the
+            // recording.
+            let text = try await Self.withDeadline(Self.readDeadline) {
+                try await InferenceGate.$interactive.withValue(true) {
+                    try await InferenceGate.$patience.withValue(Self.gatePatience) {
+                        try await ParakeetBackend.$logsChunks.withValue(false) {
+                            try await backend.transcribeChunk(
+                                samples: samples,
+                                languages: languages,
+                                translateTo: translateTo,
+                                diarize: false,
+                                previousContext: nil,
+                                speakerHints: []
+                            )
+                        }
                     }
                 }
             }
+            readCount += 1
+            lastReadMs = Int(Date().timeIntervalSince(started) * 1000)
             // Stopped or restarted while this read was in flight: its text
             // belongs to a session that is gone.
             guard session == startToken else { return .gone }
@@ -259,12 +379,46 @@ final class LiveTranscriber: @unchecked Sendable {
         } catch is InferenceGate.Busy {
             AppLog.info("live", "engines busy — retrying with the next audio")
             return session == startToken ? .busy : .gone
+        } catch is ReadTimeout {
+            AppLog.warn("live", String(format: "a %.1f s read took over %.0f s — abandoned, reading again",
+                                       Double(samples.count) / Double(Self.sampleRate), Self.readDeadline))
+            return session == startToken ? .busy : .gone
         } catch {
             // Cancellation is Stop doing its job, not a failed read.
             if error is CancellationError || session != startToken { return .gone }
             // One failed read must not end the session.
             AppLog.warn("live", "read failed: \(error.localizedDescription)")
             return .silent
+        }
+    }
+
+    struct ReadTimeout: Error {}
+
+    /// Runs `op` and returns its result, or throws `ReadTimeout` after
+    /// `seconds` — without waiting for `op`, which may never return. A task
+    /// group would wait for it; this races two unstructured tasks instead.
+    nonisolated static func withDeadline<T: Sendable>(
+        _ seconds: TimeInterval,
+        _ op: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        let claimed = OSAllocatedUnfairLock(initialState: false)
+        @Sendable func claim() -> Bool { claimed.withLock { done in defer { done = true }; return !done } }
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+            let work = Task {
+                do {
+                    let value = try await op()
+                    if claim() { cont.resume(returning: value) }
+                } catch {
+                    if claim() { cont.resume(throwing: error) }
+                }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if claim() {
+                    work.cancel()
+                    cont.resume(throwing: ReadTimeout())
+                }
+            }
         }
     }
 

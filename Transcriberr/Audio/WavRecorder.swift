@@ -74,19 +74,10 @@ final class WavRecorder: @unchecked Sendable {
     /// froze at the pause point for the rest of the session.
     private var tickTask: Task<Void, Never>?
 
-    private var chunkContinuation: AsyncStream<Chunk>.Continuation?
-    private(set) var chunks: AsyncStream<Chunk>
+    /// Live-caption feed: one stream per subscriber (see `LiveChunkFeed`).
+    let liveFeed = LiveChunkFeed(backlog: WavRecorder.liveChunkBacklog)
 
-    init() {
-        chunks = AsyncStream<Chunk> { _ in }
-        makeChunkStream()
-    }
-
-    /// `stop()` permanently finishes the chunk continuation (an `AsyncStream`
-    /// can't be un-finished), so every `start()` needs a fresh stream —
-    /// otherwise live transcription silently stops working from the second
-    /// recording of the app session onward (yields into a finished
-    /// continuation are just dropped, no error).
+    init() {}
 
     /// Live captions consume these one-second chunks in real time; if the
     /// consumer falls behind (a stalled main thread), an unbounded stream
@@ -97,11 +88,6 @@ final class WavRecorder: @unchecked Sendable {
     /// is never reached in normal use.
     static let liveChunkBacklog = 40
 
-    private func makeChunkStream() {
-        var continuation: AsyncStream<Chunk>.Continuation!
-        self.chunks = AsyncStream<Chunk>(bufferingPolicy: .bufferingNewest(Self.liveChunkBacklog)) { continuation = $0 }
-        self.chunkContinuation = continuation
-    }
 
     // MARK: - Public API
 
@@ -167,7 +153,6 @@ final class WavRecorder: @unchecked Sendable {
             pauseBeganAt = nil
             level = 0
             peakHistory = Array(repeating: 0, count: 64)
-            makeChunkStream()
         }
         ioQueue.sync {
             chunkBuffer.removeAll(keepingCapacity: true)
@@ -557,7 +542,7 @@ final class WavRecorder: @unchecked Sendable {
         releaseVoiceProcessing()
         AppLog.info("recorder", "stopped: \(written) samples (\(String(format: "%.2f", duration))s) → \(url.path)")
         await MainActor.run {
-            chunkContinuation?.finish()
+            liveFeed.finishAll()
             openFileURL = nil
             state = .saved(file: url, durationSeconds: duration)
         }
@@ -801,9 +786,7 @@ final class WavRecorder: @unchecked Sendable {
             let head = Array(chunkBuffer.prefix(chunkSize))
             chunkBuffer.removeFirst(chunkSize)
             let startSec = Double(totalSamplesWritten - chunkBuffer.count - chunkSize) / Self.sampleRate
-            DispatchQueue.main.async { [weak self] in
-                self?.chunkContinuation?.yield(Chunk(samples: head, startTimeSeconds: max(0, startSec)))
-            }
+            liveFeed.yield(Chunk(samples: head, startTimeSeconds: max(0, startSec)))
         }
     }
 

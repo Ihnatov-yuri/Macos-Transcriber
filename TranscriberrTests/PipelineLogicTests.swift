@@ -479,4 +479,63 @@ final class LiveCaptionTests: XCTestCase {
     func testNotRecordingDoesNotWait() async throws {
         try await RecordingActivity.shared.waitUntilIdle()
     }
+
+    // MARK: - Live feed
+
+    private func chunk(_ t: Double) -> WavRecorder.Chunk {
+        WavRecorder.Chunk(samples: [Float](repeating: 0, count: 16), startTimeSeconds: t)
+    }
+
+    /// v3.16.0: Live off and on again within one recording showed nothing
+    /// more. Cancelling the consumer of the recorder's single stream had
+    /// terminated it for the rest of the recording.
+    func testLiveFeedSurvivesAConsumerBeingCancelled() async throws {
+        let feed = LiveChunkFeed(backlog: 8)
+        let first = Task { () -> Int in
+            var n = 0
+            for await _ in feed.subscribe() { n += 1 }
+            return n
+        }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        feed.yield(chunk(0))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        first.cancel()                       // Live switched off
+        _ = await first.value
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(feed.subscriberCount, 0, "a cancelled consumer must leave the feed")
+
+        let stream = feed.subscribe()        // Live switched back on
+        feed.yield(chunk(1))
+        feed.yield(chunk(2))
+        feed.finishAll()                     // recording stopped
+        var seen: [Double] = []
+        for await c in stream { seen.append(c.startTimeSeconds) }
+        XCTAssertEqual(seen, [1, 2])
+    }
+
+    func testLiveFeedReachesEverySubscriber() async {
+        let feed = LiveChunkFeed(backlog: 8)
+        let a = feed.subscribe(), b = feed.subscribe()
+        feed.yield(chunk(5))
+        feed.finishAll()
+        var na = 0, nb = 0
+        for await _ in a { na += 1 }
+        for await _ in b { nb += 1 }
+        XCTAssertEqual([na, nb], [1, 1])
+        XCTAssertEqual(feed.subscriberCount, 0)
+    }
+
+    func testDeadlineGivesUpOnACallThatNeverReturns() async throws {
+        let started = Date()
+        do {
+            _ = try await LiveTranscriber.withDeadline(0.1) { () -> Int in
+                try? await Task.sleep(nanoseconds: 60_000_000_000)   // ignores cancellation
+                return 1
+            }
+            XCTFail("the deadline must win")
+        } catch is LiveTranscriber.ReadTimeout {}
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        let v = try await LiveTranscriber.withDeadline(5) { 42 }
+        XCTAssertEqual(v, 42)
+    }
 }

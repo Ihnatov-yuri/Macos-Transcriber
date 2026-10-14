@@ -282,6 +282,7 @@ actor EnsembleBackend: ASRBackend {
     /// What the far side said (system track, both engines, timed): the
     /// reference the mic track's words are checked against for echo.
     private var farSide: [TimedWord] = []
+    private var trackWords: [Int: [TimedWord]] = [:]
 
     /// On for every language but English. Measured on the reference slices
     /// with everything else equal: Ukrainian 23.0 → 21.5% and 19.7 → 15.5%
@@ -312,7 +313,12 @@ actor EnsembleBackend: ASRBackend {
     func clearTimeline() {
         longForm = [:]
         farSide = []
+        trackWords = [:]
     }
+
+    /// Parakeet's whole-track readings (0 far side, 1 mic), sorted, for
+    /// turn timing in finalize. Empty unless this run read the timeline.
+    func wholeTrackWords() -> [Int: [TimedWord]] { trackWords }
 
     /// `onProgress` gets the Whisper readings' combined fraction (0…1) every
     /// few seconds: on a long meeting this step is most of the run (68 min
@@ -388,6 +394,7 @@ actor EnsembleBackend: ASRBackend {
             }
             longForm[id] = words
         }
+        trackWords = parakeetTracks.mapValues { $0.sorted { $0.start < $1.start } }
         if splitTracks {
             // The repaired far side too, not only the raw one: the mic's own
             // Whisper words are the repaired reading, so an English stretch

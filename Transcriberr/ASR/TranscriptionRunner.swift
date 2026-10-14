@@ -258,7 +258,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // an engine, and the user's speech survives crosstalk.
                 continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
                 let prepared = await Self.cancelEchoAndChunk(
-                    mic: &rawMic, sys: sysSamples, decoder: decoder, keepCleanedMic: prepareTimeline)
+                    mic: &rawMic, sys: sysSamples, decoder: decoder,
+                    keepCleanedMic: prepareTimeline || params.backend == .parakeet || params.backend == .parakeetV2)
                 cleanedMic = prepared.cleanedMic
                 chunks = prepared.chunks
                 micChunkIndices = prepared.micChunkIndices
@@ -753,6 +754,28 @@ final class TranscriptionRunner: @unchecked Sendable {
         // finish. The function itself is pure, so this costs nothing but a
         // hop. (`finalizeSegments` stays synchronous and directly callable,
         // because the unit tests drive it with crafted inputs.)
+        // Word timelines of both tracks for turn timing: Super's whole-track
+        // Parakeet readings, or for a Parakeet run one read here (seconds of
+        // ANE time per hour of meeting).
+        var timelines: [Int: [TimedWord]] = [:]
+        if splitTracks {
+            if let ens = backend as? EnsembleBackend {
+                timelines = await ens.wholeTrackWords()
+            } else if let parakeet = backend as? ParakeetBackend, let mic = cleanedMic {
+                continuation.yield(.stage(text: "Timing the turns…", fraction: 0.97))
+                for (id, track) in [(0, samples), (1, mic)] {
+                    do {
+                        timelines[id] = try await parakeet.transcribeTimed(samples: track, languages: params.languages)
+                            .words.sorted { $0.start < $1.start }
+                    } catch {
+                        AppLog.warn("runner", "turn timing: whole-track read failed on track \(id): \(error.localizedDescription)")
+                    }
+                }
+            }
+            cleanedMic = nil
+            if timelines.count < 2 { timelines = [:] }
+        }
+
         let segmentsToFinalize = allSegments
         let finalizeArgs = (
             diarize: params.diarize,
@@ -768,7 +791,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                 splitTracks: finalizeArgs.splitTracks,
                 expectedSpeakers: finalizeArgs.expectedSpeakers,
                 diarSegments: finalizeArgs.diarSegments,
-                myName: finalizeArgs.myName
+                myName: finalizeArgs.myName,
+                timelines: timelines
             )
         }.value
         continuation.yield(.stage(text: "Done.", fraction: 1.0))
@@ -786,7 +810,8 @@ final class TranscriptionRunner: @unchecked Sendable {
         splitTracks: Bool,
         expectedSpeakers: Int,
         diarSegments: [DiarizationRunner.SpeakerSegment],
-        myName: String?
+        myName: String?,
+        timelines: [Int: [TimedWord]] = [:]
     ) -> [RawSegment] {
         var segments = input
         // ---------- split-track echo guard ----------
@@ -859,6 +884,15 @@ final class TranscriptionRunner: @unchecked Sendable {
                 }
             }
             segments = withTails
+        }
+
+        // ---------- turn timing ----------
+        // Chunk spans → word spans, cut at pauses and far-side voice changes
+        // (see TurnTiming): replies follow what they answer, and a chunk
+        // with three voices in it is three turns, not one.
+        if splitTracks, !timelines.isEmpty {
+            segments = TurnTiming.retime(segments, timelines: timelines,
+                                         diarization: diarize ? diarSegments : [])
         }
 
         // ---------- finalize ----------

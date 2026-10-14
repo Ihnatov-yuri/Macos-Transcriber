@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.17.0
+- Meeting transcripts read in the order things were said. Your replies sit after the question they answer, and the other side's sentences are no longer cut in half by your lines. Before, both sides came in 26-second blocks that overlapped.
+- Several people on the other side of a call get separate turns. Before, everyone who spoke within the same 26 seconds was given one name.
+- On calls without headphones, fewer of the other side's words show up under your name, and runs like "So. So. So." or "Silence. Silence." are removed from your side.
+- Older meetings keep their transcript until you run Super on them again.
+
 ## 3.16.1
 - Switching Live off and on again during a recording works: captions carry on below the earlier text. Before, they stopped for the rest of the recording.
 - Live captions no longer stay empty when one reading of the audio gets stuck: a reading that takes longer than 10 seconds is dropped and the audio is read again.

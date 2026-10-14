@@ -69,6 +69,32 @@ final class TurnTimingTests: XCTestCase {
         XCTAssertEqual(out.map(\.text).joined(separator: " "), "And then the demo.")
     }
 
+    /// A mic chunk the mic's own reading has nothing for: its loops go even
+    /// though there is nothing to time it by (2026-10-14: "Silence. Silence.
+    /// Silence. Silence?" over speaker echo, 26 s each).
+    func testUnalignedMicLoopIsDropped() {
+        let out = TurnTiming.retime(
+            [seg(860, 886, "Silence. Silence. Silence. Silence?", "ME"),
+             seg(890, 916, "Hello. Hello. Hello. Hello.", "ME")],
+            timelines: [0: line("x", from: 0), 1: line("unrelated words", from: 100)], diarization: [])
+        XCTAssertTrue(out.isEmpty, "got \(out.map(\.text))")
+    }
+
+    /// A stray "Silence." between real words goes when the mic did not hear it.
+    func testStraySilenceWordIsDropped() {
+        let mic = line("yeah right", from: 650)
+        let out = TurnTiming.retime([seg(640, 666, "yeah. Right. Silence.", "ME")],
+                                    timelines: [0: line("x", from: 0), 1: mic], diarization: [])
+        XCTAssertEqual(out.map(\.text), ["yeah. Right."])
+    }
+
+    /// The far side keeps an unaligned chunk exactly as it was.
+    func testFarSideUnalignedLoopIsLeftAlone() {
+        let out = TurnTiming.retime([seg(0, 26, "Go go go go!", "GUEST")],
+                                    timelines: [0: line("x", from: 100), 1: []], diarization: [])
+        XCTAssertEqual(out.map(\.text), ["Go go go go!"])
+    }
+
     func testAnchoredRepeatsSurvive() {
         let mic = line("no no no that is wrong", from: 2)
         let out = TurnTiming.retime([seg(0, 26, "No, no, no, that is wrong.", "ME")],
@@ -87,6 +113,79 @@ final class TurnTimingTests: XCTestCase {
             timelines: [0: far, 1: mic], diarization: [])
         let me = out.filter { $0.speakerKey == "ME" }.map(\.text).joined(separator: " ")
         XCTAssertEqual(me, "Have seventeen.")
+    }
+
+    /// "We are" between pauses on the mic, timed on the far side's "we're"
+    /// (Landal interview, 86.6 s): echo, though the words differ.
+    func testShortEchoPieceWithContractionIsDropped() {
+        let far = line("landau we're looking for", from: 85.4)
+        let mic = line("a blessing", from: 77) + line("we are", from: 86.0)
+        let out = TurnTiming.retime([seg(75, 103, "A blessing. We are", "ME")],
+                                    timelines: [0: far, 1: mic], diarization: [])
+        XCTAssertEqual(out.map(\.text), ["A blessing."])
+    }
+
+    /// One word the far side says in the same second is not echo on its own.
+    func testSingleSharedEdgeWordStays() {
+        let far = line("it's easy to commute", from: 76.5)
+        let mic = line("it's a blessing and a curse", from: 76.6)
+        let out = TurnTiming.retime([seg(75, 103, "It's a blessing and a curse.", "ME")],
+                                    timelines: [0: far, 1: mic], diarization: [])
+        XCTAssertEqual(out.map(\.text), ["It's a blessing and a curse."])
+    }
+
+    /// The far side's last words before the reply come off the reply.
+    func testEchoedLeadInIsTrimmed() {
+        let far = line("what is your experience there", from: 320)
+        let mic = line("your experience there", from: 320.9) + line("well I have a degree", from: 322.3)
+        let out = TurnTiming.retime([seg(310, 336, "Your experience there? Well, I have a degree.", "ME")],
+                                    timelines: [0: far, 1: mic], diarization: [])
+        XCTAssertEqual(out.map(\.text), ["Well, I have a degree."])
+    }
+
+    /// Parakeet writes "have17"; the merged text has "have 17".
+    func testGluedNumberAligns() {
+        let mic = line("I have17 years", from: 115)
+        let out = TurnTiming.retime([seg(102, 128, "I have 17 years.", "ME")],
+                                    timelines: [0: line("x", from: 0), 1: mic], diarization: [])
+        XCTAssertEqual(out.first?.startSeconds ?? 0, 115, accuracy: 0.01)
+    }
+
+    /// An unaligned mic line that is the far side's words is dropped.
+    func testUnalignedMicEchoIsDropped() {
+        let far = line("so tell me about your background", from: 104)
+        let out = TurnTiming.retime([seg(102, 128, "tell me about your background", "ME")],
+                                    timelines: [0: far, 1: line("nothing alike", from: 110)], diarization: [])
+        XCTAssertTrue(out.isEmpty)
+    }
+
+    /// On speakers, the recorder's mic-dominance timeline decides: a long
+    /// mic piece covered only by a 0.3 s blip is invented, a covered one is
+    /// the user, and a short reply near an interval survives.
+    func testMicSpeechTimelineFiltersUnspokenPieces() {
+        let micSpeech: [ClosedRange<Double>] = [300.8...302.9, 304.3...311.5, 1144.8...1145.1, 1500.2...1500.5]
+        XCTAssertTrue(TurnTiming.isSpoken(300.6, 314.1, micSpeech: micSpeech))
+        XCTAssertFalse(TurnTiming.isSpoken(1140.4, 1164.6, micSpeech: micSpeech))
+        XCTAssertTrue(TurnTiming.isSpoken(1500.9, 1501.3, micSpeech: micSpeech), "short reply just after an interval")
+        XCTAssertFalse(TurnTiming.isSpoken(1700, 1701, micSpeech: micSpeech))
+
+        let mic = line("sure I'm Yuri technical project manager", from: 301)
+        let out = TurnTiming.retime(
+            [seg(296, 322, "Sure, I'm Yuri, technical project manager.", "ME"),
+             seg(2390, 2417, "Hello, I'm Joe. Hello, I'm Joe.", "ME")],
+            // As on the real call, the mic's own reading has none of the
+            // invented line, so it keeps its 27 s chunk span.
+            timelines: [0: line("x", from: 0), 1: mic + line("mm", from: 2391)], diarization: [],
+            micSpeech: micSpeech + [2391.2...2391.6])
+        XCTAssertEqual(out.map(\.text), ["Sure, I'm Yuri, technical project manager."])
+    }
+
+    /// Without a timeline (headphones: no echo found) nothing is filtered.
+    func testNoMicSpeechTimelineKeepsEverything() {
+        let mic = line("one two three four five six", from: 10, step: 1)
+        let out = TurnTiming.retime([seg(0, 26, "One two three four five six.", "ME")],
+                                    timelines: [0: line("x", from: 100), 1: mic], diarization: [], micSpeech: nil)
+        XCTAssertEqual(out.count, 1)
     }
 
     func testWithoutTimelinesNothingChanges() {

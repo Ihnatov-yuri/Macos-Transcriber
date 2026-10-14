@@ -190,12 +190,15 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// exists, and the peak is three.
     private nonisolated static func cancelEchoAndChunk(
         mic: inout [Float], sys: [Float], decoder: AudioDecoder, keepCleanedMic: Bool = false
-    ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double, cleanedMic: [Float]?) {
+    ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double, cleanedMic: [Float]?, micHadEcho: Bool) {
         let micChunks: [AudioDecoder.Chunk]
         let micDur: Double
         var keptMic: [Float]?
+        let micHadEcho: Bool
         do {
-            let cleanedMic = EchoCanceller.cancel(mic: mic, ref: sys)
+            let aec = EchoCanceller.cancelDetailed(mic: mic, ref: sys)
+            let cleanedMic = aec.samples
+            micHadEcho = aec.outcome != .noEcho
             mic = []
             (micChunks, micDur) = decoder.chunk(samples: cleanedMic)
             if keepCleanedMic { keptMic = cleanedMic }
@@ -207,7 +210,8 @@ final class TranscriptionRunner: @unchecked Sendable {
             tagged.map(\.0),
             Set(tagged.enumerated().compactMap { $1.1 ? $0 : nil }),
             max(micDur, sysDur),
-            keptMic
+            keptMic,
+            micHadEcho
         )
     }
 
@@ -235,6 +239,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         let duration: Double
         var micChunkIndices: Set<Int> = []
         var cleanedMic: [Float]?
+        var micHadEcho = false
         // Whole-track readings before pass 1 (see EnsembleBackend.prepareTimeline):
         // long-form Whisper for non-English, the far side's timeline for
         // echo-by-timing in split-track meetings. Max quality path only.
@@ -261,6 +266,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                     mic: &rawMic, sys: sysSamples, decoder: decoder,
                     keepCleanedMic: prepareTimeline || params.backend == .parakeet || params.backend == .parakeetV2)
                 cleanedMic = prepared.cleanedMic
+                micHadEcho = prepared.micHadEcho
                 chunks = prepared.chunks
                 micChunkIndices = prepared.micChunkIndices
                 samples = sysSamples          // diarization sees only the others
@@ -775,6 +781,22 @@ final class TranscriptionRunner: @unchecked Sendable {
             cleanedMic = nil
             if timelines.count < 2 { timelines = [:] }
         }
+        // When the mic heard the speakers, the recorder's mic-dominance
+        // timeline (<file>.me.json) says when the user really spoke; mic
+        // pieces outside it are echo residue and what Whisper invents over it.
+        var micSpeech: [ClosedRange<Double>]? = nil
+        if splitTracks, micHadEcho, !timelines.isEmpty {
+            let sidecar = params.file.deletingPathExtension().appendingPathExtension("me.json")
+            if let data = try? Data(contentsOf: sidecar),
+               let intervals = try? JSONDecoder().decode([[Double]].self, from: data) {
+                micSpeech = intervals.compactMap { $0.count == 2 && $0[0] <= $0[1] ? $0[0]...$0[1] : nil }
+            }
+        }
+
+        FinalizeDump.saveIfRequested(FinalizeDump(
+            segments: allSegments, diarize: params.diarize, splitTracks: splitTracks,
+            expectedSpeakers: params.expectedSpeakers, diarSegments: diarSegments,
+            myName: myNameSetting.isEmpty ? nil : myNameSetting, timelines: timelines, micSpeech: micSpeech))
 
         let segmentsToFinalize = allSegments
         let finalizeArgs = (
@@ -792,7 +814,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                 expectedSpeakers: finalizeArgs.expectedSpeakers,
                 diarSegments: finalizeArgs.diarSegments,
                 myName: finalizeArgs.myName,
-                timelines: timelines
+                timelines: timelines,
+                micSpeech: micSpeech
             )
         }.value
         continuation.yield(.stage(text: "Done.", fraction: 1.0))
@@ -811,7 +834,8 @@ final class TranscriptionRunner: @unchecked Sendable {
         expectedSpeakers: Int,
         diarSegments: [DiarizationRunner.SpeakerSegment],
         myName: String?,
-        timelines: [Int: [TimedWord]] = [:]
+        timelines: [Int: [TimedWord]] = [:],
+        micSpeech: [ClosedRange<Double>]? = nil
     ) -> [RawSegment] {
         var segments = input
         // ---------- split-track echo guard ----------
@@ -892,7 +916,8 @@ final class TranscriptionRunner: @unchecked Sendable {
         // with three voices in it is three turns, not one.
         if splitTracks, !timelines.isEmpty {
             segments = TurnTiming.retime(segments, timelines: timelines,
-                                         diarization: diarize ? diarSegments : [])
+                                         diarization: diarize ? diarSegments : [],
+                                         micSpeech: micSpeech)
         }
 
         // ---------- finalize ----------

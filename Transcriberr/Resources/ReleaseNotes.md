@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.17.1
+- On calls without headphones, your side of the transcript keeps only what you actually said. Whisper no longer fills the quiet stretches of your microphone with invented sentences ("Hello, I'm Joe", "Welcome to the music hall") or repeated words ("Silence. Silence.").
+- Short echoes of the other person ("We are", "have 17") no longer appear under your name and no longer stretch your line across their answer.
+- Your own first words stay when the other person happens to say the same word at the same moment.
+
 ## 3.17.0
 - Meeting transcripts read in the order things were said. Your replies sit after the question they answer, and the other side's sentences are no longer cut in half by your lines. Before, both sides came in 26-second blocks that overlapped.
 - Several people on the other side of a call get separate turns. Before, everyone who spoke within the same 26 seconds was given one name.

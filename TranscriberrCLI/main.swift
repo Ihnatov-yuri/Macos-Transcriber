@@ -548,6 +548,30 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     }
 }
 
+/// Replays finalize on inputs a run saved with TRANSCRIBERR_DUMP_FINALIZE.
+@MainActor
+func cmdRefinalize(path: String) -> Int32 {
+    let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+    guard let data = try? Data(contentsOf: url),
+          let dump = try? JSONDecoder().decode(FinalizeDump.self, from: data) else {
+        print("cannot read finalize dump at \(url.path)"); return 1
+    }
+    let prompts = PromptStore()
+    let runner = TranscriptionRunner(
+        factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore()),
+        prompts: prompts, diarization: DiarizationRunner())
+    let out = runner.finalizeSegments(
+        dump.rawSegments, diarize: dump.diarize, splitTracks: dump.splitTracks,
+        expectedSpeakers: dump.expectedSpeakers, diarSegments: dump.diarSegments,
+        myName: dump.myName,
+        timelines: ProcessInfo.processInfo.environment["TRANSCRIBERR_NO_TIMING"] == "1" ? [:] : dump.timedTimelines,
+        micSpeech: dump.micSpeechRanges)
+    for s in out {
+        print(String(format: "%.1f\t%.1f\t", s.startSeconds, s.endSeconds) + "\(s.speakerKey ?? "?")\t\(s.text)")
+    }
+    return 0
+}
+
 /// Whisper language detection over sliding windows of a file (experiment:
 /// can it find the English stretches inside a Ukrainian meeting?).
 @MainActor
@@ -679,6 +703,9 @@ func main() async -> Int32 {
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
     case "gentest":
         return await cmdGenTest()
+    case "refinalize":
+        guard args.count > 2 else { usage(); return 64 }
+        return cmdRefinalize(path: args[2])
     case "run":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdRun(

@@ -28,6 +28,23 @@ enum TurnTiming {
     /// track's own reading is a decoder loop ("So. So. So. So.", "Silence.
     /// Silence.") — Whisper writes them over echo residue on the mic.
     static let loopRun = 3
+    /// Slack around the recorder's mic-dominance intervals for short pieces:
+    /// they open on energy, a little after the first syllable.
+    static let micSpeechPad = 1.0
+    /// Pieces at least this long must be this much covered by the intervals.
+    /// 2026-10-14 call on speakers: the user's real lines were 59-64%
+    /// covered, Whisper's inventions over echo residue (26 s unanchored
+    /// chunks, "Hello, I'm Joe" x8) under 5% — single 0.3 s blips.
+    static let longPieceSeconds = 3.0
+    static let minSpeechCoverage = 0.25
+
+    static func isSpoken(_ a: Double, _ b: Double, micSpeech: [ClosedRange<Double>]) -> Bool {
+        if b - a < longPieceSeconds {
+            return micSpeech.contains { $0.upperBound + micSpeechPad > a && $0.lowerBound - micSpeechPad < b }
+        }
+        let covered = micSpeech.reduce(0.0) { $0 + max(0, min(b, $1.upperBound) - max(a, $1.lowerBound)) }
+        return covered >= minSpeechCoverage * (b - a)
+    }
 
     struct Token {
         var surface: String
@@ -44,11 +61,16 @@ enum TurnTiming {
     static func retime(
         _ segments: [RawSegment],
         timelines: [Int: [TimedWord]],
-        diarization: [DiarizationRunner.SpeakerSegment]
+        diarization: [DiarizationRunner.SpeakerSegment],
+        micSpeech: [ClosedRange<Double>]? = nil
     ) -> [RawSegment] {
         guard !timelines.isEmpty else { return segments }
         var out: [RawSegment] = []
-        var loopsDropped = 0, echoDropped = 0, split = 0
+        var loopsDropped = 0, echoDropped = 0, split = 0, unspoken = 0
+        func spoken(_ a: Double, _ b: Double) -> Bool {
+            guard let micSpeech else { return true }
+            return isSpoken(a, b, micSpeech: micSpeech)
+        }
         for seg in segments {
             let isMe = seg.speakerKey == "ME"
             guard let line = timelines[isMe ? 1 : 0], !line.isEmpty else { out.append(seg); continue }
@@ -56,10 +78,27 @@ enum TurnTiming {
             guard !tokens.isEmpty else { out.append(seg); continue }
             let candidates = wordsNear(line, from: seg.startSeconds - 1, to: seg.endSeconds + 1)
             align(&tokens, to: candidates)
-            guard tokens.contains(where: \.anchored) else { out.append(seg); continue }
+            guard tokens.contains(where: \.anchored) else {
+                // Nothing to time it by: keep the chunk span, but the mic's
+                // own reading not hearing these words is the second signal
+                // that loops and stock words over residue are phantoms.
+                guard isMe else { out.append(seg); continue }
+                if !spoken(seg.startSeconds, seg.endSeconds) { unspoken += tokens.count; continue }
+                if let far = timelines[0], isEcho(tokens, farWords: wordsNear(far, from: seg.startSeconds - 1, to: seg.endSeconds + 1)) {
+                    echoDropped += tokens.count
+                    continue
+                }
+                let kept = dropPhantoms(tokens)
+                loopsDropped += tokens.count - kept.count
+                if kept.isEmpty { continue }
+                var s = seg
+                s.text = kept.map(\.surface).joined(separator: " ")
+                out.append(s)
+                continue
+            }
             interpolate(&tokens)
             let before = tokens.count
-            tokens = dropUnanchoredLoops(tokens)
+            tokens = isMe ? dropPhantoms(tokens) : dropUnanchoredLoops(tokens)
             loopsDropped += before - tokens.count
             if isMe, let far = timelines[0], !far.isEmpty {
                 // Echo by timing, as Super does per chunk: the far side's
@@ -73,7 +112,14 @@ enum TurnTiming {
             guard !tokens.isEmpty else { continue }
             let pieces = cut(tokens, speaker: seg.speakerKey, isMe: isMe, diarization: diarization)
             split += pieces.count - 1
-            for p in pieces {
+            for var p in pieces {
+                if isMe, let far = timelines[0] {
+                    let n = p.tokens.count
+                    p.tokens = withoutEchoEdges(p.tokens, farSide: far)
+                    echoDropped += n - p.tokens.count
+                    if p.tokens.isEmpty { continue }
+                    if !spoken(p.tokens.first!.start, p.tokens.last!.end) { unspoken += p.tokens.count; continue }
+                }
                 var s = seg
                 s.startSeconds = p.tokens.first!.start
                 s.endSeconds = max(p.tokens.last!.end, s.startSeconds + 0.1)
@@ -82,8 +128,8 @@ enum TurnTiming {
                 out.append(s)
             }
         }
-        if split > 0 || loopsDropped > 0 || echoDropped > 0 {
-            AppLog.info("runner", "turn timing: \(segments.count) chunk segments → \(out.count) timed pieces, \(loopsDropped) looped and \(echoDropped) echoed words dropped")
+        if split > 0 || loopsDropped > 0 || echoDropped > 0 || unspoken > 0 {
+            AppLog.info("runner", "turn timing: \(segments.count) chunk segments → \(out.count) timed pieces, \(loopsDropped) looped, \(echoDropped) echoed and \(unspoken) unspoken mic words dropped")
         }
         return out.sorted { $0.startSeconds < $1.startSeconds }
     }
@@ -100,6 +146,20 @@ enum TurnTiming {
         String(s.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init))
     }
 
+    /// Parakeet glues a number to the word before it ("have17", "Europe12")
+    /// where the merged text has two words; split them so both align.
+    static func splitGlued(_ words: [TimedWord]) -> [TimedWord] {
+        words.flatMap { w -> [TimedWord] in
+            let n = w.word.norm
+            guard let cut = n.firstIndex(where: \.isNumber), cut != n.startIndex,
+                  n[cut...].allSatisfy(\.isNumber), n[..<cut].allSatisfy(\.isLetter) else { return [w] }
+            let head = String(n[..<cut]), tail = String(n[cut...])
+            let mid = w.start + (w.end - w.start) * Double(head.count) / Double(n.count)
+            return [TimedWord(word: ScoredWord(surface: head, norm: head, confidence: w.word.confidence), start: w.start, end: mid),
+                    TimedWord(word: ScoredWord(surface: tail, norm: tail, confidence: w.word.confidence), start: mid, end: w.end)]
+        }
+    }
+
     /// Timeline words whose midpoint falls in [from, to). `line` is sorted.
     static func wordsNear(_ line: [TimedWord], from: Double, to: Double) -> [TimedWord] {
         var lo = 0, hi = line.count
@@ -111,7 +171,7 @@ enum TurnTiming {
             if mid >= from && mid < to { out.append(line[k]) }
             k += 1
         }
-        return out
+        return splitGlued(out)
     }
 
     /// Longest common subsequence on normalized words (near-equal spellings
@@ -178,6 +238,15 @@ enum TurnTiming {
         }
     }
 
+    /// Words Whisper writes over near-silence that nobody says in a meeting
+    /// unless the mic's own reading also has them.
+    static let phantomWords: Set<String> = ["silence"]
+
+    /// Mic only: unanchored loops and unanchored stock words.
+    static func dropPhantoms(_ tokens: [Token]) -> [Token] {
+        dropUnanchoredLoops(tokens).filter { $0.anchored || !phantomWords.contains($0.norm) }
+    }
+
     static func dropUnanchoredLoops(_ tokens: [Token]) -> [Token] {
         var keep = [Bool](repeating: true, count: tokens.count)
         var i = 0
@@ -201,6 +270,64 @@ enum TurnTiming {
         }
         let kept = Set(EnsembleBackend.echoFiltered(timed, farSide: farSide).map { Int($0.word.confidence) })
         return tokens.indices.filter { kept.contains($0) }.map { tokens[$0] }
+    }
+
+    /// A mic piece (cut at pauses) this much of which is the far side's
+    /// words at the same moment is the far side heard again. Runs of two
+    /// count here, unlike `echoFiltered`'s three inside a line: a piece is
+    /// already bounded by silence, so "We are" alone between pauses, timed
+    /// on the far side's "We are", is not the user talking.
+    static let echoPieceShare = 0.7
+    static let echoTolerance = 1.0
+
+    /// Which tokens are the far side's words at the same moment. Near
+    /// spellings count, and so do two tokens the far reading wrote as one
+    /// ("we are" / "we're"): the two engines and the two tracks disagree on
+    /// both, and the mic hears the far side ~0.3 s late.
+    static func echoFlags(_ tokens: [Token], farSide: [TimedWord]) -> [Bool] {
+        guard let first = tokens.first, let last = tokens.last else { return [] }
+        let near = wordsNear(farSide, from: first.start - 2, to: last.end + 2)
+        func hit(_ norm: String, at mid: Double) -> Bool {
+            near.contains { abs(($0.start + $0.end) / 2 - mid) <= echoTolerance && similar(norm, $0.word.norm) }
+        }
+        var flags = [Bool](repeating: false, count: tokens.count)
+        for i in tokens.indices where !tokens[i].norm.isEmpty {
+            if hit(tokens[i].norm, at: (tokens[i].start + tokens[i].end) / 2) { flags[i] = true; continue }
+            if i + 1 < tokens.count,
+               hit(tokens[i].norm + tokens[i + 1].norm, at: (tokens[i].start + tokens[i + 1].end) / 2) {
+                flags[i] = true; flags[i + 1] = true
+            }
+        }
+        return flags
+    }
+
+    /// A mic piece mostly made of the far side's words goes whole; otherwise
+    /// echoed words at its edges go — the far side's last words before the
+    /// user answers, and its first words after.
+    static func withoutEchoEdges(_ tokens: [Token], farSide: [TimedWord]) -> [Token] {
+        let flags = echoFlags(tokens, farSide: farSide)
+        let content = tokens.indices.filter { !tokens[$0].norm.isEmpty }
+        guard !content.isEmpty else { return tokens }
+        let share = Double(content.filter { flags[$0] }.count) / Double(content.count)
+        if content.count >= 2 && share >= echoPieceShare { return [] }
+        // Only runs of two or more: one shared word ("It's", "yeah") at the
+        // same second is as often both people talking as it is echo.
+        var lo = 0, hi = tokens.count
+        while lo < hi, flags[lo] { lo += 1 }
+        if lo < 2 { lo = 0 }
+        while hi > lo, flags[hi - 1] { hi -= 1 }
+        if tokens.count - hi < 2 { hi = tokens.count }
+        return lo < hi ? Array(tokens[lo..<hi]) : []
+    }
+
+    /// An unaligned mic line whose words are, in order, the far side's words
+    /// from the same stretch (the user said none of it).
+    static func isEcho(_ tokens: [Token], farWords: [TimedWord]) -> Bool {
+        let content = tokens.filter { !$0.norm.isEmpty }
+        guard content.count >= 2, !farWords.isEmpty else { return false }
+        var probe = content
+        align(&probe, to: farWords)
+        return Double(probe.filter(\.anchored).count) / Double(content.count) >= echoPieceShare
     }
 
     struct Piece {

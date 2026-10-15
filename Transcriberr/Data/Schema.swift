@@ -46,6 +46,8 @@ final class Recording {
     /// JSON [WordDispute]: the words Super's two engines read differently
     /// in the latest run (nil for other engines). See `DisputeIndex`.
     var disputesJSON: String?
+    /// JSON MeetingContext: the calendar invite the latest run used.
+    var meetingContextJSON: String?
 
     @Relationship(deleteRule: .cascade, inverse: \Segment.recording)
     var segments: [Segment] = []

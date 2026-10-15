@@ -27,6 +27,7 @@ func usage() {
       transcriberrcli decode <file>        decode to 16k mono Float32 and chunk it
       transcriberrcli noisesup <file>      run the offline noise-suppression pass
       transcriberrcli transcribe <file>    Parakeet v3 ASR on any audio file (downloads models on first run)
+      transcriberrcli context <when|file> [minutes]  the calendar invite a recording at that time would use
       transcriberrcli vocab <file.txt> [Language]
                                             dry-run the vocabulary spelling pass on a transcript
                                             (app vocabulary; prints every change)
@@ -517,18 +518,34 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     }
     // The CLI has its own defaults domain; borrow the app's vocabulary so a
     // headless run biases and votes exactly as the app would.
-    if let app = UserDefaults(suiteName: "nl.ihnatov.Transcriberr") {
+    // TRANSCRIBERR_NO_VOCAB=1: run as a user with no vocabulary at all (to
+    // measure what a meeting context alone brings).
+    if ProcessInfo.processInfo.environment["TRANSCRIBERR_NO_VOCAB"] == "1" {
+        for key in ["prompt.vocabulary", "prompt.vocabulary.byLang", DisputeLearning.key] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    } else if let app = UserDefaults(suiteName: "nl.ihnatov.Transcriberr") {
         for key in ["prompt.vocabulary", "prompt.vocabulary.byLang"] {
             if let v = app.string(forKey: key) { UserDefaults.standard.set(v, forKey: key) }
+        }
+        if let learned = app.stringArray(forKey: DisputeLearning.key) {
+            UserDefaults.standard.set(learned, forKey: DisputeLearning.key)
         }
     }
     let prompts = PromptStore()
     let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
     let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())
-    let params = TranscriptionRunner.Params(
+    var params = TranscriptionRunner.Params(
         file: url, backend: kind, modelDirectory: nil,
         languages: [language], translateTo: nil,
         diarize: true, hybridDiarize: false, expectedSpeakers: speakers)
+    // A/B for meeting context: TRANSCRIBERR_CONTEXT=<MeetingContext.json>
+    // (as `transcriberrcli context` prints it) runs with that invite.
+    if let path = ProcessInfo.processInfo.environment["TRANSCRIBERR_CONTEXT"],
+       let json = try? String(contentsOfFile: path, encoding: .utf8) {
+        params.meetingContext = MeetingContext.decode(json)
+        FileHandle.standardError.write("meeting context: \(params.meetingContext?.allTerms ?? [])\n".data(using: .utf8)!)
+    }
     let t0 = Date()
     var disputes: [WordDispute] = []
     do {
@@ -563,6 +580,35 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
         print("### FAILED \(error)")
         return 1
     }
+}
+
+/// Prints the meeting context a recording made at `start` (ISO 8601, local
+/// "yyyy-MM-dd HH:mm", or a recording file whose creation date is used)
+/// would get: the invite, its terms, and the past events with its people.
+@MainActor
+func cmdContext(start: String, minutes: Double) async -> Int32 {
+    var date: Date?
+    let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"
+    date = ISO8601DateFormatter().date(from: start) ?? f.date(from: start)
+    // A meeting file: its name says when it started.
+    if date == nil, let iv = MeetingContext.recordedInterval(audioPath: start, createdAtMillis: 0, duration: minutes * 60) {
+        date = iv.start
+    }
+    guard let date else { print("cannot read a date from '\(start)'"); return 64 }
+    guard let mc = await MeetingContext.lookup(start: date, end: date.addingTimeInterval(minutes * 60), ask: true) else {
+        print("no invite covers \(date) (+\(Int(minutes)) min) — or calendar access was refused")
+        return 1
+    }
+    let past = MeetingContext.pastEvents(sharing: mc)
+    FileHandle.standardError.write("""
+        title: \(mc.title)
+        attendees: \(mc.attendees)
+        invite terms: \(mc.inviteTerms)
+        calendar terms: \(mc.calendarTerms)
+        past events with these people: \(past.count)\n
+        """.data(using: .utf8)!)
+    print(MeetingContext.encode(mc) ?? "")
+    return 0
 }
 
 /// Replays finalize on inputs a run saved with TRANSCRIBERR_DUMP_FINALIZE.
@@ -737,6 +783,9 @@ func main() async -> Int32 {
             engineA: args.count > 5 ? args[5] : nil,
             engineB: args.count > 6 ? args[6] : nil,
             language: args.count > 7 ? args[7] : "English")
+    case "context":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdContext(start: args[2], minutes: args.count > 3 ? Double(args[3]) ?? 30 : 30)
     case "langid":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdLangID(path: args[2], window: args.count > 3 ? Double(args[3]) ?? 4 : 4)

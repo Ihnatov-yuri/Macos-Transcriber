@@ -20,6 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Transcriberrcli reads meeting invites to test the meeting-context pipeline.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Transcriberrcli records audio from your microphone for pipeline tests.</string>
 </dict>

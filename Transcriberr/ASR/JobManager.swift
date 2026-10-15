@@ -158,6 +158,40 @@ final class TranscriptionJobManager: @unchecked Sendable {
         drain()
     }
 
+    /// The invite this recording was made in, plus the names that recur in
+    /// the user's earlier recordings of meetings with the same people
+    /// (recordings that overlap those people's past events).
+    ///
+    /// Only plain values cross the awaits: the recording may be deleted
+    /// while the calendar is read, and EventKit queries and term extraction
+    /// run off the main actor.
+    private func meetingContext(for recording: Recording) async -> MeetingContext? {
+        let ownId = recording.id
+        guard let spoken = MeetingContext.recordedInterval(
+            audioPath: recording.audioPath, createdAtMillis: recording.createdAtMillis,
+            duration: recording.durationSeconds) else { return nil }
+        guard var mc = await MeetingContext.lookup(start: spoken.start, end: spoken.end) else { return nil }
+        let probe = mc
+        let past = await Task.detached(priority: .utility) { MeetingContext.pastEvents(sharing: probe) }.value
+        guard !past.isEmpty, let all = try? repository.all() else { return mc }
+        let earlier = all.filter { r in
+            guard !r.isDeleted, r.id != ownId,
+                  let iv = MeetingContext.recordedInterval(audioPath: r.audioPath, createdAtMillis: r.createdAtMillis,
+                                                           duration: r.durationSeconds) else { return false }
+            return past.contains { $0.intersects(iv) }
+        }
+        let texts = earlier.map { $0.segments.map(\.text).joined(separator: " ") }
+        // The user's own spellings outrank anything an old draft wrote:
+        // "Kaico" from earlier transcripts must not stand beside "Kaiko".
+        let known = mc.calendarTerms + TranscriptHygiene.vocabularyTerms(languages: [])
+        let terms = await Task.detached(priority: .utility) {
+            MeetingContext.recurringTerms(in: texts, excluding: known)
+        }.value
+        mc.pastMeetings = earlier.count
+        mc.pastTerms = terms
+        return mc
+    }
+
     private static let runningKey = "jobs.runningRecordingId"
     private static let retriedKey = "jobs.retriedRecordingId"
 
@@ -310,6 +344,18 @@ final class TranscriptionJobManager: @unchecked Sendable {
            FileManager.default.fileExists(atPath: current.path) {
             AppLog.info("job", "source moved while queued → \(current.lastPathComponent)")
             params.file = current
+        }
+        // The calendar invite, looked up now rather than at enqueue: a
+        // meeting's draft is queued the moment it stops.
+        if params.meetingContext == nil, MeetingContext.isEnabled,
+           ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            params.meetingContext = await meetingContext(for: recording)
+            // The lookup awaited: the recording may have been deleted since
+            // the check above, and every line below touches it.
+            if recording.isDeleted || recording.modelContext == nil {
+                statuses.removeValue(forKey: recording.id)
+                return
+            }
         }
 
         // Rescue snapshot: if the current transcript was never versioned
@@ -513,6 +559,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // Replaced on every run: an older run's disputes would
                     // underline words the new transcript no longer has.
                     recording.disputesJSON = DisputeIndex.encode(runDisputes)
+                    recording.meetingContextJSON = MeetingContext.encode(params.meetingContext)
                     // Every completed run becomes an immutable version tagged
                     // with its engine, so runs from different engines can be
                     // compared (Detail → VERSIONS) and restored.

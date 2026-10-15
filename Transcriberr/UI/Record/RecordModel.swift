@@ -1,3 +1,4 @@
+import EventKit
 import AppKit
 import Foundation
 import Observation
@@ -190,6 +191,11 @@ final class RecordModel {
                     }
                 }
                 try await container.meetingRecorder.start()
+                // The calendar question, asked now while the user is here
+                // (see MeetingContext.requestAccess); the run never asks.
+                if MeetingContext.isEnabled {
+                    Task { _ = await MeetingContext.requestAccess(EKEventStore(), ask: true) }
+                }
             } else {
                 try await container.recorder.start()
             }

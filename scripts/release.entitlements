@@ -4,6 +4,9 @@
 <dict>
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- Meeting context: the recorded meeting's calendar invite. -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
     <!-- No Team ID on an ad-hoc / self-signed build: without this the hardened
          runtime refuses the app's own embedded dylibs (LiteRT, FluidAudio). -->
     <key>com.apple.security.cs.disable-library-validation</key>

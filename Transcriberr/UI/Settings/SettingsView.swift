@@ -41,6 +41,7 @@ struct EnginesSettingsTab: View {
     @AppStorage("ui.superGemmaRulings") private var gemmaRulings = "english"
     @Environment(AppContainer.self) private var container
     @AppStorage("ui.myName") private var myName = ""
+    @AppStorage(WhisperModel.settingsKey) private var whisperModel = WhisperModel.defaultID
 
     private var audioEngines: [BackendFactory.Kind] {
         BackendFactory.Kind.allCases.filter(\.supportsAudio)
@@ -62,23 +63,26 @@ struct EnginesSettingsTab: View {
                 Text("Meeting mode knows which voice came from your microphone — it labels that speaker with this name automatically.")
             }
             Section("Speech-to-text") {
-                Picker("Default engine", selection: Binding(
+                EnginePicker(title: "Default engine", kinds: audioEngines, selection: Binding(
                     get: { container.uiPrefs.defaultBackend },
                     set: { container.uiPrefs.defaultBackend = $0 }
-                )) {
-                    ForEach(audioEngines, id: \.rawValue) { Text($0.displayName).tag($0) }
-                }
+                ))
                 Picker("Live captions engine", selection: Binding(
                     get: { container.uiPrefs.liveEngine },
                     set: { container.uiPrefs.liveEngine = $0 }
                 )) {
                     ForEach(liveEngines, id: \.rawValue) { Text($0.displayName).tag($0) }
                 }
-                Text("Speech models download automatically on first use: Parakeet v3/v2 (~1 GB each, Neural Engine) and Whisper large-v3 (~3 GB, CoreML).")
+                Picker("Whisper model", selection: $whisperModel) {
+                    ForEach(WhisperModel.all) { m in
+                        Text("\(m.name)\(m.englishOnly ? " (English only)" : "")\(m.isDownloaded ? "" : " · not downloaded")").tag(m.id)
+                    }
+                }
+                Text("Speech models download automatically on first use: Parakeet v3/v2 (~1 GB each, Neural Engine) and the Whisper model picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models. Super's Whisper reading was measured with large-v3.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Super · dual-engine merge") {
-                Picker("Merge engine A", selection: Binding(
+                EnginePicker(title: "Merge engine A", kinds: mergeOptions, selection: Binding(
                     get: { container.uiPrefs.ensembleEngineA },
                     set: { newValue in
                         // Keep A ≠ B: picking B's engine swaps them.
@@ -87,10 +91,8 @@ struct EnginesSettingsTab: View {
                         }
                         container.uiPrefs.ensembleEngineA = newValue
                     }
-                )) {
-                    ForEach(mergeOptions, id: \.rawValue) { Text($0.displayName).tag($0) }
-                }
-                Picker("Merge engine B", selection: Binding(
+                ))
+                EnginePicker(title: "Merge engine B", kinds: mergeOptions, selection: Binding(
                     get: { container.uiPrefs.ensembleEngineB },
                     set: { newValue in
                         if newValue == container.uiPrefs.ensembleEngineA {
@@ -98,9 +100,7 @@ struct EnginesSettingsTab: View {
                         }
                         container.uiPrefs.ensembleEngineB = newValue
                     }
-                )) {
-                    ForEach(mergeOptions, id: \.rawValue) { Text($0.displayName).tag($0) }
-                }
+                ))
                 Toggle("Max quality: arbitrate every disputed chunk with surrounding context + vocabulary", isOn: Binding(
                     get: { container.uiPrefs.superMaxQuality },
                     set: { container.uiPrefs.superMaxQuality = $0 }
@@ -137,7 +137,7 @@ struct EnginesSettingsTab: View {
             Section("Languages by engine") {
                 LabeledContent("Parakeet v3", value: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk… (no Arabic/Asian)")
                 LabeledContent("Parakeet v2", value: "English only — best English accuracy")
-                LabeledContent("Whisper large-v3", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese")
+                LabeledContent("Whisper", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese (distil-large-v3: English only)")
                 LabeledContent("Gemma 4 LiteRT", value: "~140 languages incl. Gulf Arabic — strongest Arabic (as on Android)")
                 Text("Recommendations: English → Parakeet v3 (or v2). European languages → Parakeet v3. Arabic → Gemma LiteRT (Whisper as second opinion). Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
@@ -167,11 +167,14 @@ struct ModelsSettingsTab: View {
             // Speech models are managed automatically; this tab manages the
             // Gemma text model (downloaded explicitly — they're big).
             VStack(alignment: .leading, spacing: 4) {
-                Text("Speech-to-text — Parakeet v3/v2 · Whisper large-v3 (automatic)")
+                Text("Speech-to-text — Parakeet v3/v2 (automatic)")
                     .uiLabel(10, color: AppColor.ink2)
-                Text("Downloaded on first use (Parakeet ~1 GB each · Whisper ~3 GB) · cached in Application Support · engine choice in the Engines tab")
+                Text("Downloaded on first use (~1 GB each) · cached in Application Support · engine choice in the Engines tab")
                     .uiLabel(9, color: AppColor.ink3)
             }
+            Hairline()
+
+            WhisperModelsSection()
             Hairline()
 
             HairlineSoft()
@@ -350,6 +353,10 @@ struct RecorderSettingsTab: View {
                 watcher.start { refreshDevices() }
             }
             .onDisappear { watcher.stop() }
+
+            Divider().frame(maxWidth: 520)
+
+            VoiceprintSection()
 
             Divider().frame(maxWidth: 520)
 

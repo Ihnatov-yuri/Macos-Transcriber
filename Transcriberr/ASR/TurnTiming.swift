@@ -80,21 +80,31 @@ enum TurnTiming {
         timelines: [Int: [TimedWord]],
         diarization: [DiarizationRunner.SpeakerSegment],
         micSpeech: [ClosedRange<Double>]? = nil,
+        micVoice: [ClosedRange<Double>]? = nil,
+        micEcho: Bool = false,
         logs: Bool = true
     ) -> [RawSegment] {
         guard !timelines.isEmpty else { return segments }
         var out: [RawSegment] = []
-        var loopsDropped = 0, echoDropped = 0, split = 0, unspoken = 0
+        var loopsDropped = 0, echoDropped = 0, split = 0, unspoken = 0, unvoiced = 0
         // With echo on the mic, a piece the mic's own reading mostly lacks
         // is Whisper writing over residue ("I to it's a. of").
         func heard(_ t: [Token]) -> Bool {
-            guard micSpeech != nil else { return true }
+            guard micSpeech != nil || (micVoice != nil && micEcho) else { return true }
             let content = t.filter { !$0.norm.isEmpty }
             return Double(content.filter(\.anchored).count) >= minAnchoredShare * Double(content.count)
         }
         func spoken(_ a: Double, _ b: Double) -> Bool {
             guard let micSpeech else { return true }
             return isSpoken(a, b, micSpeech: micSpeech)
+        }
+        // The voice print's timeline (see VoiceActivity) decides on its own:
+        // it does not miss the user under a loud far side, so there is no
+        // confidence escape — another voice bleeding into the mic reads
+        // confidently, and that is exactly what it must remove.
+        func voiced(_ a: Double, _ b: Double) -> Bool {
+            guard let micVoice else { return true }
+            return isSpoken(a, b, micSpeech: micVoice)
         }
         for seg in segments {
             let isMe = seg.speakerKey == "ME"
@@ -108,7 +118,9 @@ enum TurnTiming {
                 // own reading not hearing these words is the second signal
                 // that loops and stock words over residue are phantoms.
                 guard isMe else { out.append(seg); continue }
-                if !spoken(seg.startSeconds, seg.endSeconds),
+                if micVoice != nil {
+                    if !voiced(seg.startSeconds, seg.endSeconds) { unvoiced += tokens.count; continue }
+                } else if !spoken(seg.startSeconds, seg.endSeconds),
                    meanConfidence(candidates) < confidentSpeech { unspoken += tokens.count; continue }
                 if let far = timelines[0], isEcho(tokens, farWords: wordsNear(far, from: seg.startSeconds - 1, to: seg.endSeconds + 1)) {
                     echoDropped += tokens.count
@@ -144,7 +156,9 @@ enum TurnTiming {
                     p.tokens = withoutEchoEdges(p.tokens, farSide: far)
                     echoDropped += n - p.tokens.count
                     if p.tokens.isEmpty { continue }
-                    if !spoken(p.tokens.first!.start, p.tokens.last!.end) || !heard(p.tokens),
+                    let a = p.tokens.first!.start, b = p.tokens.last!.end
+                    if !voiced(a, b) { unvoiced += p.tokens.count; continue }
+                    if !spoken(a, b) || !heard(p.tokens),
                        meanConfidence(p.tokens.filter(\.anchored)) < confidentSpeech {
                         unspoken += p.tokens.count; continue
                     }
@@ -157,8 +171,8 @@ enum TurnTiming {
                 out.append(s)
             }
         }
-        if logs, split > 0 || loopsDropped > 0 || echoDropped > 0 || unspoken > 0 {
-            AppLog.info("runner", "turn timing: \(segments.count) chunk segments → \(out.count) timed pieces, \(loopsDropped) looped, \(echoDropped) echoed and \(unspoken) unspoken mic words dropped")
+        if logs, split > 0 || loopsDropped > 0 || echoDropped > 0 || unspoken > 0 || unvoiced > 0 {
+            AppLog.info("runner", "turn timing: \(segments.count) chunk segments → \(out.count) timed pieces, \(loopsDropped) looped, \(echoDropped) echoed, \(unspoken) unspoken and \(unvoiced) not-your-voice mic words dropped")
         }
         return out.sorted { $0.startSeconds < $1.startSeconds }
     }

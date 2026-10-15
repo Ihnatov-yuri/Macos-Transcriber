@@ -46,7 +46,7 @@ actor WhisperCallLimiter {
     }
 }
 
-/// OpenAI Whisper large-v3 running locally via WhisperKit (CoreML / ANE).
+/// OpenAI Whisper (large-v3 unless another model is picked) running locally via WhisperKit (CoreML / ANE).
 ///
 /// The "best Whisper": strongest accuracy of the open Whisper family, ~100
 /// languages. Slower than Parakeet (large encoder) but architecturally
@@ -54,13 +54,18 @@ actor WhisperCallLimiter {
 /// opinion in the Super dual-engine merge: where two *different* recognizers
 /// agree, the words are almost certainly right.
 ///
-/// Models (~3 GB) auto-download from HuggingFace (argmaxinc/whisperkit-coreml)
-/// on first load; `modelPath` is ignored.
+/// The model is the one picked in Settings (`WhisperModel.selected`,
+/// large-v3 by default); it downloads from HuggingFace
+/// (argmaxinc/whisperkit-coreml) on first load if it is not on disk yet.
+/// `modelPath` is ignored.
 actor WhisperBackend: ASRBackend, DetailedTranscribing {
     nonisolated let id = "whisper-large-v3"
     private(set) var isReady = false
 
     private var pipe: WhisperKit?
+    /// The WhisperModel id `pipe` was built from: picking another model in
+    /// Settings makes the next load rebuild.
+    private var loadedModel: String?
 
     /// Which chip runs Whisper's two halves.
     ///
@@ -137,7 +142,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     // MARK: - Lifecycle
 
     func load(modelPath: URL?) async throws {
-        if isReady, pipe != nil { return }
+        if isReady, pipe != nil, loadedModel == WhisperModel.selected.id { return }
         try await rebuild()
     }
 
@@ -164,13 +169,14 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// Builds a fresh WhisperKit and swaps it in, with no gap where `pipe`
     /// is nil.
     private func buildPipe(generation gen: Int) async throws {
-        AppLog.info("whisper", "loading Whisper large-v3 (downloads ~3 GB on first run)…")
+        let model = WhisperModel.selected
+        AppLog.info("whisper", "loading Whisper \(model.name)\(model.isDownloaded ? "" : " (downloading \(model.sizeBytes / 1_000_000) MB first)")…")
         let kit: WhisperKit
         do {
             let where_ = placement ?? .configured
             AppLog.info("whisper", "placement: \(where_.rawValue)")
             let config = WhisperKitConfig(
-                model: "large-v3",
+                model: model.id,
                 computeOptions: where_.computeOptions,
                 verbose: false,
                 prewarm: true
@@ -189,6 +195,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             throw ASRError.modelLoadFailed(reason: "Whisper was released while loading")
         }
         self.pipe = kit
+        self.loadedModel = model.id
         self.isReady = true
         AppLog.info("whisper", "ready")
     }

@@ -538,13 +538,9 @@ struct DetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             HairlineSoft()
             LedgerRow("Engine") {
-                Picker("", selection: Binding(
+                EnginePicker(title: "", kinds: BackendFactory.Kind.allCases.filter(\.supportsAudio), selection: Binding(
                     get: { m.backend }, set: { m.backend = $0 }
-                )) {
-                    ForEach(BackendFactory.Kind.allCases.filter(\.supportsAudio), id: \.rawValue) { k in
-                        Text(k.displayName).tag(k)
-                    }
-                }
+                ))
                 .labelsHidden()
                 .frame(maxWidth: 260)
             }
@@ -556,7 +552,7 @@ struct DetailView: View {
                     $0.isLocal && $0.supportsAudio && $0 != .ensemble
                 }
                 LedgerRow("Merge A") {
-                    Picker("", selection: Binding(
+                    EnginePicker(title: "", kinds: mergeOptions, selection: Binding(
                         get: { m.container.uiPrefs.ensembleEngineA },
                         set: { newValue in
                             // Keep A ≠ B (same swap policy as Settings → Engines).
@@ -565,17 +561,13 @@ struct DetailView: View {
                             }
                             m.container.uiPrefs.ensembleEngineA = newValue
                         }
-                    )) {
-                        ForEach(mergeOptions, id: \.rawValue) { k in
-                            Text(k.displayName).tag(k)
-                        }
-                    }
+                    ))
                     .labelsHidden()
                     .frame(maxWidth: 260)
                 }
                 HairlineSoft()
                 LedgerRow("Merge B") {
-                    Picker("", selection: Binding(
+                    EnginePicker(title: "", kinds: mergeOptions, selection: Binding(
                         get: { m.container.uiPrefs.ensembleEngineB },
                         set: { newValue in
                             if newValue == m.container.uiPrefs.ensembleEngineA {
@@ -583,11 +575,7 @@ struct DetailView: View {
                             }
                             m.container.uiPrefs.ensembleEngineB = newValue
                         }
-                    )) {
-                        ForEach(mergeOptions, id: \.rawValue) { k in
-                            Text(k.displayName).tag(k)
-                        }
-                    }
+                    ))
                     .labelsHidden()
                     .frame(maxWidth: 260)
                 }

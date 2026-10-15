@@ -243,6 +243,10 @@ final class TranscriptionRunner: @unchecked Sendable {
         var micChunkIndices: Set<Int> = []
         var cleanedMic: [Float]?
         var micHadEcho = false
+        // The user's voice print, when enrolled: who is speaking on each
+        // track, by voice (see VoiceActivity). Split-track meetings only.
+        let voiceprint = splitTracks ? VoiceprintStore.load() : nil
+        var voice: VoiceTimeline?
         // Whole-track readings before pass 1 (see EnsembleBackend.prepareTimeline):
         // long-form Whisper for non-English, the far side's timeline for
         // echo-by-timing in split-track meetings. Max quality path only.
@@ -265,11 +269,28 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // using the sys track as reference — the echo never reaches
                 // an engine, and the user's speech survives crosstalk.
                 continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
+                let micNeeded = prepareTimeline || params.backend == .parakeet || params.backend == .parakeetV2
                 let prepared = await Self.cancelEchoAndChunk(
                     mic: &rawMic, sys: sysSamples, decoder: decoder,
-                    keepCleanedMic: prepareTimeline || params.backend == .parakeet || params.backend == .parakeetV2)
+                    keepCleanedMic: micNeeded || voiceprint != nil)
                 cleanedMic = prepared.cleanedMic
                 micHadEcho = prepared.micHadEcho
+                if let voiceprint, let mic = prepared.cleanedMic {
+                    continuation.yield(.stage(text: "Finding your voice…", fraction: 0.05))
+                    let t0 = Date()
+                    do {
+                        voice = try await VoiceTimeline.compute(mic: mic, sys: sysSamples, print: voiceprint) { f in
+                            continuation.yield(.stage(text: "Finding your voice… \(Int(f * 100))%", fraction: 0.05 + 0.01 * f))
+                        }
+                        let secs = { (r: [ClosedRange<Double>]) in Int(r.reduce(0) { $0 + $1.upperBound - $1.lowerBound }) }
+                        AppLog.info("runner", "voice print: you speak \(secs(voice!.mic)) s on the mic, \(secs(voice!.sys)) s in the call audio (\(String(format: "%.1f", Date().timeIntervalSince(t0))) s)")
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        AppLog.warn("runner", "voice print scoring failed, using the speech timeline: \(error.localizedDescription)")
+                    }
+                    if !micNeeded { cleanedMic = nil }
+                }
                 chunks = prepared.chunks
                 micChunkIndices = prepared.micChunkIndices
                 samples = sysSamples          // diarization sees only the others
@@ -315,6 +336,23 @@ final class TranscriptionRunner: @unchecked Sendable {
             } catch {
                 AppLog.error("runner", "diar pre-pass failed (continuing without hints): \(error.localizedDescription)")
                 diarSegments = []
+            }
+        }
+        // One track: which of the diarizer's voices is the user's (split
+        // tracks know it already, the mic is the user).
+        var clusterVoice: [String: Float]?
+        if !splitTracks, !diarSegments.isEmpty, let print = VoiceprintStore.load() {
+            continuation.yield(.stage(text: "Finding your voice…", fraction: 0.12))
+            let t0 = Date()
+            do {
+                clusterVoice = try await ClusterVoice.compute(samples: samples, regions: diarSegments, print: print)
+                let scored = clusterVoice!.sorted { $0.key < $1.key }
+                    .map { "\($0.key) \(String(format: "%.2f", $0.value))" }.joined(separator: ", ")
+                AppLog.info("runner", "voice print: \(clusterVoice!.count) clusters scored in \(String(format: "%.1f", Date().timeIntervalSince(t0))) s (\(scored))")
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                AppLog.warn("runner", "voice print scoring failed, speakers stay unnamed: \(error.localizedDescription)")
             }
         }
 
@@ -803,12 +841,15 @@ final class TranscriptionRunner: @unchecked Sendable {
         // When the mic heard the speakers, the recorder's mic-dominance
         // timeline (<file>.me.json) says when the user really spoke; mic
         // pieces outside it are echo residue and what Whisper invents over it.
-        let micSpeech = splitTracks && micHadEcho && !timelines.isEmpty ? Self.micSpeech(for: params.file) : nil
+        // The voice print replaces it whenever it is there.
+        let loudness = splitTracks && micHadEcho && !timelines.isEmpty ? Self.micSpeech(for: params.file) : nil
+        let micSpeech = voice == nil ? loudness : nil
 
         FinalizeDump.saveIfRequested(FinalizeDump(
             segments: allSegments, diarize: params.diarize, splitTracks: splitTracks,
             expectedSpeakers: params.expectedSpeakers, diarSegments: diarSegments,
-            myName: myNameSetting.isEmpty ? nil : myNameSetting, timelines: timelines, micSpeech: micSpeech))
+            myName: myNameSetting.isEmpty ? nil : myNameSetting, timelines: timelines, micSpeech: loudness,
+            voice: voice, micEcho: micHadEcho, clusterVoice: clusterVoice))
 
         let segmentsToFinalize = allSegments
         let finalizeArgs = (
@@ -827,7 +868,10 @@ final class TranscriptionRunner: @unchecked Sendable {
                 diarSegments: finalizeArgs.diarSegments,
                 myName: finalizeArgs.myName,
                 timelines: timelines,
-                micSpeech: micSpeech
+                micSpeech: micSpeech,
+                voice: voice,
+                micEcho: micHadEcho,
+                clusterVoice: clusterVoice
             )
         }.value
         continuation.yield(.stage(text: "Done.", fraction: 1.0))
@@ -847,7 +891,10 @@ final class TranscriptionRunner: @unchecked Sendable {
         diarSegments: [DiarizationRunner.SpeakerSegment],
         myName: String?,
         timelines: [Int: [TimedWord]] = [:],
-        micSpeech: [ClosedRange<Double>]? = nil
+        micSpeech: [ClosedRange<Double>]? = nil,
+        voice: VoiceTimeline? = nil,
+        micEcho: Bool = false,
+        clusterVoice: [String: Float]? = nil
     ) -> [RawSegment] {
         var segments = input
         // ---------- split-track echo guard ----------
@@ -929,7 +976,22 @@ final class TranscriptionRunner: @unchecked Sendable {
         if splitTracks, !timelines.isEmpty {
             segments = TurnTiming.retime(segments, timelines: timelines,
                                          diarization: diarize ? diarSegments : [],
-                                         micSpeech: micSpeech)
+                                         micSpeech: micSpeech,
+                                         micVoice: voice?.mic, micEcho: micEcho)
+        } else if splitTracks, let voice {
+            // No word timelines (Super without max quality): the chunk
+            // segments are too long to time, but a mic chunk with none of
+            // the user's voice in it is still not the user.
+            segments = segments.filter { seg in
+                guard seg.speakerKey == "ME" else { return true }
+                let keep = TurnTiming.isSpoken(seg.startSeconds, seg.endSeconds, micSpeech: voice.mic)
+                if !keep { AppLog.info("runner", "ME segment @\(Int(seg.startSeconds))s is not your voice — dropped") }
+                return keep
+            }
+        }
+        // ---------- your voice in the call audio ----------
+        if splitTracks, let voice, !voice.sys.isEmpty {
+            segments = Self.reclaimLeakedVoice(segments, sysVoice: voice.sys, myName: myName)
         }
 
         // ---------- finalize ----------
@@ -964,6 +1026,22 @@ final class TranscriptionRunner: @unchecked Sendable {
                     guard seg.speakerKey == nil else { return seg }
                     var s = seg
                     s.speakerKey = fallbackKey
+                    return s
+                }
+            }
+
+            // One track, the user's voice print enrolled: the diarizer
+            // cluster that sounds like the user is ME (see ClusterVoice).
+            // No cluster clear of the threshold, or two near it, and nothing
+            // is renamed.
+            if !splitTracks, let clusterVoice, let mine = ClusterVoice.user(in: clusterVoice),
+               segments.contains(where: { $0.speakerKey == mine }) {
+                AppLog.info("runner", "voice print: cluster \(mine) is you")
+                segments = segments.map { seg in
+                    guard seg.speakerKey == mine else { return seg }
+                    var s = seg
+                    s.speakerKey = "ME"
+                    s.speakerName = Self.meName(myName)
                     return s
                 }
             }
@@ -1232,6 +1310,46 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// coaching sessions on headphones, user talking half the time, 3.2 and
     /// 6.9 dB.
     nonisolated static let echoDominatedMicDB = 12.0
+
+    /// The name on the user's lines, as mic chunks get it at parse time.
+    /// A nil name would let the self-introduction pass name ME after a
+    /// quoted "I'm Joe", and a run starting with it render unnamed.
+    nonisolated static func meName(_ myName: String?) -> String {
+        let n = (myName ?? "").trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? "Me" : n
+    }
+
+    /// System-track pieces in the user's own voice: the call sending the
+    /// user back (a room mic on the far side, a client's sidetone). A piece
+    /// that repeats what the mic already has is a copy and goes; one the
+    /// mic missed is the user's and becomes ME.
+    nonisolated static func reclaimLeakedVoice(_ segments: [RawSegment], sysVoice: [ClosedRange<Double>],
+                                               myName: String? = nil) -> [RawSegment] {
+        let mine = segments.filter { $0.speakerKey == "ME" }
+        var copies = 0, reclaimed = 0
+        let out = segments.compactMap { seg -> RawSegment? in
+            guard seg.speakerKey != "ME",
+                  VoiceActivity.coverage(seg.startSeconds, seg.endSeconds, in: sysVoice) >= 0.5 else { return seg }
+            let near = Set(mine
+                .filter { $0.endSeconds > seg.startSeconds - 2 && $0.startSeconds < seg.endSeconds + 2 }
+                .flatMap { TurnTiming.tokenize($0.text).map(\.norm) })
+            let words = TurnTiming.tokenize(seg.text).map(\.norm).filter { !$0.isEmpty }
+            guard !words.isEmpty else { return seg }
+            if Double(words.filter(near.contains).count) >= 0.5 * Double(words.count) {
+                copies += 1
+                return nil
+            }
+            var s = seg
+            s.speakerKey = "ME"
+            s.speakerName = meName(myName)
+            reclaimed += 1
+            return s
+        }
+        if copies + reclaimed > 0 {
+            AppLog.info("runner", "your voice in the call audio: \(copies) copies of mic lines dropped, \(reclaimed) lines given back to you")
+        }
+        return out
+    }
 
     /// The recorder's mic-dominance intervals (<file>.me.json), if any.
     nonisolated static func micSpeech(for file: URL) -> [ClosedRange<Double>]? {

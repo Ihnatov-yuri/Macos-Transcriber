@@ -6,6 +6,15 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.0.0
+- Your voice print. Read a short passage aloud once (Settings → Audio input → Your voice) and meetings find you on the microphone by your voice instead of by how loud the mic is.
+- On calls with headphones, nothing you said is removed for being quieter than the other person.
+- On calls without headphones, the other person's voice leaking into your microphone is no longer written under your name, however clearly the mic heard it, and what you say while talking over someone stays.
+- When the call sends your own voice back, those lines are recognised as yours: a repeat of what your mic already has is removed, anything else moves to your name.
+- Recordings with one track (a recording made in the room, an imported file) name you too: the speaker who sounds like you gets your name instead of a number. When nobody clearly does, the speakers keep their numbers.
+- Without a voice print, meetings work as before.
+- More Whisper models: large-v3 turbo, compressed large-v3 and turbo, distil-large-v3 (English), medium and small. Pick one in Settings → Engines; download or delete them in Settings → Models. large-v3 stays the default.
+
 ## 3.17.4
 - On calls with headphones, Super no longer deletes what you said. 3.17.1's filter for invented text could remove a quarter of your own words when the other person was louder than you; it now applies only when your microphone mostly picked up the speakers, and never to words the microphone heard clearly.
 

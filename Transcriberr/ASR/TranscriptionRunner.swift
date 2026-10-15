@@ -348,6 +348,18 @@ final class TranscriptionRunner: @unchecked Sendable {
             await ens.clearTimeline()
         }
 
+        // The live draft of a Super run shows each mic chunk with the same
+        // mic cleanup finalize applies (loops, stock words, echo, the speech
+        // timeline) — raw, a speaker call scrolled past "So. So. So." and
+        // "I'm going." x14 for half an hour. Only what is SHOWN changes;
+        // `allSegments` stays raw for finalize.
+        var liveTimelines: [Int: [TimedWord]] = [:]
+        if splitTracks, let ens = backend as? EnsembleBackend {
+            liveTimelines = await ens.wholeTrackWords()
+            if liveTimelines.count < 2 { liveTimelines = [:] }
+        }
+        let liveMicSpeech = !liveTimelines.isEmpty && micHadEcho ? Self.micSpeech(for: params.file) : nil
+
         // ---------- chunk loop ----------
         var allSegments: [RawSegment] = []
         var previousTail: String? = nil
@@ -481,7 +493,11 @@ final class TranscriptionRunner: @unchecked Sendable {
 
             // Emit per-chunk so the UI sees text appearing as it's produced.
             if !parsed.isEmpty {
-                continuation.yield(.segments(chunkIndex: idx, segments: parsed))
+                let shown = !liveTimelines.isEmpty && micChunkIndices.contains(idx)
+                    ? TurnTiming.retime(parsed, timelines: liveTimelines, diarization: [],
+                                        micSpeech: liveMicSpeech, logs: false)
+                    : parsed
+                if !shown.isEmpty { continuation.yield(.segments(chunkIndex: idx, segments: shown)) }
             } else {
                 AppLog.warn("runner", "chunk \(idx + 1) produced no parsed segments (raw len=\(raw.count))")
             }
@@ -784,14 +800,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         // When the mic heard the speakers, the recorder's mic-dominance
         // timeline (<file>.me.json) says when the user really spoke; mic
         // pieces outside it are echo residue and what Whisper invents over it.
-        var micSpeech: [ClosedRange<Double>]? = nil
-        if splitTracks, micHadEcho, !timelines.isEmpty {
-            let sidecar = params.file.deletingPathExtension().appendingPathExtension("me.json")
-            if let data = try? Data(contentsOf: sidecar),
-               let intervals = try? JSONDecoder().decode([[Double]].self, from: data) {
-                micSpeech = intervals.compactMap { $0.count == 2 && $0[0] <= $0[1] ? $0[0]...$0[1] : nil }
-            }
-        }
+        let micSpeech = splitTracks && micHadEcho && !timelines.isEmpty ? Self.micSpeech(for: params.file) : nil
 
         FinalizeDump.saveIfRequested(FinalizeDump(
             segments: allSegments, diarize: params.diarize, splitTracks: splitTracks,
@@ -1213,6 +1222,14 @@ final class TranscriptionRunner: @unchecked Sendable {
             .joined(separator: " ")
         let combined = (before + " " + after).trimmingCharacters(in: .whitespacesAndNewlines)
         return combined.isEmpty ? nil : "[REFINEMENT PASS — prior attempt was low-confidence; neighboring transcript: \(combined.prefix(400))]"
+    }
+
+    /// The recorder's mic-dominance intervals (<file>.me.json), if any.
+    nonisolated static func micSpeech(for file: URL) -> [ClosedRange<Double>]? {
+        let sidecar = file.deletingPathExtension().appendingPathExtension("me.json")
+        guard let data = try? Data(contentsOf: sidecar),
+              let intervals = try? JSONDecoder().decode([[Double]].self, from: data) else { return nil }
+        return intervals.compactMap { $0.count == 2 && $0[0] <= $0[1] ? $0[0]...$0[1] : nil }
     }
 
     // MARK: - Chunk loop with retry

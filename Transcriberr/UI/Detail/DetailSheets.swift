@@ -115,8 +115,14 @@ struct SegmentEditSheet: View {
                             dismiss()
                             return
                         }
+                        let before = segment.text
                         segment.text = text
                         try? segment.modelContext?.save()
+                        if let rec = segment.recording, before != text {
+                            // A correction is a checked reference.
+                            let source = Benchmark.source(segment, in: rec)
+                            Task { await Benchmark.record(source, machine: before) }
+                        }
                         if let rec = segment.recording {
                             try? TranscriptExporter.export(recording: rec)
                             // Hand-corrected text is exactly what the

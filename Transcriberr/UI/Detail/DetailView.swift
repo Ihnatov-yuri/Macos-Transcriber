@@ -347,6 +347,18 @@ struct DetailView: View {
                 Button("Re-export sidecars") {
                     try? TranscriptExporter.export(recording: recording)
                 }
+                Button("Mark transcript as checked") {
+                    // Every line becomes a reference in the benchmark, as
+                    // it reads now. Lines already corrected keep their
+                    // original machine text.
+                    let sources = recording.segments.map { Benchmark.source($0, in: recording) }
+                    Task {
+                        var added = 0
+                        for s in sources where await Benchmark.record(s, machine: s.text) != nil { added += 1 }
+                        AppLog.info("bench", "marked \(added) of \(sources.count) segments of \"\(recording.title)\" as checked")
+                    }
+                }
+                .disabled(recording.segments.isEmpty || (model?.isRunning ?? false))
                 Divider()
                 Button("Split recording…") {
                     showingSplit = true

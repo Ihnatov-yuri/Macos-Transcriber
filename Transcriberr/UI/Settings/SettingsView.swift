@@ -552,6 +552,7 @@ struct StyleSettingsTab: View {
             }
             LearnedTermsSection()
             LearnedChoicesSection()
+            BenchmarkSection()
             Section("Domain packs") {
                 ForEach(DomainVocabulary.Pack.allCases, id: \.self) { pack in
                     // TapButton — inline Button capturing @Observable container

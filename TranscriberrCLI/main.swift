@@ -28,6 +28,7 @@ func usage() {
       transcriberrcli noisesup <file>      run the offline noise-suppression pass
       transcriberrcli transcribe <file>    Parakeet v3 ASR on any audio file (downloads models on first run)
       transcriberrcli context <when|file> [minutes]  the calendar invite a recording at that time would use
+      transcriberrcli bench [score <backend> [engA engB]] [--dir <dir>]  the user's checked references; score an engine on them
       transcriberrcli vocab <file.txt> [Language]
                                             dry-run the vocabulary spelling pass on a transcript
                                             (app vocabulary; prints every change)
@@ -611,6 +612,70 @@ func cmdContext(start: String, minutes: Double) async -> Int32 {
     return 0
 }
 
+/// `bench`: per language, how much checked speech the user's corrections
+/// built and the engine-vs-user WER of the text they corrected.
+/// `bench score <backend> [engA engB]`: runs that engine on every clip and
+/// scores it against the references, per language.
+@MainActor
+func cmdBench(_ argv: [String]) async -> Int32 {
+    var argv = argv
+    var dir = Benchmark.root
+    if let i = argv.firstIndex(of: "--dir"), i + 1 < argv.count {
+        dir = URL(fileURLWithPath: NSString(string: argv[i + 1]).expandingTildeInPath)
+        argv.removeSubrange(i...(i + 1))
+    }
+    let items = Benchmark.items(in: dir)
+    print("\(items.count) checked lines in \(dir.path)")
+    for s in Benchmark.summary(items) {
+        print(String(format: "  %-10@ %3d lines %6.1f min %5d words  first engine text vs you: %5.1f%% WER",
+                     s.language as NSString, s.items, s.seconds / 60, s.words, s.wer * 100))
+    }
+    guard argv.first == "score", argv.count >= 2, let kind = BackendFactory.Kind(rawValue: argv[1]) else { return 0 }
+    // Score as the app runs: with the user's vocabulary and word choices.
+    if let app = UserDefaults(suiteName: "nl.ihnatov.Transcriberr") {
+        for key in ["prompt.vocabulary", "prompt.vocabulary.byLang"] {
+            if let v = app.string(forKey: key) { UserDefaults.standard.set(v, forKey: key) }
+        }
+        if let learned = app.stringArray(forKey: DisputeLearning.key) {
+            UserDefaults.standard.set(learned, forKey: DisputeLearning.key)
+        }
+    }
+    if kind == .ensemble {
+        UserDefaults.standard.set(argv.count > 2 ? argv[2] : "whisper-large-v3", forKey: "ensemble.engineA")
+        UserDefaults.standard.set(argv.count > 3 ? argv[3] : "parakeet-v3", forKey: "ensemble.engineB")
+        UserDefaults.standard.set(true, forKey: "ui.superMaxQuality")
+    }
+    let prompts = PromptStore()
+    let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
+    let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())
+    var totals: [String: (errors: Int, words: Int)] = [:]
+    for (k, it) in items.enumerated() {
+        let params = TranscriptionRunner.Params(
+            file: dir.appendingPathComponent(it.clip), backend: kind,
+            languages: it.language.map { [$0] } ?? [])
+        var hyp = ""
+        do {
+            for try await ev in runner.run(params) {
+                if case .done(let segs) = ev {
+                    hyp = segs.filter { Benchmark.onSide(speakerKey: $0.speakerKey, track: it.track) }
+                        .map(\.text).joined(separator: " ")
+                }
+            }
+        } catch {
+            FileHandle.standardError.write("item \(k + 1) failed: \(error)\n".data(using: .utf8)!)
+        }
+        let e = Benchmark.wordErrors(ref: it.reference, hyp: hyp)
+        let lang = it.language ?? "Unknown"
+        totals[lang] = ((totals[lang]?.errors ?? 0) + e.errors, (totals[lang]?.words ?? 0) + e.words)
+        print("ITEM \(k + 1)/\(items.count)\t\(lang)\t\(e.errors)/\(e.words)\t\(hyp.prefix(80))")
+    }
+    for (lang, t) in totals.sorted(by: { $0.key < $1.key }) {
+        print(String(format: "### %@ %@: %.1f%% WER (%d words)", kind.rawValue, lang,
+                     t.words == 0 ? 0 : Double(t.errors) / Double(t.words) * 100, t.words))
+    }
+    return 0
+}
+
 /// Replays finalize on inputs a run saved with TRANSCRIBERR_DUMP_FINALIZE.
 @MainActor
 func cmdRefinalize(path: String) -> Int32 {
@@ -783,6 +848,8 @@ func main() async -> Int32 {
             engineA: args.count > 5 ? args[5] : nil,
             engineB: args.count > 6 ? args[6] : nil,
             language: args.count > 7 ? args[7] : "English")
+    case "bench":
+        return await cmdBench(Array(args.dropFirst(2)))
     case "context":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdContext(start: args[2], minutes: args.count > 3 ? Double(args[3]) ?? 30 : 30)

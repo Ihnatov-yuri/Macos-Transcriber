@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.3.0
+- Your corrections become a benchmark. Every line you fix is kept as a checked reference: its audio (all tracks of a meeting), the text you approved and what the engine first wrote. More ⋯ → Mark transcript as checked adds a whole transcript. It lives in Documents → Transcriberr Backups → benchmark, next to your transcript backups.
+- Settings → Style & vocabulary → Your benchmark shows how much checked speech you have per language and how far the engine's text was from yours.
+
 ## 4.2.0
 - Meetings start with what your calendar knows. Before a recording is transcribed, the invite it was made in (its title, the people invited and the names in its notes) becomes vocabulary for that run, together with the names that keep coming up in your earlier meetings with the same people. The recording's header shows which invite was used.
 - Transcriberr asks for Calendar access when you start your first meeting recording. Only recordings made in the app use it (not imported, merged or split files). Turn it off in Settings → Engines → Use the meeting's calendar invite. Nothing leaves this Mac.

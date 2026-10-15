@@ -269,6 +269,34 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertGreaterThan(userAfter, userBefore * 0.5, "user speech must survive")
     }
 
+    /// `micEchoDB` tells a mic that is mostly the speakers (the user quiet)
+    /// from one that is mostly the user: only the first lets the recorder's
+    /// speech timeline gate mic text (2026-10-15: on a headphone coaching
+    /// call the gate deleted 27% of what the user said).
+    func testMicEchoDBSeparatesEchoDominatedMicFromTalkingUser() {
+        let sr = 16_000
+        var rng: UInt64 = 7
+        func rand() -> Float {
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
+        }
+        let n = sr * 20
+        var sys = [Float](repeating: 0, count: n)
+        var sm: Float = 0
+        for i in 0..<n { sm = 0.7 * sm + 0.3 * rand(); sys[i] = sm }
+        let d = 400
+        var echoOnly = [Float](repeating: 0, count: n)
+        for i in 0..<(n - d) { echoOnly[i + d] = 0.35 * sys[i] }
+        var talking = echoOnly
+        var u: Float = 0
+        for i in (sr * 4)..<n { u = 0.7 * u + 0.3 * rand(); talking[i] += 1.2 * u }   // the user, louder than the echo
+        let quiet = EchoCanceller.cancelDetailed(mic: echoOnly, ref: sys)
+        let loud = EchoCanceller.cancelDetailed(mic: talking, ref: sys)
+        XCTAssertEqual(quiet.outcome, .cancelled)
+        XCTAssertGreaterThanOrEqual(quiet.micEchoDB, 12, "a mic that is all echo")
+        XCTAssertLessThan(loud.micEchoDB, 12, "a mic that is mostly the user")
+    }
+
     /// Regression: a call whose first minute is silence — nobody has joined
     /// yet — used to poison the bulk-delay search, which only ever looked at
     /// the first 60 s. The junk lag parked the 64 ms tap window far from the

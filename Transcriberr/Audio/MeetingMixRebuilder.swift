@@ -28,7 +28,7 @@ enum MeetingMixRebuilder {
     /// The mix the user plays back: the echo-cancelled (or, when the echo is
     /// beyond the canceller, echo-gated) mic plus the far side.
     static func playbackMix(mic rawMic: [Float], sys: [Float]) -> [Float] {
-        let (cleanedMic, outcome, echoDelay) = EchoCanceller.cancelDetailed(mic: rawMic, ref: sys)
+        let (cleanedMic, outcome, echoDelay, _) = EchoCanceller.cancelDetailed(mic: rawMic, ref: sys)
         return playbackMix(cleanedMic: cleanedMic, outcome: outcome, echoDelay: echoDelay, sys: sys)
     }
 

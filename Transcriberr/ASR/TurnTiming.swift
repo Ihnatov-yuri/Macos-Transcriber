@@ -37,6 +37,20 @@ enum TurnTiming {
     /// chunks, "Hello, I'm Joe" x8) under 5% — single 0.3 s blips.
     static let longPieceSeconds = 3.0
     static let minAnchoredShare = 0.5
+    /// The speech timeline only ever removes what the mic's own Parakeet
+    /// reading was unsure of. It misses the user whenever the far side is
+    /// louder in the tap than the user on the mic (headphones, a loud
+    /// coach): a 72-min Ukrainian session lost 27% of the user's words to
+    /// it, all read at median confidence 0.91. Echo residue on the speaker
+    /// call read at median 0.51 (p75 0.62); the user's real lines there 0.87.
+    static let confidentSpeech: Float = 0.7
+
+    static func meanConfidence(_ tokens: [Token]) -> Float {
+        tokens.isEmpty ? 0 : tokens.map(\.confidence).reduce(0, +) / Float(tokens.count)
+    }
+    static func meanConfidence(_ words: [TimedWord]) -> Float {
+        words.isEmpty ? 0 : words.map(\.word.confidence).reduce(0, +) / Float(words.count)
+    }
     static let minSpeechCoverage = 0.25
 
     static func isSpoken(_ a: Double, _ b: Double, micSpeech: [ClosedRange<Double>]) -> Bool {
@@ -53,6 +67,8 @@ enum TurnTiming {
         var start: Double = 0
         var end: Double = 0
         var anchored = false
+        /// The track reading's confidence in the word this token aligned to.
+        var confidence: Float = 0
     }
 
     /// `timelines`: whole-track word readings keyed by track — 0 the far
@@ -92,7 +108,8 @@ enum TurnTiming {
                 // own reading not hearing these words is the second signal
                 // that loops and stock words over residue are phantoms.
                 guard isMe else { out.append(seg); continue }
-                if !spoken(seg.startSeconds, seg.endSeconds) { unspoken += tokens.count; continue }
+                if !spoken(seg.startSeconds, seg.endSeconds),
+                   meanConfidence(candidates) < confidentSpeech { unspoken += tokens.count; continue }
                 if let far = timelines[0], isEcho(tokens, farWords: wordsNear(far, from: seg.startSeconds - 1, to: seg.endSeconds + 1)) {
                     echoDropped += tokens.count
                     continue
@@ -127,7 +144,8 @@ enum TurnTiming {
                     p.tokens = withoutEchoEdges(p.tokens, farSide: far)
                     echoDropped += n - p.tokens.count
                     if p.tokens.isEmpty { continue }
-                    if !spoken(p.tokens.first!.start, p.tokens.last!.end) || !heard(p.tokens) {
+                    if !spoken(p.tokens.first!.start, p.tokens.last!.end) || !heard(p.tokens),
+                       meanConfidence(p.tokens.filter(\.anchored)) < confidentSpeech {
                         unspoken += p.tokens.count; continue
                     }
                 }
@@ -204,6 +222,7 @@ enum TurnTiming {
                 tokens[i].start = words[j].start
                 tokens[i].end = words[j].end
                 tokens[i].anchored = true
+                tokens[i].confidence = words[j].word.confidence
                 i += 1; j += 1
             } else if dp[i + 1][j] >= dp[i][j + 1] {
                 i += 1

@@ -198,7 +198,10 @@ final class TranscriptionRunner: @unchecked Sendable {
         do {
             let aec = EchoCanceller.cancelDetailed(mic: mic, ref: sys)
             let cleanedMic = aec.samples
-            micHadEcho = aec.outcome != .noEcho
+            // The speech timeline only gates a mic that was mostly echo: the
+            // recorder misses the user whenever the far side is louder in the
+            // tap, and on a headphone call that is most of what they say.
+            micHadEcho = aec.outcome == .cancelled && aec.micEchoDB >= Self.echoDominatedMicDB
             mic = []
             (micChunks, micDur) = decoder.chunk(samples: cleanedMic)
             if keepCleanedMic { keptMic = cleanedMic }
@@ -1223,6 +1226,12 @@ final class TranscriptionRunner: @unchecked Sendable {
         let combined = (before + " " + after).trimmingCharacters(in: .whitespacesAndNewlines)
         return combined.isEmpty ? nil : "[REFINEMENT PASS — prior attempt was low-confidence; neighboring transcript: \(combined.prefix(400))]"
     }
+
+    /// Whole-track ERLE at which the mic counts as mostly echo (≈94% of its
+    /// energy). Measured: speaker call with a quiet user 17.5 dB; Ukrainian
+    /// coaching sessions on headphones, user talking half the time, 3.2 and
+    /// 6.9 dB.
+    nonisolated static let echoDominatedMicDB = 12.0
 
     /// The recorder's mic-dominance intervals (<file>.me.json), if any.
     nonisolated static func micSpeech(for file: URL) -> [ClosedRange<Double>]? {

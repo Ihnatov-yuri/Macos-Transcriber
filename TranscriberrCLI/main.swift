@@ -530,6 +530,7 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
         languages: [language], translateTo: nil,
         diarize: true, hybridDiarize: false, expectedSpeakers: speakers)
     let t0 = Date()
+    var disputes: [WordDispute] = []
     do {
         for try await ev in runner.run(params) {
             switch ev {
@@ -539,8 +540,17 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
                 for s in segs {
                     FileHandle.standardError.write("LIVE \(String(format: "%.1f", s.startSeconds))\t\(s.speakerKey ?? "?")\t\(s.text)\n".data(using: .utf8)!)
                 }
+            case .disputes(let d):
+                disputes = d
             case .done(let segs):
                 print("### DONE \(String(format: "%.0f", Date().timeIntervalSince(t0)))s \(segs.count) segments")
+                // On stderr: stdout is the transcript eval-set.sh scores.
+                let shown = DisputeIndex.locate(d: disputes, in: segs.map { ($0.startSeconds, $0.endSeconds, $0.text) })
+                var report = "### DISPUTES \(disputes.count) found, \(shown.count) shown in the final text\n"
+                for (seg, hit) in shown {
+                    report += "DISPUTE \(String(format: "%.1f", segs[seg].startSeconds))\t\(hit.dispute.chosen) | \(hit.dispute.alternative)\n"
+                }
+                FileHandle.standardError.write(report.data(using: .utf8)!)
                 for s in segs {
                     let k = s.speakerName ?? s.speakerKey ?? "?"
                     print("\(String(format: "%.1f", s.startSeconds))\t\(k)\t\(s.text)\t\(s.speakerKey ?? "")")

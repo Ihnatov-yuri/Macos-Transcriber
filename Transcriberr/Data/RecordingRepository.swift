@@ -983,6 +983,9 @@ final class RecordingRepository: @unchecked Sendable {
             Segment(startSeconds: $0.start, endSeconds: $0.end, text: $0.text,
                     speaker: $0.speaker, speakerName: $0.speakerName)
         }
+        // The disputes belong to the run being replaced: left in place they
+        // would underline matching words of the restored text.
+        recording.disputesJSON = nil
         try replaceSegments(segs, for: recording)
     }
 

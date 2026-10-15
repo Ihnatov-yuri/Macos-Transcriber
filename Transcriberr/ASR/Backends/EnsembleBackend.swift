@@ -262,6 +262,9 @@ actor EnsembleBackend: ASRBackend {
         let agreement: Double
         let textA: String
         let textB: String
+        /// Words the vote settled between two readings (chunk-relative,
+        /// times unset): what the transcript underlines for the user.
+        var disputes: [WordDispute] = []
     }
 
     /// First pass of max-quality Super: transcribe A∥B and VOTE-merge only —
@@ -605,13 +608,15 @@ actor EnsembleBackend: ASRBackend {
                     ? Self.diceSimilarity(a.words.map(\.norm), b.words.map(\.norm))
                     : Self.tokenSimilarity(a.text, b.text)
                 let voted = haveWords
-                    ? Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB,
-                                      vocabulary: Self.vocabularyNorms(languages: languages))
-                    : preferredText
+                    ? Self.roverMergeDetailed(a.words, b.words, priorA: priorA, priorB: priorB,
+                                              vocabulary: Self.vocabularyNorms(languages: languages),
+                                              learned: DisputeLearning.pairs())
+                    : (text: preferredText, disputes: [])
                 return RichChunk(
-                    text: voted.isEmpty ? preferredText : voted,
+                    text: voted.text.isEmpty ? preferredText : voted.text,
                     agreement: similarity,
-                    textA: a.text, textB: b.text
+                    textA: a.text, textB: b.text,
+                    disputes: voted.text.isEmpty ? [] : voted.disputes
                 )
             }
         }
@@ -752,7 +757,8 @@ actor EnsembleBackend: ASRBackend {
             return await gemmaMerge(textA: a.text, textB: b.text, context: context, languages: languages)
         }
         let merged = Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB,
-                                     vocabulary: Self.vocabularyNorms(languages: languages))
+                                     vocabulary: Self.vocabularyNorms(languages: languages),
+                                     learned: DisputeLearning.pairs())
         AppLog.info("ensemble", String(format: "agreement %.2f — confidence-voted merge (%d/%d words → %d)", similarity, a.words.count, b.words.count, merged.split(separator: " ").count))
         return merged.isEmpty ? preferredText : merged
     }
@@ -768,10 +774,26 @@ actor EnsembleBackend: ASRBackend {
         _ b: [ScoredWord],
         priorA: Float = 1,
         priorB: Float = 1,
-        vocabulary: Set<String> = []
+        vocabulary: Set<String> = [],
+        learned: Set<String> = []
     ) -> String {
+        roverMergeDetailed(a, b, priorA: priorA, priorB: priorB, vocabulary: vocabulary, learned: learned).text
+    }
+
+    /// The vote, plus every aligned word the engines read differently with
+    /// the reading that lost (times left at 0 — the caller knows the chunk).
+    /// `learned` holds the user's own rulings as "loser>winner" norm pairs
+    /// (`DisputeLearning`); they outrank every other rule.
+    static func roverMergeDetailed(
+        _ a: [ScoredWord],
+        _ b: [ScoredWord],
+        priorA: Float = 1,
+        priorB: Float = 1,
+        vocabulary: Set<String> = [],
+        learned: Set<String> = []
+    ) -> (text: String, disputes: [WordDispute]) {
         let n = a.count, m = b.count
-        guard n > 0, m > 0 else { return joinSurfaces((n > 0 ? a : b).map(\.surface)) }
+        guard n > 0, m > 0 else { return (joinSurfaces((n > 0 ? a : b).map(\.surface)), []) }
         var dp = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
         for i in 0...n { dp[i][0] = i }
         for j in 0...m { dp[0][j] = j }
@@ -785,6 +807,11 @@ actor EnsembleBackend: ASRBackend {
         var i = n, j = m
         // source: 0 = aligned pair, 1 = only engine A had it, 2 = only engine B
         var reversed: [(surface: String, source: Int, norm: String)] = []
+        // The losing reading of each aligned word, in reverse order like
+        // `reversed`; nil where both engines agreed. Only aligned words
+        // (source 0) carry one, and the filters below drop only one-engine
+        // words, so the two lists stay in step over the source-0 words.
+        var losers: [String?] = []
         while i > 0 || j > 0 {
             if i > 0, j > 0,
                dp[i][j] == dp[i-1][j-1] + (a[i-1].norm == b[j-1].norm ? 0 : 1)
@@ -799,6 +826,10 @@ actor EnsembleBackend: ASRBackend {
                     // was: the more confident reading.
                     let takeA = priorA != priorB ? priorA > priorB : wa.confidence >= wb.confidence
                     reversed.append((takeA ? wa.surface : wb.surface, 0, wa.norm))
+                    losers.append(nil)
+                } else if learned.contains("\(wb.norm)>\(wa.norm)") != learned.contains("\(wa.norm)>\(wb.norm)") {
+                    // The user already settled this very pair once.
+                    reversed.append(learned.contains("\(wb.norm)>\(wa.norm)") ? (wa.surface, 0, wa.norm) : (wb.surface, 0, wb.norm))
                 } else if vocabulary.contains(wa.norm) != vocabulary.contains(wb.norm) {
                     // One reading is a spelling the user has declared
                     // authoritative — that settles it.
@@ -817,6 +848,14 @@ actor EnsembleBackend: ASRBackend {
                     // Substitution → higher prior-weighted confidence wins.
                     reversed.append(wa.confidence * priorA >= wb.confidence * priorB
                                     ? (wa.surface, 0, wa.norm) : (wb.surface, 0, wb.norm))
+                }
+                if wa.norm != wb.norm {
+                    let keptA = reversed.last?.norm == wa.norm
+                    let loser = keptA ? wb.surface : wa.surface
+                    // Parakeet spells some Ukrainian words with Russian-only
+                    // letters ("ты", "сказать"): never a reading to offer.
+                    let foreign = loser.lowercased().contains { "ыэъё".contains($0) }
+                    losers.append(Self.readingsAlike(wa.norm, wb.norm) && !foreign ? loser : nil)
                 }
                 i -= 1; j -= 1
             } else if i > 0, dp[i][j] == dp[i-1][j] + 1 {
@@ -842,7 +881,43 @@ actor EnsembleBackend: ASRBackend {
                 if end - k < 3 { words.removeSubrange(k..<end) } else { k = end }
             }
         }
-        return joinSurfaces(dropEchoInsertions(words).map(\.surface))
+        let kept = dropEchoInsertions(words)
+        var pending = Array(losers.reversed())[...]
+        var disputes: [WordDispute] = []
+        for (k, w) in kept.enumerated() where w.source == 0 {
+            guard let loser = pending.popFirst(), let loser else { continue }
+            disputes.append(WordDispute(
+                chosen: w.surface, alternative: loser,
+                before: k > 0 ? kept[k - 1].norm : "",
+                after: k + 1 < kept.count ? kept[k + 1].norm : "",
+                start: 0, end: 0))
+        }
+        return (joinSurfaces(kept.map(\.surface)), disputes)
+    }
+
+    /// Whether two aligned words are two readings of one spoken word
+    /// ("Kaico"/"Kaiko", "жовтні"/"жовтня", "hours"/"man-hours") rather than
+    /// the edit-distance alignment pairing up unrelated words beside a gap
+    /// ("for"/"I", "of"/"that"). On the reference slices about half of the
+    /// raw substitutions were such pairs; offering them as "the other
+    /// reading" would only be noise.
+    static func readingsAlike(_ x: String, _ y: String) -> Bool {
+        let a = Array(x), b = Array(y)
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        let (short, long) = a.count <= b.count ? (a, b) : (b, a)
+        if short.count >= 3, String(long).contains(String(short)) { return true }
+        var row = Array(0...b.count)
+        for i in 1...a.count {
+            var prev = row[0]
+            row[0] = i
+            for j in 1...b.count {
+                let cur = row[j]
+                row[j] = min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] == b[j - 1] ? 0 : 1))
+                prev = cur
+            }
+        }
+        let dist = row[b.count]
+        return dist <= 1 || (a[0] == b[0] && Double(dist) <= Double(long.count) * 0.5)
     }
 
     /// With equal priors (English: Whisper + Parakeet) every word only one

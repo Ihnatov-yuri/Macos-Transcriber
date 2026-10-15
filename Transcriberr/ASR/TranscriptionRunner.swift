@@ -874,6 +874,20 @@ final class TranscriptionRunner: @unchecked Sendable {
                 clusterVoice: clusterVoice
             )
         }.value
+        if ensembleTwoPass {
+            // On the shared clock: the chunk's span, for the transcript to
+            // look the word up only in the turns that overlap it.
+            let disputes = richBox.all().sorted { $0.key < $1.key }.flatMap { idx, rich in
+                rich.disputes.map { d in
+                    var d = d
+                    d.start = chunks[idx].startSeconds
+                    d.end = chunks[idx].endSeconds
+                    return d
+                }
+            }
+            AppLog.info("runner", "\(disputes.count) disputed words kept for the transcript")
+            continuation.yield(.disputes(disputes))
+        }
         continuation.yield(.stage(text: "Done.", fraction: 1.0))
         continuation.yield(.done(segments: allSegments))
     }

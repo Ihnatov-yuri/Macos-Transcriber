@@ -43,6 +43,9 @@ final class Recording {
     /// User-entered speaker names (speakerKey → name), persisted so re-runs
     /// and version restores re-apply them automatically.
     var speakerNamesJSON: String?
+    /// JSON [WordDispute]: the words Super's two engines read differently
+    /// in the latest run (nil for other engines). See `DisputeIndex`.
+    var disputesJSON: String?
 
     @Relationship(deleteRule: .cascade, inverse: \Segment.recording)
     var segments: [Segment] = []

@@ -35,6 +35,50 @@ final class PromptStore: @unchecked Sendable {
         }
     }
 
+    /// Adds a term the user taught the app (a disputed word they settled),
+    /// to the run language's list when there is one, else to the global
+    /// list. Already there in any casing → nothing changes.
+    func learnTerm(_ term: String, language: String?) {
+        let t = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        func adding(_ list: String) -> String? {
+            let items = list.split(whereSeparator: { $0 == "," || $0.isNewline })
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            guard !items.contains(where: { $0.caseInsensitiveCompare(t) == .orderedSame }) else { return nil }
+            return (items + [t]).joined(separator: ", ")
+        }
+        var added = false
+        if let language, !language.isEmpty {
+            if let v = adding(vocabularyByLanguage[language] ?? "") { vocabularyByLanguage[language] = v; added = true }
+        } else if let v = adding(vocabulary) {
+            vocabulary = v; added = true
+        }
+        // Remembered, so only a term the app added can be taken out again.
+        if added { defaults.set((defaults.stringArray(forKey: Self.learnedTermsKey) ?? []) + [t], forKey: Self.learnedTermsKey) }
+    }
+
+    static let learnedTermsKey = "vocab.learnedTerms"
+
+    /// Takes back a term `learnTerm` added (the user switched the word back).
+    /// A term the user typed themselves is never touched.
+    func forgetLearnedTerm(_ term: String, language: String?) {
+        var learned = defaults.stringArray(forKey: Self.learnedTermsKey) ?? []
+        guard let i = learned.firstIndex(where: { $0.caseInsensitiveCompare(term) == .orderedSame }) else { return }
+        learned.remove(at: i)
+        defaults.set(learned, forKey: Self.learnedTermsKey)
+        func removing(_ list: String) -> String {
+            list.split(whereSeparator: { $0 == "," || $0.isNewline })
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && $0.caseInsensitiveCompare(term) != .orderedSame }
+                .joined(separator: ", ")
+        }
+        if let language, !language.isEmpty, let v = vocabularyByLanguage[language] {
+            vocabularyByLanguage[language] = removing(v)
+        } else {
+            vocabulary = removing(vocabulary)
+        }
+    }
+
     /// Global vocabulary + the entries for the given run languages (all
     /// language entries when the run is auto-detect).
     func vocabulary(for languages: Set<String>) -> String {

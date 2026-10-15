@@ -44,6 +44,9 @@ func usage() {
                                             one-time backfill: rerun offline echo cancellation on
                                             every meeting recording made before v2.5.2, replacing
                                             the live-gated mix with a properly echo-cancelled one
+      transcriberrcli voice enroll|score|show
+                                            voice print: enroll from audio (or a meeting's mic via
+                                            --me), score a meeting's tracks against it
       transcriberrcli help                 this message
 
     Each command exits 0 on success, non-zero on failure.
@@ -564,12 +567,17 @@ func cmdRefinalize(path: String) -> Int32 {
     let runner = TranscriptionRunner(
         factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore()),
         prompts: prompts, diarization: DiarizationRunner())
+    let voice = ProcessInfo.processInfo.environment["TRANSCRIBERR_NO_VOICE"] == "1" ? nil : dump.voice
     let out = runner.finalizeSegments(
         dump.rawSegments, diarize: dump.diarize, splitTracks: dump.splitTracks,
         expectedSpeakers: dump.expectedSpeakers, diarSegments: dump.diarSegments,
         myName: dump.myName,
         timelines: ProcessInfo.processInfo.environment["TRANSCRIBERR_NO_TIMING"] == "1" ? [:] : dump.timedTimelines,
-        micSpeech: dump.micSpeechRanges)
+        // A/B: TRANSCRIBERR_NO_VOICE=1 replays with the loudness timeline instead.
+        micSpeech: voice == nil ? dump.micSpeechRanges : nil,
+        voice: voice,
+        micEcho: dump.micEcho ?? false,
+        clusterVoice: ProcessInfo.processInfo.environment["TRANSCRIBERR_NO_VOICE"] == "1" ? nil : dump.clusterVoice)
     for s in out {
         print(String(format: "%.1f\t%.1f\t", s.startSeconds, s.endSeconds) + "\(s.speakerKey ?? "?")\t\(s.text)")
     }
@@ -744,6 +752,10 @@ func main() async -> Int32 {
         return await cmdMigrateEcho(dryRun: args.dropFirst(2).contains("--dry-run"))
     case "mcp":
         return runMCPServer()
+    case "voice":
+        return await cmdVoice(Array(args.dropFirst(2)))
+    case "whisperloop":
+        return await cmdWhisperLoop(Array(args.dropFirst(2)))
     case "help", "-h", "--help":
         usage()
         return 0

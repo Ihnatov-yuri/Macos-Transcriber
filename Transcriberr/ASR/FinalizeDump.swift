@@ -17,10 +17,15 @@ struct FinalizeDump: Codable {
     var myName: String?
     var timelines: [String: [Word]]
     var micSpeech: [[Double]]?
+    var micVoice: [[Double]]?
+    var sysVoice: [[Double]]?
+    var micEcho: Bool?
+    var clusterVoice: [String: Float]?
 
     init(segments: [RawSegment], diarize: Bool, splitTracks: Bool, expectedSpeakers: Int,
          diarSegments: [DiarizationRunner.SpeakerSegment], myName: String?, timelines: [Int: [TimedWord]],
-         micSpeech: [ClosedRange<Double>]? = nil) {
+         micSpeech: [ClosedRange<Double>]? = nil, voice: VoiceTimeline? = nil, micEcho: Bool = false,
+         clusterVoice: [String: Float]? = nil) {
         self.segments = segments.map { Seg(start: $0.startSeconds, end: $0.endSeconds, text: $0.text,
                                            speaker: $0.speakerKey, name: $0.speakerName) }
         self.diarize = diarize
@@ -29,6 +34,10 @@ struct FinalizeDump: Codable {
         self.diarization = diarSegments.map { Region(start: $0.startSeconds, end: $0.endSeconds, speaker: $0.speakerId) }
         self.myName = myName
         self.micSpeech = micSpeech?.map { [$0.lowerBound, $0.upperBound] }
+        self.micVoice = voice?.mic.map { [$0.lowerBound, $0.upperBound] }
+        self.sysVoice = voice?.sys.map { [$0.lowerBound, $0.upperBound] }
+        self.micEcho = micEcho
+        self.clusterVoice = clusterVoice
         self.timelines = Dictionary(uniqueKeysWithValues: timelines.map { id, words in
             (String(id), words.map { Word(surface: $0.word.surface, norm: $0.word.norm, start: $0.start, end: $0.end, confidence: $0.word.confidence) })
         })
@@ -40,6 +49,13 @@ struct FinalizeDump: Codable {
     }
     var micSpeechRanges: [ClosedRange<Double>]? {
         micSpeech?.compactMap { $0.count == 2 && $0[0] <= $0[1] ? $0[0]...$0[1] : nil }
+    }
+    var voice: VoiceTimeline? {
+        guard let micVoice else { return nil }
+        func ranges(_ r: [[Double]]?) -> [ClosedRange<Double>] {
+            (r ?? []).compactMap { $0.count == 2 && $0[0] <= $0[1] ? $0[0]...$0[1] : nil }
+        }
+        return VoiceTimeline(mic: ranges(micVoice), sys: ranges(sysVoice))
     }
     var diarSegments: [DiarizationRunner.SpeakerSegment] {
         diarization.map { .init(startSeconds: $0.start, endSeconds: $0.end, speakerId: $0.speaker) }

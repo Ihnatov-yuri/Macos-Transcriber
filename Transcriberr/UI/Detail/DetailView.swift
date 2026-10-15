@@ -472,6 +472,12 @@ struct DetailView: View {
             let speakers = Set(recording.segments.compactMap { $0.speaker }).count
             if speakers > 0 { out.append("\(speakers) speakers") }
             out.append("\(recording.segments.count) turns")
+            if let mc = MeetingContext.decode(recording.meetingContextJSON) {
+                var s = "Invite: \(mc.title)"
+                if !mc.attendees.isEmpty { s += " · \(mc.attendees.count) people" }
+                if mc.pastMeetings > 0 { s += " · \(mc.pastMeetings) earlier meetings" }
+                out.append(s)
+            }
             return out
         }()
         HStack(spacing: 6) {

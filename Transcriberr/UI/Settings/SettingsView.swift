@@ -1,3 +1,4 @@
+import EventKit
 import SwiftUI
 
 /// Mirror of `ui/settings/SettingsScreen.kt`.
@@ -38,6 +39,7 @@ struct SettingsView: View {
 /// selectable as an EXPERIMENTAL audio engine (known to hallucinate).
 struct EnginesSettingsTab: View {
     @AppStorage("ui.meetingBrief") private var meetingBrief = true
+    @AppStorage(MeetingContext.enabledKey) private var meetingContext = true
     @AppStorage("ui.superGemmaRulings") private var gemmaRulings = "english"
     @Environment(AppContainer.self) private var container
     @AppStorage("ui.myName") private var myName = ""
@@ -110,6 +112,16 @@ struct EnginesSettingsTab: View {
                     set: { container.uiPrefs.meetingSuperFollowUp = $0 }
                 ))
                 Text("When a meeting recording stops, the default engine writes a quick draft you can read at once; Super then runs in the background and replaces it when it finishes. The draft stays in VERSIONS.")
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                Toggle("Use the meeting's calendar invite", isOn: $meetingContext)
+                    .onChange(of: meetingContext) { _, on in
+                        if on { Task { _ = await MeetingContext.requestAccess(EKEventStore(), ask: true) } }
+                    }
+                if meetingContext, EKEventStore.authorizationStatus(for: .event) == .denied {
+                    Text("Calendar access is off for Transcriberr. Turn it on in System Settings → Privacy & Security → Calendars.")
+                        .font(AppFont.text(12)).foregroundStyle(AppColor.statusError)
+                }
+                Text("Before a recording is transcribed, the invite it was made in (its title, attendees and the names in its notes) and the names that recur in your earlier meetings with the same people become vocabulary for that run. Read from the Calendar app on this Mac; nothing leaves it.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 Toggle("Gemma reads the whole transcript first (recording brief)", isOn: $meetingBrief)
                 Text("A few extra reads (about a minute per hour of recording) give Gemma the topic, the people and the names as spelled in this recording. Max-quality arbitration and the Clean / Context rewrite / Translate presets all use it, and a name spelled inconsistently is unified when the correction sounds the same.")

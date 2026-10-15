@@ -101,6 +101,9 @@ final class TranscriptionRunner: @unchecked Sendable {
         /// draft): the visible transcript stays as it is until this run
         /// finishes, then is replaced in one step — never half-streamed.
         var keepVisibleUntilDone: Bool
+        /// The calendar invite this recording belongs to (`MeetingContext`):
+        /// its names and terms are this run's extra vocabulary.
+        var meetingContext: MeetingContext? = nil
 
         init(
             file: URL,
@@ -360,6 +363,12 @@ final class TranscriptionRunner: @unchecked Sendable {
         continuation.yield(.stage(text: "Loading model…", fraction: 0.14))
         let backend = factory.backend(for: params.backend)
         await (backend as? EnsembleBackend)?.setRunLanguages(params.languages)
+        // Set on every run, nil included: the backend is shared, and the
+        // previous meeting's names must not leak into this one.
+        await (backend as? EnsembleBackend)?.setMeetingContext(params.meetingContext)
+        if let mc = params.meetingContext {
+            AppLog.info("runner", "meeting context: \"\(mc.title)\" · \(mc.attendees.count) attendees · \(mc.allTerms.count) terms (\(mc.pastTerms.count) from \(mc.pastMeetings) past meetings)")
+        }
         do {
             try await backend.load(modelPath: params.modelDirectory)
             AppLog.info("runner", "backend \(params.backend.rawValue) loaded")
@@ -665,7 +674,10 @@ final class TranscriptionRunner: @unchecked Sendable {
             let firstPass = allSegments.map(\.text).joined(separator: "\n")
             if MeetingBriefBuilder.isEnabled, firstPass.count >= 600 {
                 continuation.yield(.stage(text: "Reading the whole transcript…", fraction: 0.89))
-                let vocabulary = prompts.vocabulary(for: params.languages)
+                var vocabulary = prompts.vocabulary(for: params.languages)
+                if let terms = params.meetingContext?.allTerms, !terms.isEmpty {
+                    vocabulary += (vocabulary.isEmpty ? "" : ", ") + terms.joined(separator: ", ")
+                }
                 do {
                     let brief = try await withChunkTimeout(
                         seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass)
@@ -796,7 +808,10 @@ final class TranscriptionRunner: @unchecked Sendable {
         }
         // The user's spellings, for names both engines wrote the same wrong
         // way — the vote never sees those (see applyVocabulary).
-        let vocabularyTerms = TranscriptHygiene.vocabularyTerms(languages: params.languages)
+        // The invite's spellings join the user's (not the past meetings'
+        // terms: those are transcribed text, only a hint for the vote).
+        let vocabularyTerms = MeetingContext.dedup(TranscriptHygiene.vocabularyTerms(languages: params.languages)
+            + (params.meetingContext?.calendarTerms ?? []))
         if !vocabularyTerms.isEmpty {
             let current = allSegments
             allSegments = await Task.detached {

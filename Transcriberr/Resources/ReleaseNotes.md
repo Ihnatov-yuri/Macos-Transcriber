@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.2.0
+- Meetings start with what your calendar knows. Before a recording is transcribed, the invite it was made in (its title, the people invited and the names in its notes) becomes vocabulary for that run, together with the names that keep coming up in your earlier meetings with the same people. The recording's header shows which invite was used.
+- Transcriberr asks for Calendar access when you start your first meeting recording. Only recordings made in the app use it (not imported, merged or split files). Turn it off in Settings → Engines → Use the meeting's calendar invite. Nothing leaves this Mac.
+
 ## 4.1.0
 - Super shows where its two engines disagreed. Words they heard differently have a dotted underline; hover to see the other reading, click to use it instead, click again to switch back.
 - Your choice teaches the app: when the engines split the same way again, Super picks what you picked. Names and terms you choose ("Kaiko", "KimKim") also join your vocabulary. Settings → Style & vocabulary → Your word choices lists every choice, and one click takes a wrong one back.

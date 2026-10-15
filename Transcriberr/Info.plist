@@ -37,6 +37,8 @@
 	<string>26.0</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Meeting mode records the audio other apps play (your meeting participants) so calls can be transcribed locally on this Mac.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Transcriberr reads the invite of the meeting you recorded (its title and attendees) so their names are spelled right in the transcript. Nothing leaves this Mac.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Transcriberr saves recordings, transcripts, and sidecar files alongside your audio.</string>
 	<key>NSHumanReadableCopyright</key>

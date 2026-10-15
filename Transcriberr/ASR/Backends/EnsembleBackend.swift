@@ -40,6 +40,16 @@ actor EnsembleBackend: ASRBackend {
     /// the pair can be checked against them.
     private var runLanguages: Set<String> = []
     func setRunLanguages(_ languages: Set<String>) { runLanguages = languages }
+    /// This run's meeting (calendar invite): its terms vote like vocabulary
+    /// and Gemma is told what meeting it reads.
+    private var meeting: MeetingContext?
+    private var meetingNorms: Set<String> = []
+    /// What the vote currently treats as meeting vocabulary (tests).
+    func meetingVocabulary() -> Set<String> { meetingNorms }
+    func setMeetingContext(_ context: MeetingContext?) {
+        meeting = context
+        meetingNorms = Set((context?.allTerms ?? []).flatMap { TranscriptHygiene.normWords($0) }.filter { $0.count >= 3 })
+    }
 
     /// Parakeet v2 is English-only: in a non-English run it contributes a
     /// transliterated guess at half weight, which makes "Super" a slower
@@ -609,7 +619,7 @@ actor EnsembleBackend: ASRBackend {
                     : Self.tokenSimilarity(a.text, b.text)
                 let voted = haveWords
                     ? Self.roverMergeDetailed(a.words, b.words, priorA: priorA, priorB: priorB,
-                                              vocabulary: Self.vocabularyNorms(languages: languages),
+                                              vocabulary: Self.vocabularyNorms(languages: languages).union(meetingNorms),
                                               learned: DisputeLearning.pairs())
                     : (text: preferredText, disputes: [])
                 return RichChunk(
@@ -757,7 +767,7 @@ actor EnsembleBackend: ASRBackend {
             return await gemmaMerge(textA: a.text, textB: b.text, context: context, languages: languages)
         }
         let merged = Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB,
-                                     vocabulary: Self.vocabularyNorms(languages: languages),
+                                     vocabulary: Self.vocabularyNorms(languages: languages).union(meetingNorms),
                                      learned: DisputeLearning.pairs())
         AppLog.info("ensemble", String(format: "agreement %.2f — confidence-voted merge (%d/%d words → %d)", similarity, a.words.count, b.words.count, merged.split(separator: " ").count))
         return merged.isEmpty ? preferredText : merged
@@ -1097,6 +1107,9 @@ actor EnsembleBackend: ASRBackend {
         if !vocabParts.isEmpty {
             vocabBlock = "Vocabulary (authoritative spellings — prefer the reading matching these): \(vocabParts.joined(separator: ", ").prefix(600))\n\n"
         }
+        // Its own capped lines, before the user's list: neither can push the
+        // other out of the prompt.
+        if let meeting { vocabBlock = meeting.promptBlock + vocabBlock }
         // The bigger picture: the conversation's preceding merged text lets
         // the arbiter judge which conflicting reading fits the discussion —
         // names, topic, register — instead of judging the chunk in isolation.

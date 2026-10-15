@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.1.0
+- Super shows where its two engines disagreed. Words they heard differently have a dotted underline; hover to see the other reading, click to use it instead, click again to switch back.
+- Your choice teaches the app: when the engines split the same way again, Super picks what you picked. Names and terms you choose ("Kaiko", "KimKim") also join your vocabulary. Settings → Style & vocabulary → Your word choices lists every choice, and one click takes a wrong one back.
+
 ## 4.0.0
 - Your voice print. Read a short passage aloud once (Settings → Audio input → Your voice) and meetings find you on the microphone by your voice instead of by how loud the mic is.
 - On calls with headphones, nothing you said is removed for being quieter than the other person.

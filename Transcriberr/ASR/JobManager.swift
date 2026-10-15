@@ -346,6 +346,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
         var wipedOldTranscript = false
         let stream = runner.run(params)
         var allSegments: [Segment] = []
+        var runDisputes: [WordDispute] = []
         do {
             for try await event in stream {
                 // The recording can be deleted mid-run (library context
@@ -373,6 +374,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     fireSourceConsumed()
                 case .partialText:
                     continue
+                case .disputes(let d):
+                    runDisputes = d
                 case .segments(_, let raws):
                     // LAZY WIPE: the old transcript survives until the new
                     // run actually produces output. An interrupted run that
@@ -388,6 +391,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     if !wipedOldTranscript {
                         try? repository.clearSegments(of: recording)
                         wipedOldTranscript = true
+                        // The old run's disputes describe the text just wiped.
+                        recording.disputesJSON = nil
                     }
                     stampRunMetadata()
                     // Live append: turn raws into Segments and persist now.
@@ -505,6 +510,9 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         }
                     }
                     applySelfNameIfMeeting(recording)
+                    // Replaced on every run: an older run's disputes would
+                    // underline words the new transcript no longer has.
+                    recording.disputesJSON = DisputeIndex.encode(runDisputes)
                     // Every completed run becomes an immutable version tagged
                     // with its engine, so runs from different engines can be
                     // compared (Detail → VERSIONS) and restored.

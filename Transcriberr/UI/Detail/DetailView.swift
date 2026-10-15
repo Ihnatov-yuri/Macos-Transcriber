@@ -810,6 +810,7 @@ struct DetailView: View {
                 runStage: model.status?.stage,
                 backgroundRun: model.status?.background ?? false,
                 onEditSegment: { editingSegment = $0 },
+                onPickAlternative: { seg, k in pickAlternative(seg, disputeIndex: k) },
                 speakerColor: { [order = uniqueSpeakers().map(\.key)] key in
                     // Precomputed ONCE per render — calling uniqueSpeakers()
                     // per row walked the SwiftData segments relationship
@@ -831,6 +832,39 @@ struct DetailView: View {
 /// RESTORE (swap back in as the live transcript) and DELETE. This is how
 /// engines are compared on the same audio: run engine 1, run engine 2, open
 /// VERSIONS.
+extension DetailView {
+    /// Switch a disputed word to the other engine's reading, then learn the
+    /// choice: the vote prefers it next time the engines split the same way,
+    /// and a name or coined term also joins the vocabulary.
+    func pickAlternative(_ seg: Segment, disputeIndex k: Int) {
+        var list = DisputeIndex.decode(recording.disputesJSON)
+        guard list.indices.contains(k) else { return }
+        // Found again in the stored text: the row showed the styled text.
+        var claimed = Set<Int>()
+        guard let hit = DisputeIndex.hits(in: seg.text, start: seg.startSeconds, end: seg.endSeconds,
+                                          disputes: [list[k]], claimed: &claimed).first else { return }
+        let sentenceStart = DisputeLearning.startsSentence(hit.range, in: seg.text)
+        let picked = DisputeIndex.pick(hit, in: seg.text)
+        seg.text = picked.text
+        list[k] = picked.flipped
+        recording.disputesJSON = DisputeIndex.encode(list)
+        try? container.repository.save(recording)
+        try? TranscriptExporter.export(recording: recording)
+        let term = DisputeIndex.core(hit.dispute.alternative)
+        let isTerm = DisputeLearning.isTerm(term, sentenceStart: sentenceStart)
+        switch DisputeLearning.record(loser: hit.dispute.chosen, winner: hit.dispute.alternative, learn: isTerm) {
+        case .learned:
+            container.promptStore.learnTerm(term, language: recording.sourceLanguage)
+        case .undone:
+            // The click back: the term the first click added goes too.
+            container.promptStore.forgetLearnedTerm(DisputeIndex.core(hit.dispute.chosen), language: recording.sourceLanguage)
+        case .ignored:
+            break
+        }
+        AppLog.info("detail", "dispute: \"\(hit.dispute.chosen)\" → \"\(hit.dispute.alternative)\"")
+    }
+}
+
 private struct VersionsPane: View {
     let model: DetailModel
     @Environment(\.modelContext) private var context
@@ -952,7 +986,46 @@ struct TranscriptPane: View {
     var runStage: String? = nil
     var backgroundRun: Bool = false
     var onEditSegment: (Segment) -> Void = { _ in }
+    /// The user clicked a disputed word: switch it to the other engine's
+    /// reading (the Int is the dispute's index in `recording.disputesJSON`).
+    var onPickAlternative: (Segment, Int) -> Void = { _, _ in }
     var speakerColor: (String) -> Color = { _ in SpeakerPalette.colors[0] }
+
+    /// Super's disputed words per segment, in playback order (a dispute
+    /// shows in the first segment it matches), with the text they were found
+    /// in: a hit's ranges index THAT string and are used only while the row
+    /// still shows it.
+    struct DisputeRow { let text: String; let hits: [DisputeIndex.Hit] }
+    @State private var disputeRows: [UUID: DisputeRow] = [:]
+
+    /// What the hits depend on. Cheap to build (utf8 counts are O(1)), so
+    /// the playhead ticks that re-run `body` no longer re-scan every
+    /// segment against every dispute; the scan reruns only when this changes.
+    private struct DisputeKey: Hashable {
+        let json: String?
+        let style: TranscriptStyle
+        let running: Bool
+        let texts: [Int]
+    }
+
+    private func disputeKey(_ segs: [Segment]) -> DisputeKey {
+        DisputeKey(json: recording.disputesJSON, style: style, running: isRunning,
+                   texts: segs.map { $0.text.utf8.count &* 31 &+ Int($0.startSeconds * 10) })
+    }
+
+    private func disputeHits(in segs: [Segment]) -> [UUID: DisputeRow] {
+        let disputes = DisputeIndex.decode(recording.disputesJSON)
+        guard !disputes.isEmpty, !isRunning else { return [:] }
+        var claimed = Set<Int>()
+        var out: [UUID: DisputeRow] = [:]
+        for seg in segs {
+            let shown = style.apply(seg.text)
+            let hits = DisputeIndex.hits(in: shown, start: seg.startSeconds, end: seg.endSeconds,
+                                         disputes: disputes, claimed: &claimed)
+            if !hits.isEmpty { out[seg.id] = DisputeRow(text: shown, hits: hits) }
+        }
+        return out
+    }
 
     /// The transcript in playback order, sorted ONCE per body pass.
     ///
@@ -1040,7 +1113,7 @@ struct TranscriptPane: View {
                     LazyVStack(spacing: 0) {
                         ForEach(segs, id: \.id) { seg in
                             HairlineSoft()
-                            segmentRow(seg).id(seg.id)
+                            segmentRow(seg, disputes: disputeRows[seg.id]).id(seg.id)
                         }
                         HairlineSoft()
                         // Sentinel so we can scroll just past the last row.
@@ -1054,6 +1127,7 @@ struct TranscriptPane: View {
                 } action: { _, isNear in
                     nearBottom = isNear
                 }
+                .task(id: disputeKey(segs)) { disputeRows = disputeHits(in: sortedSegments) }
                 .onChange(of: tailID(in: segs)) { _, new in
                     // New chunk arrived → follow, but ONLY if the user is
                     // already at the bottom, and without animation — an
@@ -1090,7 +1164,26 @@ struct TranscriptPane: View {
         return lines.joined(separator: " ")
     }
 
-    private func segmentRow(_ seg: Segment) -> some View {
+    /// The segment's text with its disputed words marked: a dotted
+    /// underline, and a link that switches the word to the other reading.
+    private func segmentText(_ seg: Segment, disputes: DisputeRow?) -> Text {
+        let shown = style.apply(seg.text)
+        // Stale cache (the text changed since the scan): plain text this
+        // frame; the scan re-runs because the key changed.
+        guard let disputes, disputes.text == shown, !disputes.hits.isEmpty else { return Text(shown) }
+        let hits = disputes.hits
+        var attr = AttributedString(shown)
+        for hit in hits {
+            guard let r = Range(hit.range, in: attr),
+                  let url = URL(string: "transcriberr-dispute:\(hit.index)") else { continue }
+            attr[r].link = url
+            attr[r].underlineStyle = Text.LineStyle(pattern: .dot, color: AppColor.accentOnLight)
+        }
+        return Text(attr)
+    }
+
+    private func segmentRow(_ seg: Segment, disputes: DisputeRow? = nil) -> some View {
+        let hits = disputes?.hits ?? []
         let active = player.currentTime >= seg.startSeconds && player.currentTime <= seg.endSeconds
         return HStack(alignment: .top, spacing: AppMetric.s) {
             VStack(alignment: .leading, spacing: 1) {
@@ -1111,10 +1204,19 @@ struct TranscriptPane: View {
                         Text(name).uiLabel(9, color: AppColor.accentOnLight)
                     }
                 }
-                Text(style.apply(seg.text))
+                segmentText(seg, disputes: disputes)
                     .font(AppFont.text(15))
                     .foregroundStyle(AppColor.ink)
+                    .tint(AppColor.ink)
                     .textSelection(.enabled)
+                    .help(hits.isEmpty ? "" : hits.map { "\($0.dispute.chosen) · other engine heard \"\($0.dispute.alternative)\"" }
+                        .joined(separator: "\n") + "\nClick an underlined word to use the other reading.")
+                    .environment(\.openURL, OpenURLAction { url in
+                        guard url.scheme == "transcriberr-dispute", let k = Int(url.absoluteString.dropFirst("transcriberr-dispute:".count))
+                        else { return .systemAction }
+                        onPickAlternative(seg, k)
+                        return .handled
+                    })
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

@@ -539,6 +539,7 @@ struct StyleSettingsTab: View {
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             LearnedTermsSection()
+            LearnedChoicesSection()
             Section("Domain packs") {
                 ForEach(DomainVocabulary.Pack.allCases, id: \.self) { pack in
                     // TapButton — inline Button capturing @Observable container

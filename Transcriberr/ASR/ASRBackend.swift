@@ -51,6 +51,20 @@ struct TimedWord: Sendable {
     var end: Double
 }
 
+/// One word Super's two engines read differently: the reading the vote kept
+/// and the one it rejected. `before`/`after` are the kept neighbours' norms,
+/// which find the word again in the finished transcript (the text passes
+/// through hygiene, seam trims and turn merging after the vote, so a word
+/// index would not survive). `start`/`end` is the chunk's span.
+struct WordDispute: Codable, Sendable, Hashable {
+    var chosen: String
+    var alternative: String
+    var before: String
+    var after: String
+    var start: Double
+    var end: Double
+}
+
 struct DetailedTranscription: Sendable {
     let text: String
     let words: [ScoredWord]
@@ -131,6 +145,9 @@ enum ASREvent: Sendable {
     /// `TranscriptionRunner` to swap out a chunk's transcription once a
     /// higher-confidence retry comes back.
     case replaceSegments(startSeconds: Double, endSeconds: Double, segments: [RawSegment])
+    /// Super only, right before `.done`: the words the two engines read
+    /// differently, for the transcript to show and let the user settle.
+    case disputes([WordDispute])
     /// Final event. `segments` is the full set (also re-emitted so callers can
     /// reconcile if they prefer a replace-style save).
     case done(segments: [RawSegment])

@@ -36,6 +36,7 @@ enum TurnTiming {
     /// covered, Whisper's inventions over echo residue (26 s unanchored
     /// chunks, "Hello, I'm Joe" x8) under 5% — single 0.3 s blips.
     static let longPieceSeconds = 3.0
+    static let minAnchoredShare = 0.5
     static let minSpeechCoverage = 0.25
 
     static func isSpoken(_ a: Double, _ b: Double, micSpeech: [ClosedRange<Double>]) -> Bool {
@@ -67,6 +68,13 @@ enum TurnTiming {
         guard !timelines.isEmpty else { return segments }
         var out: [RawSegment] = []
         var loopsDropped = 0, echoDropped = 0, split = 0, unspoken = 0
+        // With echo on the mic, a piece the mic's own reading mostly lacks
+        // is Whisper writing over residue ("I to it's a. of").
+        func heard(_ t: [Token]) -> Bool {
+            guard micSpeech != nil else { return true }
+            let content = t.filter { !$0.norm.isEmpty }
+            return Double(content.filter(\.anchored).count) >= minAnchoredShare * Double(content.count)
+        }
         func spoken(_ a: Double, _ b: Double) -> Bool {
             guard let micSpeech else { return true }
             return isSpoken(a, b, micSpeech: micSpeech)
@@ -118,7 +126,9 @@ enum TurnTiming {
                     p.tokens = withoutEchoEdges(p.tokens, farSide: far)
                     echoDropped += n - p.tokens.count
                     if p.tokens.isEmpty { continue }
-                    if !spoken(p.tokens.first!.start, p.tokens.last!.end) { unspoken += p.tokens.count; continue }
+                    if !spoken(p.tokens.first!.start, p.tokens.last!.end) || !heard(p.tokens) {
+                        unspoken += p.tokens.count; continue
+                    }
                 }
                 var s = seg
                 s.startSeconds = p.tokens.first!.start
@@ -221,8 +231,14 @@ enum TurnTiming {
         return prev[b.count]
     }
 
-    /// Unanchored words take times spread evenly between their anchored
-    /// neighbours; before the first anchor or after the last they sit on it.
+    /// Seconds an unanchored word is assumed to take.
+    static let unanchoredWordSeconds = 0.3
+
+    /// Unanchored words follow the anchored word before them at a speaking
+    /// pace, not spread across the whole gap to the next anchor: spread, two
+    /// words Whisper added ("Okay. Nice place.") bridged a 3 s pause and the
+    /// user's answer printed before the question asked in it. Before the
+    /// first anchor or after the last they sit on it.
     static func interpolate(_ tokens: inout [Token]) {
         let anchors = tokens.indices.filter { tokens[$0].anchored }
         guard let first = anchors.first, let last = anchors.last else { return }
@@ -230,7 +246,7 @@ enum TurnTiming {
         for i in (last + 1)..<tokens.count { tokens[i].start = tokens[last].end; tokens[i].end = tokens[last].end }
         for (a, b) in zip(anchors, anchors.dropFirst()) where b - a > 1 {
             let t0 = tokens[a].end, t1 = max(tokens[b].start, t0)
-            let step = (t1 - t0) / Double(b - a)
+            let step = min(unanchoredWordSeconds, (t1 - t0) / Double(b - a))
             for i in (a + 1)..<b {
                 tokens[i].start = t0 + step * Double(i - a - 1)
                 tokens[i].end = t0 + step * Double(i - a)
@@ -288,7 +304,7 @@ enum TurnTiming {
         guard let first = tokens.first, let last = tokens.last else { return [] }
         let near = wordsNear(farSide, from: first.start - 2, to: last.end + 2)
         func hit(_ norm: String, at mid: Double) -> Bool {
-            near.contains { abs(($0.start + $0.end) / 2 - mid) <= echoTolerance && similar(norm, $0.word.norm) }
+            near.contains { abs(($0.start + $0.end) / 2 - mid) <= echoTolerance && echoMatch(norm, $0.word.norm) }
         }
         var flags = [Bool](repeating: false, count: tokens.count)
         for i in tokens.indices where !tokens[i].norm.isEmpty {
@@ -310,14 +326,38 @@ enum TurnTiming {
         guard !content.isEmpty else { return tokens }
         let share = Double(content.filter { flags[$0] }.count) / Double(content.count)
         if content.count >= 2 && share >= echoPieceShare { return [] }
-        // Only runs of two or more: one shared word ("It's", "yeah") at the
-        // same second is as often both people talking as it is echo.
+        // Runs of two or more, or one long word: a short shared word ("It's",
+        // "yeah") at the same second is as often both people talking as it
+        // is echo, but nobody repeats "architecture" in step with the speaker.
+        // A lone long word must also START with the far one, at the echo's
+        // ~0.3 s lag: repeating the other person's word comes later (uk-b:
+        // "логику" / "логіку" 0.7 s apart, both really said; "architecture"
+        // echoed 0.4 s after "architect").
+        let near = wordsNear(farSide, from: (tokens.first?.start ?? 0) - 2, to: (tokens.last?.end ?? 0) + 2)
+        func strong(_ r: Range<Int>) -> Bool {
+            r.count >= 2 || r.contains { i in
+                tokens[i].norm.count >= longEchoWord && near.contains {
+                    abs($0.start - tokens[i].start) <= loneEchoStartLag && echoMatch(tokens[i].norm, $0.word.norm)
+                }
+            }
+        }
         var lo = 0, hi = tokens.count
         while lo < hi, flags[lo] { lo += 1 }
-        if lo < 2 { lo = 0 }
+        if !strong(0..<lo) { lo = 0 }
         while hi > lo, flags[hi - 1] { hi -= 1 }
-        if tokens.count - hi < 2 { hi = tokens.count }
+        if !strong(hi..<tokens.count) { hi = tokens.count }
         return lo < hi ? Array(tokens[lo..<hi]) : []
+    }
+
+    static let longEchoWord = 5
+    static let loneEchoStartLag = 0.5
+
+    /// Near spellings, or a long word cut short by the other reading
+    /// ("architect" for "architecture").
+    static func echoMatch(_ a: String, _ b: String) -> Bool {
+        if similar(a, b) { return true }
+        let (short, long) = a.count <= b.count ? (a, b) : (b, a)
+        return short.count >= 6 && long.hasPrefix(short)
     }
 
     /// An unaligned mic line whose words are, in order, the far side's words

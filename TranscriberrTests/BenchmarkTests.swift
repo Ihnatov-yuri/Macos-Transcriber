@@ -1,3 +1,4 @@
+import AVFoundation
 import XCTest
 @testable import Transcriberr
 
@@ -79,5 +80,39 @@ final class BenchmarkTests: XCTestCase {
         for ext in ["wav", "mic.wav", "sys.wav"] {
             XCTAssertFalse(FileManager.default.fileExists(atPath: clip.appendingPathExtension(ext).path), ext)
         }
+    }
+
+    @MainActor
+    func testQueuedWritesKeepTheEnginesText() async throws {
+        // Two quick edits of one line: the second must not record the first
+        // edit as what the engine wrote. (Uses the real root's queue order
+        // only; record() itself is pointed at the temp dir.)
+        let wav = try audio(seconds: 6)
+        let id = UUID()
+        var s = Benchmark.Source(segmentId: id, recordingId: UUID(), recordingTitle: "q", audioPath: wav.path,
+                                 language: "English", speaker: nil, start: 1, end: 2, text: "edit one", engine: nil)
+        async let a = Benchmark.record(s, machine: "engine text", in: dir)
+        s.text = "edit two"
+        let first = await a
+        let second = await Benchmark.record(s, machine: "edit one", in: dir)
+        XCTAssertEqual(first?.machine, "engine text")
+        XCTAssertEqual(second?.machine, "engine text")
+    }
+
+    func testStereoClipIsDownmixed() throws {
+        // A stereo file with the signal only on the right channel.
+        let url = dir.appendingPathComponent("stereo.wav")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fmt = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 2)!
+        do {   // the file is finished when the writer goes away
+            let f = try AVAudioFile(forWriting: url, settings: fmt.settings)
+            let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 32_000)!
+            buf.frameLength = 32_000
+            for i in 0..<32_000 { buf.floatChannelData![0][i] = 0; buf.floatChannelData![1][i] = 0.5 }
+            try f.write(from: buf)
+        }
+        let clip = try XCTUnwrap(Benchmark.readRange(url, from: 0.5, to: 1.5))
+        XCTAssertEqual(Double(clip.count), 16_000, accuracy: 200)
+        XCTAssertGreaterThan(clip[8_000].magnitude, 0.1)
     }
 }

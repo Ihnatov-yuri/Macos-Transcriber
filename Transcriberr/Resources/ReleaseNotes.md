@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.3.1
+- Names from a calendar invite no longer make ordinary words win Super's vote: an attendee called "Kees van der Berg" or "Will Smith" used to tip every "van" or "will" the engines disagreed on.
+- Clicking a disputed word back now always leaves no rule behind, and takes back only the vocabulary entry the first click added.
+- Settings → Your benchmark has an off switch and a Delete button, and says plainly that a corrected line keeps a copy of its audio.
+- Two quick edits of the same line no longer record your first edit as the engine's text.
+
 ## 4.3.0
 - Your corrections become a benchmark. Every line you fix is kept as a checked reference: its audio (all tracks of a meeting), the text you approved and what the engine first wrote. More ⋯ → Mark transcript as checked adds a whole transcript. It lives in Documents → Transcriberr Backups → benchmark, next to your transcript backups.
 - Settings → Style & vocabulary → Your benchmark shows how much checked speech you have per language and how far the engine's text was from yours.

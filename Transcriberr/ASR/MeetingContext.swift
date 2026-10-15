@@ -22,6 +22,12 @@ struct MeetingContext: Codable, Sendable, Equatable {
     /// these people. Transcribed text, so a hint, never a forced spelling.
     var pastTerms: [String] = []
     var pastMeetings: Int = 0
+    /// The words the WORD VOTE may treat as authoritative: single words of
+    /// the calendar terms that no dictionary knows. "Kees van der Berg"
+    /// gives "Kees" and "Berg", never "van" or "der"; "Will Smith" never
+    /// "will". Filled where the context is built (the spell checker runs
+    /// on the main thread); optional so older stored contexts decode.
+    var voteTerms: [String]? = nil
     var start: Date
     var end: Date
 
@@ -68,6 +74,12 @@ struct MeetingContext: Codable, Sendable, Equatable {
     }
 
     static let maxNamedAttendees = 15
+
+    /// See `voteTerms`. Main thread (or it hops there for the checker).
+    static func voteTerms(from terms: [String]) -> [String] {
+        dedup(terms.flatMap { $0.split(separator: " ").map(String.init) }
+            .filter { $0.count >= 3 && !isOrdinaryWord($0) })
+    }
 
     static func dedup(_ terms: [String]) -> [String] {
         var seen = Set<String>()

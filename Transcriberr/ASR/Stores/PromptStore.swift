@@ -10,7 +10,7 @@ final class PromptStore: @unchecked Sendable {
         case neutral, formal, casual, enthusiastic, technical
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private enum Key {
         static let transcribe = "prompt.transcribe"
         static let translate  = "prompt.translate"
@@ -53,27 +53,35 @@ final class PromptStore: @unchecked Sendable {
         } else if let v = adding(vocabulary) {
             vocabulary = v; added = true
         }
-        // Remembered, so only a term the app added can be taken out again.
-        if added { defaults.set((defaults.stringArray(forKey: Self.learnedTermsKey) ?? []) + [t], forKey: Self.learnedTermsKey) }
+        // Remembered with the list it went into ("Ukrainian|Kaiko", "|Kaiko"
+        // for the global list), so only that entry can be taken out again.
+        if added {
+            defaults.set((defaults.stringArray(forKey: Self.learnedTermsKey) ?? []) + ["\(language ?? "")|\(t)"],
+                         forKey: Self.learnedTermsKey)
+        }
     }
 
     static let learnedTermsKey = "vocab.learnedTerms"
 
     /// Takes back a term `learnTerm` added (the user switched the word back).
     /// A term the user typed themselves is never touched.
-    func forgetLearnedTerm(_ term: String, language: String?) {
+    func forgetLearnedTerm(_ term: String) {
         var learned = defaults.stringArray(forKey: Self.learnedTermsKey) ?? []
-        guard let i = learned.firstIndex(where: { $0.caseInsensitiveCompare(term) == .orderedSame }) else { return }
-        learned.remove(at: i)
+        guard let i = learned.firstIndex(where: {
+            ($0.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).last.map(String.init) ?? $0)
+                .caseInsensitiveCompare(term) == .orderedSame
+        }) else { return }
+        let entry = learned.remove(at: i)
         defaults.set(learned, forKey: Self.learnedTermsKey)
+        let language = entry.contains("|") ? String(entry.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)[0]) : ""
         func removing(_ list: String) -> String {
             list.split(whereSeparator: { $0 == "," || $0.isNewline })
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty && $0.caseInsensitiveCompare(term) != .orderedSame }
                 .joined(separator: ", ")
         }
-        if let language, !language.isEmpty, let v = vocabularyByLanguage[language] {
-            vocabularyByLanguage[language] = removing(v)
+        if !language.isEmpty {
+            if let v = vocabularyByLanguage[language] { vocabularyByLanguage[language] = removing(v) }
         } else {
             vocabulary = removing(vocabulary)
         }
@@ -97,7 +105,9 @@ final class PromptStore: @unchecked Sendable {
     var verbatim: Bool           { didSet { defaults.set(verbatim,         forKey: Key.verbatim) } }
     var tone: Tone               { didSet { defaults.set(tone.rawValue,    forKey: Key.tone) } }
 
-    init() {
+    /// `defaults` for tests: the test host shares the app's own domain.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         transcribePrompt = defaults.string(forKey: Key.transcribe) ?? Defaults.transcribe
         translatePrompt  = defaults.string(forKey: Key.translate)  ?? Defaults.translate
         vocabulary       = defaults.string(forKey: Key.vocabulary) ?? ""

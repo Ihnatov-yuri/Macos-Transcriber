@@ -109,10 +109,15 @@ final class MeetingContextTests: XCTestCase {
 
     func testTheSharedEngineForgetsThePreviousMeeting() async {
         let ens = EnsembleBackend(factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore()))
-        await ens.setMeetingContext(MeetingContext(title: "x", attendees: ["Haya Ahmed"], emails: [], inviteTerms: ["Kaiko"],
-                                                   start: Date(), end: Date()))
+        var mc = MeetingContext(title: "x", attendees: ["Haya Ahmed", "Kees van der Berg", "Will Smith"], emails: [],
+                                inviteTerms: ["Kaiko", "Blits Insurance"], start: Date(), end: Date())
+        mc.voteTerms = MeetingContext.voteTerms(from: mc.calendarTerms)
+        await ens.setMeetingContext(mc)
         let during = await ens.meetingVocabulary()
         XCTAssertTrue(during.isSuperset(of: ["haya", "ahmed", "kaiko"]), "\(during)")
+        // Ordinary words in names never outrank confidence in the vote, a
+        // Dutch name that is also a word ("Kees", cheese) included.
+        for word in ["van", "der", "will", "insurance", "kees"] { XCTAssertFalse(during.contains(word), word) }
         await ens.setMeetingContext(nil)
         let after = await ens.meetingVocabulary()
         XCTAssertTrue(after.isEmpty)

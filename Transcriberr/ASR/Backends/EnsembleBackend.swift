@@ -48,7 +48,11 @@ actor EnsembleBackend: ASRBackend {
     func meetingVocabulary() -> Set<String> { meetingNorms }
     func setMeetingContext(_ context: MeetingContext?) {
         meeting = context
-        meetingNorms = Set((context?.allTerms ?? []).flatMap { TranscriptHygiene.normWords($0) }.filter { $0.count >= 3 })
+        // Single uncommon words only, like the user's own vocabulary in
+        // `vocabularyNorms`: a vocabulary word outranks confidence, and an
+        // attendee's "van" or "Will" must not win every split it is in.
+        meetingNorms = Set((context?.voteTerms ?? []).compactMap { TranscriptHygiene.normWords($0).first }
+            .filter { $0.count >= 3 })
     }
 
     /// Parakeet v2 is English-only: in a non-English run it contributes a

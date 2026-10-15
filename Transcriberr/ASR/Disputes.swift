@@ -124,6 +124,7 @@ enum DisputeIndex {
 enum DisputeLearning {
     static let key = "vocab.learnedChoices"
     static let limit = 2000
+    static let lastIgnoredKey = "vocab.lastIgnoredChoice"
 
     /// "loser>winner" norm pairs.
     static func pairs(_ defaults: UserDefaults = .standard) -> Set<String> {
@@ -148,7 +149,16 @@ enum DisputeLearning {
             defaults.set(list.filter { $0 != "\(w)>\(l)" }, forKey: key)
             return .undone
         }
-        guard learn, !list.contains("\(l)>\(w)") else { return .ignored }
+        // The click back after a pick that taught nothing (an ordinary word
+        // chosen over a name): still an undo, never a new rule.
+        if defaults.string(forKey: lastIgnoredKey) == "\(w)>\(l)" {
+            defaults.removeObject(forKey: lastIgnoredKey)
+            return .undone
+        }
+        guard learn, !list.contains("\(l)>\(w)") else {
+            defaults.set("\(l)>\(w)", forKey: lastIgnoredKey)
+            return .ignored
+        }
         list.append("\(l)>\(w)")
         defaults.set(Array(list.suffix(limit)), forKey: key)
         return .learned

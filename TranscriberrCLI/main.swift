@@ -532,6 +532,10 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
             switch ev {
             case .stage(let text, let f):
                 FileHandle.standardError.write("[\(Int(f * 100))%] \(text)\n".data(using: .utf8)!)
+            case .segments(_, let segs) where ProcessInfo.processInfo.environment["TRANSCRIBERR_SHOW_LIVE"] == "1":
+                for s in segs {
+                    FileHandle.standardError.write("LIVE \(String(format: "%.1f", s.startSeconds))\t\(s.speakerKey ?? "?")\t\(s.text)\n".data(using: .utf8)!)
+                }
             case .done(let segs):
                 print("### DONE \(String(format: "%.0f", Date().timeIntervalSince(t0)))s \(segs.count) segments")
                 for s in segs {

@@ -63,7 +63,8 @@ enum TurnTiming {
         _ segments: [RawSegment],
         timelines: [Int: [TimedWord]],
         diarization: [DiarizationRunner.SpeakerSegment],
-        micSpeech: [ClosedRange<Double>]? = nil
+        micSpeech: [ClosedRange<Double>]? = nil,
+        logs: Bool = true
     ) -> [RawSegment] {
         guard !timelines.isEmpty else { return segments }
         var out: [RawSegment] = []
@@ -138,7 +139,7 @@ enum TurnTiming {
                 out.append(s)
             }
         }
-        if split > 0 || loopsDropped > 0 || echoDropped > 0 || unspoken > 0 {
+        if logs, split > 0 || loopsDropped > 0 || echoDropped > 0 || unspoken > 0 {
             AppLog.info("runner", "turn timing: \(segments.count) chunk segments → \(out.count) timed pieces, \(loopsDropped) looped, \(echoDropped) echoed and \(unspoken) unspoken mic words dropped")
         }
         return out.sorted { $0.startSeconds < $1.startSeconds }

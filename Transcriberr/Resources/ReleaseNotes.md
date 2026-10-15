@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.17.3
+- While Super runs on a call without headphones, the live transcript no longer shows your side full of repeated words ("So. So. So.", "I'm going." over and over) and the other person's echo. It gets the same cleanup the finished transcript gets.
+
 ## 3.17.2
 - Your answer no longer prints before the question it answers when Whisper adds a few words the other engine did not hear.
 - Single echoed words of the other person ("architecture") no longer appear as lines of their own under your name, while a word you repeat after them stays.

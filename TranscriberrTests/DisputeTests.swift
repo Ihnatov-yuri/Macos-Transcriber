@@ -99,6 +99,9 @@ final class DisputeTests: XCTestCase {
         XCTAssertTrue(DisputeLearning.pairs(defaults).isEmpty)
         // Ordinary words are not learned.
         XCTAssertEqual(DisputeLearning.record(loser: "their", winner: "there", learn: false, defaults), .ignored)
+        // ...and clicking back from one leaves no rule either.
+        XCTAssertEqual(DisputeLearning.record(loser: "there", winner: "their", learn: true, defaults), .undone)
+        XCTAssertTrue(DisputeLearning.pairs(defaults).isEmpty)
         DisputeLearning.record(loser: "Blitz", winner: "Blits", defaults)
         DisputeLearning.record(loser: "Kaico", winner: "Kaiko", defaults)
         XCTAssertEqual(DisputeLearning.ordered(defaults), ["kaico>kaiko", "blitz>blits"])
@@ -135,5 +138,20 @@ final class DisputeTests: XCTestCase {
         let d = WordDispute(chosen: "plan", alternative: "plant", before: "the", after: "works", start: 0, end: 30)
         let shown = DisputeIndex.locate(d: [d], in: [(0, 5, "the plan works"), (5, 10, "the plan works")])
         XCTAssertEqual(shown.map(\.0), [0])
+    }
+
+    func testForgettingALearnedTermTakesItFromTheListItWentInto() {
+        let d = UserDefaults(suiteName: "DisputeTests-store-\(UUID())")!
+        d.set("Kaiko, Blits", forKey: "prompt.vocabulary")
+        let store = PromptStore(defaults: d)
+        store.learnTerm("Kaiko", language: "Ukrainian")
+        XCTAssertEqual(store.vocabularyByLanguage["Ukrainian"], "Kaiko")
+        store.forgetLearnedTerm("Kaiko")
+        XCTAssertEqual(store.vocabularyByLanguage["Ukrainian"], "")
+        // The user's own global entry is untouched.
+        XCTAssertEqual(store.vocabulary, "Kaiko, Blits")
+        // A term the user typed was never learned: forgetting it does nothing.
+        store.forgetLearnedTerm("Blits")
+        XCTAssertEqual(store.vocabulary, "Kaiko, Blits")
     }
 }

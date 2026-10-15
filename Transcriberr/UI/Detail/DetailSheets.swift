@@ -121,7 +121,7 @@ struct SegmentEditSheet: View {
                         if let rec = segment.recording, before != text {
                             // A correction is a checked reference.
                             let source = Benchmark.source(segment, in: rec)
-                            Task { await Benchmark.record(source, machine: before) }
+                            Benchmark.enqueue(source, machine: before)
                         }
                         if let rec = segment.recording {
                             try? TranscriptExporter.export(recording: rec)

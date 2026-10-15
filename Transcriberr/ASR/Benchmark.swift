@@ -46,6 +46,34 @@ struct BenchmarkItem: Codable, Sendable, Identifiable, Equatable {
 enum Benchmark {
     static let padding = 0.25
 
+    /// "Keep corrected lines as a benchmark" (Settings): on by default.
+    /// The clips hold other people's voices too, so it can be switched off
+    /// and the whole set deleted.
+    static let enabledKey = "bench.enabled"
+    static var isEnabled: Bool { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
+
+    /// Every write goes through one queue: two quick edits of one line
+    /// both read the item before either wrote it, and the second could
+    /// record the first edit (the user's own words) as the engine's text.
+    @MainActor private static var tail: Task<BenchmarkItem?, Never>?
+
+    @MainActor @discardableResult
+    static func enqueue(_ s: Source, machine: String) -> Task<BenchmarkItem?, Never>? {
+        guard isEnabled else { return nil }
+        let previous = tail
+        let task = Task<BenchmarkItem?, Never> {
+            _ = await previous?.value
+            return await record(s, machine: machine)
+        }
+        tail = task
+        return task
+    }
+
+    /// Deletes every reference and clip (Settings → Delete benchmark).
+    static func deleteAll(in dir: URL = root) {
+        try? FileManager.default.removeItem(at: dir)
+    }
+
     /// Inside the transcript backups' folder (Documents/Transcriberr
     /// Backups): never pruned, outside the live store and recordings, and
     /// in whatever backs up Documents.
@@ -188,6 +216,8 @@ enum Benchmark {
               let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioDecoder.sampleRate,
                                          channels: 1, interleaved: false),
               let converter = AVAudioConverter(from: f.processingFormat, to: target) else { return nil }
+        // A stereo import: both channels, not just the left one.
+        converter.downmix = true
         f.framePosition = first
         do { try f.read(into: input, frameCount: count) } catch { return nil }
         let outCap = AVAudioFrameCount(Double(input.frameLength) * AudioDecoder.sampleRate / rate) + 1024

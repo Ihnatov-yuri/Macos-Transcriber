@@ -352,13 +352,15 @@ struct DetailView: View {
                     // it reads now. Lines already corrected keep their
                     // original machine text.
                     let sources = recording.segments.map { Benchmark.source($0, in: recording) }
+                    let tasks = sources.compactMap { Benchmark.enqueue($0, machine: $0.text) }
+                    let title = recording.title
                     Task {
                         var added = 0
-                        for s in sources where await Benchmark.record(s, machine: s.text) != nil { added += 1 }
-                        AppLog.info("bench", "marked \(added) of \(sources.count) segments of \"\(recording.title)\" as checked")
+                        for t in tasks where await t.value != nil { added += 1 }
+                        AppLog.info("bench", "marked \(added) of \(sources.count) segments of \"\(title)\" as checked")
                     }
                 }
-                .disabled(recording.segments.isEmpty || (model?.isRunning ?? false))
+                .disabled(recording.segments.isEmpty || (model?.isRunning ?? false) || !Benchmark.isEnabled)
                 Divider()
                 Button("Split recording…") {
                     showingSplit = true
@@ -875,7 +877,7 @@ extension DetailView {
             container.promptStore.learnTerm(term, language: recording.sourceLanguage)
         case .undone:
             // The click back: the term the first click added goes too.
-            container.promptStore.forgetLearnedTerm(DisputeIndex.core(hit.dispute.chosen), language: recording.sourceLanguage)
+            container.promptStore.forgetLearnedTerm(DisputeIndex.core(hit.dispute.chosen))
         case .ignored:
             break
         }

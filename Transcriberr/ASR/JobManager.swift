@@ -171,6 +171,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
             audioPath: recording.audioPath, createdAtMillis: recording.createdAtMillis,
             duration: recording.durationSeconds) else { return nil }
         guard var mc = await MeetingContext.lookup(start: spoken.start, end: spoken.end) else { return nil }
+        mc.voteTerms = MeetingContext.voteTerms(from: mc.calendarTerms)
         let probe = mc
         let past = await Task.detached(priority: .utility) { MeetingContext.pastEvents(sharing: probe) }.value
         guard !past.isEmpty, let all = try? repository.all() else { return mc }
@@ -189,6 +190,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
         }.value
         mc.pastMeetings = earlier.count
         mc.pastTerms = terms
+        mc.voteTerms = MeetingContext.voteTerms(from: mc.calendarTerms)
         return mc
     }
 
@@ -356,6 +358,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 statuses.removeValue(forKey: recording.id)
                 return
             }
+            // Cancelled during the lookup: `cancel()` already dropped the row.
+            if Task.isCancelled { return }
         }
 
         // Rescue snapshot: if the current transcript was never versioned

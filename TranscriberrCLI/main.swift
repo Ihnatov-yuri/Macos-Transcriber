@@ -545,6 +545,9 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     if let path = ProcessInfo.processInfo.environment["TRANSCRIBERR_CONTEXT"],
        let json = try? String(contentsOfFile: path, encoding: .utf8) {
         params.meetingContext = MeetingContext.decode(json)
+        if let mc = params.meetingContext, mc.voteTerms == nil {
+            params.meetingContext?.voteTerms = MeetingContext.voteTerms(from: mc.calendarTerms)
+        }
         FileHandle.standardError.write("meeting context: \(params.meetingContext?.allTerms ?? [])\n".data(using: .utf8)!)
     }
     let t0 = Date()

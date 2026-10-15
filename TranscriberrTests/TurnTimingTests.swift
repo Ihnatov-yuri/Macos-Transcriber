@@ -188,6 +188,50 @@ final class TurnTimingTests: XCTestCase {
         XCTAssertEqual(out.count, 1)
     }
 
+    /// Words only Whisper wrote must not bridge the pause where the other
+    /// side asked something (Landal, 0:49 on the 3.17.1 re-run).
+    func testUnanchoredWordsDoNotBridgeAPause() {
+        let far = line("how far is it from Amsterdam", from: 53.6)
+        let mic = line("I work from home in Marsen", from: 49.4, step: 0.6) + line("it's about twenty minutes", from: 57.5)
+        let out = TurnTiming.retime(
+            [seg(49, 75, "I work from home in Marsen. Okay. Nice place. It's about twenty minutes.", "ME"),
+             seg(49, 75, "How far is it from Amsterdam?", "GUEST")],
+            timelines: [0: far, 1: mic], diarization: [])
+        XCTAssertEqual(out.map(\.speakerKey), ["ME", "GUEST", "ME"])
+        XCTAssertEqual(out.last?.text, "It's about twenty minutes.")
+    }
+
+    /// One long echoed word alone between pauses goes ("architecture,"
+    /// repeated under the interviewer's question); a short one stays.
+    func testLoneLongEchoWordIsDropped() {
+        let far = line("coding and architecture", from: 321) + line("it's easy", from: 330)
+        let mic = line("architecture", from: 322.3) + line("it's", from: 330.1) + line("well I have a degree", from: 335)
+        let out = TurnTiming.retime(
+            [seg(310, 336, "architecture, it's Well, I have a degree.", "ME")],
+            timelines: [0: far, 1: mic], diarization: [])
+        XCTAssertEqual(out.map(\.text), ["it's", "Well, I have a degree."])
+    }
+
+    /// Repeating the other person's word a beat later is speech, not echo
+    /// (uk-b reference slice: "логику" then "логіку" 0.7 s later).
+    func testRepeatedWordABeatLaterStays() {
+        let far = line("шукает логику", from: 259.2, step: 0.8)
+        let mic = line("шукають", from: 259.5) + line("логіку", from: 260.72)
+        let out = TurnTiming.retime([seg(252, 276, "шукають логіку", "ME")],
+                                    timelines: [0: far, 1: mic], diarization: [])
+        XCTAssertEqual(out.map(\.text).joined(separator: " "), "шукають логіку")
+    }
+
+    /// On a speaker call, a mic line mostly missing from the mic's own
+    /// reading is dropped even inside a speech interval.
+    func testMostlyUnheardMicPieceIsDroppedUnderEcho() {
+        let mic = line("it's a", from: 1388.6)
+        let out = TurnTiming.retime([seg(1386, 1412, "I to it's a. of mirrors", "ME")],
+                                    timelines: [0: line("x", from: 0), 1: mic], diarization: [],
+                                    micSpeech: [1388.6...1389.0])
+        XCTAssertTrue(out.isEmpty, "got \(out.map(\.text))")
+    }
+
     func testWithoutTimelinesNothingChanges() {
         let input = [seg(0, 26, "Hello there.", "ME"), seg(0, 26, "Hi.", "GUEST")]
         let out = TurnTiming.retime(input, timelines: [:], diarization: [])

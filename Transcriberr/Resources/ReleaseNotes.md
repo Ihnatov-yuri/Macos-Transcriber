@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 3.17.4
+- On calls with headphones, Super no longer deletes what you said. 3.17.1's filter for invented text could remove a quarter of your own words when the other person was louder than you; it now applies only when your microphone mostly picked up the speakers, and never to words the microphone heard clearly.
+
 ## 3.17.3
 - While Super runs on a call without headphones, the live transcript no longer shows your side full of repeated words ("So. So. So.", "I'm going." over and over) and the other person's echo. It gets the same cleanup the finished transcript gets.
 

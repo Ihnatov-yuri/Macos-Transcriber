@@ -175,9 +175,28 @@ final class TurnTimingTests: XCTestCase {
              seg(2390, 2417, "Hello, I'm Joe. Hello, I'm Joe.", "ME")],
             // As on the real call, the mic's own reading has none of the
             // invented line, so it keeps its 27 s chunk span.
-            timelines: [0: line("x", from: 0), 1: mic + line("mm", from: 2391)], diarization: [],
+            timelines: [0: line("x", from: 0),
+                        1: mic + line("mm", from: 2391).map { var w = $0; w.word.confidence = 0.4; return w }],
+            diarization: [],
             micSpeech: micSpeech + [2391.2...2391.6])
         XCTAssertEqual(out.map(\.text), ["Sure, I'm Yuri, technical project manager."])
+    }
+
+    /// A line the speech timeline misses but the mic's own reading heard
+    /// confidently is the user (coaching call, 0.91 median confidence).
+    func testConfidentMicSpeechSurvivesTheTimeline() {
+        func confident(_ text: String, from start: Double, _ c: Float) -> [TimedWord] {
+            line(text, from: start).map { var w = $0; w.word.confidence = c; return w }
+        }
+        let micSpeech: [ClosedRange<Double>] = [100...100.3]
+        let real = TurnTiming.retime([seg(0, 26, "Привет, как твои вікна?", "ME")],
+                                     timelines: [0: line("x", from: 200), 1: confident("привет как твои вікна", from: 9, 0.9)],
+                                     diarization: [], micSpeech: micSpeech)
+        XCTAssertEqual(real.map(\.text), ["Привет, как твои вікна?"])
+        let residue = TurnTiming.retime([seg(0, 26, "Semi tummy kidney choke chain.", "ME")],
+                                        timelines: [0: line("x", from: 200), 1: confident("semi tummy kidney choke chain", from: 9, 0.45)],
+                                        diarization: [], micSpeech: micSpeech)
+        XCTAssertTrue(residue.isEmpty)
     }
 
     /// Without a timeline (headphones: no echo found) nothing is filtered.
@@ -225,7 +244,8 @@ final class TurnTimingTests: XCTestCase {
     /// On a speaker call, a mic line mostly missing from the mic's own
     /// reading is dropped even inside a speech interval.
     func testMostlyUnheardMicPieceIsDroppedUnderEcho() {
-        let mic = line("it's a", from: 1388.6)
+        // Echo residue: the mic's reading is unsure of it.
+        let mic = line("it's a", from: 1388.6).map { var w = $0; w.word.confidence = 0.5; return w }
         let out = TurnTiming.retime([seg(1386, 1412, "I to it's a. of mirrors", "ME")],
                                     timelines: [0: line("x", from: 0), 1: mic], diarization: [],
                                     micSpeech: [1388.6...1389.0])

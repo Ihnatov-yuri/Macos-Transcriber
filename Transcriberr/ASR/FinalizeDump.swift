@@ -6,7 +6,7 @@ import Foundation
 /// `transcriberrcli refinalize <dump>` instead of re-running a 30-min Super.
 struct FinalizeDump: Codable {
     struct Seg: Codable { var start, end: Double; var text: String; var speaker: String?; var name: String? }
-    struct Word: Codable { var surface, norm: String; var start, end: Double }
+    struct Word: Codable { var surface, norm: String; var start, end: Double; var confidence: Float? }
     struct Region: Codable { var start, end: Double; var speaker: String }
 
     var segments: [Seg]
@@ -30,7 +30,7 @@ struct FinalizeDump: Codable {
         self.myName = myName
         self.micSpeech = micSpeech?.map { [$0.lowerBound, $0.upperBound] }
         self.timelines = Dictionary(uniqueKeysWithValues: timelines.map { id, words in
-            (String(id), words.map { Word(surface: $0.word.surface, norm: $0.word.norm, start: $0.start, end: $0.end) })
+            (String(id), words.map { Word(surface: $0.word.surface, norm: $0.word.norm, start: $0.start, end: $0.end, confidence: $0.word.confidence) })
         })
     }
 
@@ -47,7 +47,7 @@ struct FinalizeDump: Codable {
     var timedTimelines: [Int: [TimedWord]] {
         Dictionary(uniqueKeysWithValues: timelines.compactMap { key, words in
             Int(key).map { id in
-                (id, words.map { TimedWord(word: ScoredWord(surface: $0.surface, norm: $0.norm, confidence: 1),
+                (id, words.map { TimedWord(word: ScoredWord(surface: $0.surface, norm: $0.norm, confidence: $0.confidence ?? 1),
                                            start: $0.start, end: $0.end) })
             }
         })

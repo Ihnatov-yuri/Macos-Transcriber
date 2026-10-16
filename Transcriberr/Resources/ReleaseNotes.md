@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.4.0
+- Whisper now has two models: one for recordings in English and one for every other language. English uses large-v3 turbo compressed by default, which makes Super about four times faster in English (under a minute for five minutes of meeting) with the same accuracy. Other languages keep large-v3, the only model that stays accurate in Ukrainian.
+- If you had picked a smaller Whisper model, it now serves English and other languages go back to large-v3. Both choices are in Settings → Engines.
+- The engine menus list Whisper once; the model follows the recording's language.
+
 ## 4.3.4
 - The Transcriberr connection for AI assistants (MCP) keeps working after an update: it notices the new version and restarts itself, instead of failing with "Could not open the database" until it was reconnected by hand.
 

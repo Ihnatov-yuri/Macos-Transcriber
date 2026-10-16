@@ -3,9 +3,11 @@ import Observation
 import WhisperKit
 
 /// The Whisper builds the app offers, all from argmaxinc/whisperkit-coreml.
-/// One is in use at a time (`whisper.model`); large-v3 stays the default
-/// because every Whisper measurement in the app (Super's reference set, the
-/// Ukrainian and Arabic findings) was made with it.
+/// Two are picked: one for English runs (`whisper.model.english`, default
+/// large-v3 turbo compressed) and one for every other language
+/// (`whisper.model`, default large-v3). The 2026-10-16 sweep of the
+/// reference set found every smaller model ties or beats large-v3 inside
+/// Super in English at 2-4x the speed, and loses 5-15 points in Ukrainian.
 ///
 /// `id` is the repo folder name, passed to WhisperKit whole: its download
 /// matches `*<variant>/*`, and a bare "large-v3" also matches the turbo,
@@ -18,7 +20,10 @@ struct WhisperModel: Identifiable, Hashable, Sendable {
     var englishOnly = false
 
     static let defaultID = "openai_whisper-large-v3"
+    /// The model for every run that is not English only (auto-detect too).
     static let settingsKey = "whisper.model"
+    static let englishDefaultID = "openai_whisper-large-v3-v20240930_626MB"
+    static let englishSettingsKey = "whisper.model.english"
 
     /// Sizes from the repo listing, 2026-10-15.
     static let all: [WhisperModel] = [
@@ -42,11 +47,42 @@ struct WhisperModel: Identifiable, Hashable, Sendable {
         all.first { $0.id == id } ?? all[0]
     }
 
-    /// The model in use: the running job's pin, else the setting (the
-    /// default for an unknown id).
+    /// The model in use: the running job's pin, else the other-languages
+    /// setting (the default for an unknown id).
     static var selected: WhisperModel {
         pinLock.lock(); defer { pinLock.unlock() }
         return model(pinnedID ?? UserDefaults.standard.string(forKey: settingsKey) ?? defaultID)
+    }
+
+    static func isEnglish(_ languages: Set<String>) -> Bool {
+        !languages.isEmpty && languages.allSatisfy { $0.lowercased() == "english" }
+    }
+
+    /// The model a run in these languages would use, without pinning it.
+    static func forRun(_ languages: Set<String>, setting: String? = nil, englishSetting: String? = nil) -> WhisperModel {
+        let d = UserDefaults.standard
+        let english = isEnglish(languages)
+        let m = english
+            ? model(englishSetting ?? d.string(forKey: englishSettingsKey) ?? englishDefaultID)
+            : model(setting ?? d.string(forKey: settingsKey) ?? defaultID)
+        return m.englishOnly && !english ? model(defaultID) : m
+    }
+
+    /// One-time move to the two settings (v4.4.0). Before, one model served
+    /// every language; a smaller pick was made for speed, which the sweep
+    /// shows is free in English and costly elsewhere. So a non-default pick
+    /// becomes the English model and other languages go back to large-v3.
+    /// Writing the English key marks the move done.
+    static func migrateSettings(_ d: UserDefaults = .standard) {
+        guard d.object(forKey: englishSettingsKey) == nil else { return }
+        let old = d.string(forKey: settingsKey).map(model)
+        if let old, old.id != defaultID {
+            d.set(old.id, forKey: englishSettingsKey)
+            d.set(defaultID, forKey: settingsKey)
+            AppLog.info("whisper", "settings moved: \(old.name) for English, \(model(defaultID).name) for other languages")
+        } else {
+            d.set(englishDefaultID, forKey: englishSettingsKey)
+        }
     }
 
     /// The model a run uses, fixed when it starts. A pick in Settings or in a
@@ -57,18 +93,14 @@ struct WhisperModel: Identifiable, Hashable, Sendable {
     private static let pinLock = NSLock()
     nonisolated(unsafe) private static var pinnedID: String?
 
-    /// Pins the setting for this run. An English-only model on a run that
-    /// is not English (distil-large-v3 reading Ukrainian) is replaced by the
-    /// default; a model that is not on disk is still pinned (it downloads on
-    /// load, and falls back there if it cannot).
+    /// Pins this run's model: the English setting when the run is English
+    /// only, else the other-languages one. An English-only model on a run
+    /// that is not English (distil-large-v3 reading Ukrainian) is replaced
+    /// by the default; a model that is not on disk is still pinned (it
+    /// downloads on load, and falls back there if it cannot).
     @discardableResult
-    static func pin(for languages: Set<String>, setting: String? = nil) -> WhisperModel {
-        var m = model(setting ?? UserDefaults.standard.string(forKey: settingsKey) ?? defaultID)
-        let english = !languages.isEmpty && languages.allSatisfy { $0.lowercased() == "english" }
-        if m.englishOnly && !english {
-            AppLog.warn("whisper", "\(m.name) is English only — this run uses \(model(defaultID).name)")
-            m = model(defaultID)
-        }
+    static func pin(for languages: Set<String>, setting: String? = nil, englishSetting: String? = nil) -> WhisperModel {
+        let m = forRun(languages, setting: setting, englishSetting: englishSetting)
         pinLock.lock(); pinnedID = m.id; pinLock.unlock()
         return m
     }

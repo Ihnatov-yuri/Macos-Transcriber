@@ -23,7 +23,10 @@ final class BackendFactory: @unchecked Sendable {
             switch self {
             case .parakeet:   return "Parakeet v3 (local, ANE)"
             case .parakeetV2: return "Parakeet v2 (English, ANE)"
-            case .whisper:    return "Whisper \(WhisperModel.selected.name) (local, CoreML)"
+            case .whisper:
+                // A run pins its model by language; outside one there are two.
+                return WhisperModel.inUse.map { "Whisper \(WhisperModel.model($0).name) (local, CoreML)" }
+                    ?? "Whisper (local, CoreML)"
             case .gemmaLiteRT: return "Gemma 4 (Google LiteRT — as on Android)"
             case .ensemble:   return "Super · dual-engine merge (local)"
             case .openAI:     return "OpenAI (GPT-4o)"

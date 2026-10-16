@@ -85,6 +85,19 @@ enum DisputeIndex {
         return out.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 
+    /// Dispute `k` as the transcript places it in segment `row`: earlier
+    /// segments claim their disputes first, as on screen.
+    static func hit(_ k: Int, disputes: [WordDispute],
+                    in segments: [(start: Double, end: Double, text: String)], row: Int) -> Hit? {
+        var claimed = Set<Int>()
+        for (i, s) in segments.enumerated() where i < row {
+            _ = hits(in: s.text, start: s.start, end: s.end, disputes: disputes, claimed: &claimed)
+        }
+        let s = segments[row]
+        return hits(in: s.text, start: s.start, end: s.end, disputes: disputes, claimed: &claimed)
+            .first { $0.index == k }
+    }
+
     /// Every dispute visible in a transcript, as (segment index, hit).
     static func locate(d disputes: [WordDispute],
                        in segments: [(start: Double, end: Double, text: String)]) -> [(Int, Hit)] {

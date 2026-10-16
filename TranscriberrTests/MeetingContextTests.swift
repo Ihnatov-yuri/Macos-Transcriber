@@ -47,13 +47,19 @@ final class MeetingContextTests: XCTestCase {
                                                 createdAtMillis: 1_790_152_000_000, duration: 1800)
         XCTAssertEqual(m?.start.timeIntervalSince1970 ?? 0, 1_790_149_550.45, accuracy: 0.01)
         XCTAssertEqual(m?.duration, 1800)
-        // A voice recording's name carries its start (local time), also for
-        // one recovered after a crash, whose row was made from the file.
-        let r = MeetingContext.recordedInterval(audioPath: "/x/Recording_2026-10-15_10-00-00-123.m4a",
-                                                createdAtMillis: 1, duration: 600)
+        // A voice recording's row is created at Stop: it started `duration` before.
         var c = DateComponents(); c.year = 2026; c.month = 10; c.day = 15; c.hour = 10
-        XCTAssertEqual(r?.start, Calendar.current.date(from: c))
+        let start = Calendar.current.date(from: c)!
+        let stopMs = Int64((start.timeIntervalSince1970 + 600) * 1000)
+        let r = MeetingContext.recordedInterval(audioPath: "/x/Recording_2026-10-15_10-00-00-123.m4a",
+                                                createdAtMillis: stopMs, duration: 600)
+        XCTAssertEqual(r?.start, start)
         XCTAssertEqual(r?.duration, 600)
+        // Recovered after a crash: the row's date is the file's creation (the
+        // start), which the name's stamp confirms.
+        let rec = MeetingContext.recordedInterval(audioPath: "/x/Recording_2026-10-15_10-00-00-123.m4a",
+                                                  createdAtMillis: Int64(start.timeIntervalSince1970 * 1000), duration: 600)
+        XCTAssertEqual(rec?.start, start)
         // Unreadable stamp: the row was created at Stop.
         let r2 = MeetingContext.recordedInterval(audioPath: "/x/Recording_garbled.m4a",
                                                  createdAtMillis: 1_790_000_600_000, duration: 600)
@@ -121,5 +127,25 @@ final class MeetingContextTests: XCTestCase {
         await ens.setMeetingContext(nil)
         let after = await ens.meetingVocabulary()
         XCTAssertTrue(after.isEmpty)
+    }
+
+    func testVoicePrintMustFitTheMicToGate() {
+        let fitting: [Float?] = Array(repeating: 0.55, count: 40) + Array(repeating: 0.1, count: 200) + [nil, 0.35]
+        XCTAssertTrue(VoiceTimeline.fits(fitting).0)
+        // Recorded on another mic: the user mostly lands just under the threshold.
+        let halfFit: [Float?] = Array(repeating: 0.42, count: 10) + Array(repeating: 0.36, count: 60)
+        XCTAssertFalse(VoiceTimeline.fits(halfFit).0)
+        // The user never matches (or did not speak): no gating at all.
+        XCTAssertFalse(VoiceTimeline.fits(Array(repeating: 0.2, count: 500)).0)
+    }
+
+    func testWhisperModelIsPinnedPerRunAndEnglishOnlyOnlyForEnglish() {
+        defer { WhisperModel.unpin() }
+        XCTAssertEqual(WhisperModel.pin(for: ["Ukrainian"], setting: "distil-whisper_distil-large-v3").id, WhisperModel.defaultID)
+        XCTAssertEqual(WhisperModel.pin(for: ["English"], setting: "distil-whisper_distil-large-v3").id, "distil-whisper_distil-large-v3")
+        XCTAssertEqual(WhisperModel.selected.id, "distil-whisper_distil-large-v3")
+        XCTAssertEqual(WhisperModel.inUse, "distil-whisper_distil-large-v3")
+        WhisperModel.unpin()
+        XCTAssertNil(WhisperModel.inUse)
     }
 }

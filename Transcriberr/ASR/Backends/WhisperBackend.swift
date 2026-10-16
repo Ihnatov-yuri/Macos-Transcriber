@@ -136,6 +136,14 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         return n > 0 ? WhisperCallLimiter(width: n) : nil
     }()
 
+    /// Whether the model download host answers (2 s), checked only when the
+    /// model is missing.
+    static func canReachModelHost() async -> Bool {
+        var req = URLRequest(url: URL(string: "https://huggingface.co")!, timeoutInterval: 2)
+        req.httpMethod = "HEAD"
+        return (try? await URLSession.shared.data(for: req)) != nil
+    }
+
     /// `placement` nil = the configured one, read at load.
     init(placement: Placement? = nil) { self.placement = placement }
 
@@ -169,7 +177,13 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// Builds a fresh WhisperKit and swaps it in, with no gap where `pipe`
     /// is nil.
     private func buildPipe(generation gen: Int) async throws {
-        let model = WhisperModel.selected
+        var model = WhisperModel.selected
+        if !model.isDownloaded, !(await Self.canReachModelHost()), let fallback = WhisperModel.fallback {
+            // Offline with the chosen model not on disk: the run would fail
+            // outright; a model that is here transcribes it instead.
+            AppLog.warn("whisper", "\(model.name) is not downloaded and Hugging Face cannot be reached — using \(fallback.name)")
+            model = fallback
+        }
         AppLog.info("whisper", "loading Whisper \(model.name)\(model.isDownloaded ? "" : " (downloading \(model.sizeBytes / 1_000_000) MB first)")…")
         let kit: WhisperKit
         do {

@@ -67,8 +67,32 @@ enum VoiceprintStore {
         return print
     }
 
+    /// A reading this mixed (someone else talking, heavy noise) would gate
+    /// meetings on the wrong voice: it is not saved.
+    static let minSelfSimilarity: Float = 0.6
+
+    struct MixedReading: LocalizedError {
+        let similarity: Float
+        var errorDescription: String? {
+            "The reading sounded mixed (\(String(format: "%.2f", similarity)), at least 0.60 needed), as if someone else or a lot of noise was in it. Record again in a quiet room."
+        }
+    }
+
+    /// A print file exists but cannot be used (damaged, or made by another
+    /// embedding model): Settings says so instead of quietly showing none.
+    static var isUnreadable: Bool {
+        FileManager.default.fileExists(atPath: printURL.path) && load() == nil
+    }
+
     static func save(_ print: Voiceprint, audio: [Float]) throws {
+        guard print.selfSimilarity >= minSelfSimilarity else { throw MixedReading(similarity: print.selfSimilarity) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // The raw reading is the user's voice: kept on this Mac, out of
+        // Time Machine (it can be re-recorded any time).
+        var dir = directory
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
         try JSONEncoder().encode(print).write(to: printURL, options: .atomic)
         // Raw 16 kHz mono Float32: ~2 MB for 30 s, no codec in the way of a re-embed.
         try audio.withUnsafeBufferPointer { Data(buffer: $0) }.write(to: audioURL, options: .atomic)
@@ -313,11 +337,42 @@ struct VoiceTimeline: Equatable {
     /// windows of them per hour and every real leak (≥ 0.45).
     static let leakHint: Float = 0.30
 
+    /// The print does not fit this recording's microphone: enrolled on the
+    /// built-in mic and the meeting on AirPods, a cold, a changed model.
+    struct Mismatch: LocalizedError {
+        let strong: Int, ambiguous: Int
+        var errorDescription: String? {
+            "the voice print does not match this microphone (\(strong) clear windows, \(ambiguous) borderline)"
+        }
+    }
+
+    /// Mic windows at or above the voice threshold that a print which fits
+    /// must produce: about three seconds of the user's speech.
+    static let minOwnWindows = 6
+    /// Scores between every other voice's ceiling (0.32) and the threshold.
+    static let ambiguousBand: ClosedRange<Float> = 0.33...0.399
+
+    /// Whether the user's own mic matches the print well enough to gate on.
+    /// The gate has no confidence escape, so a print that does not fit
+    /// would delete the user from their own transcript. A fitting print
+    /// gives clear windows (0.49-0.70 measured) far more often than
+    /// borderline ones; a print that half-fits gives mostly borderline ones.
+    /// Not fitting is not an error for the user: the run falls back to the
+    /// loudness timeline, exactly as without a print.
+    static func fits(_ micScores: [Float?]) -> (Bool, strong: Int, ambiguous: Int) {
+        let s = micScores.compactMap { $0 }
+        let strong = s.filter { $0 >= VoiceActivity.onThreshold }.count
+        let ambiguous = s.filter { ambiguousBand.contains($0) }.count
+        return (strong >= minOwnWindows && ambiguous <= strong, strong, ambiguous)
+    }
+
     static func compute(mic: [Float], sys: [Float], print: Voiceprint,
                         onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> VoiceTimeline {
         let total = Double(mic.count + sys.count)
         let micShare = total > 0 ? Double(mic.count) / total : 0.5
         let m = try await VoiceEmbedder.shared.scores(mic, against: print) { onProgress?($0 * micShare) }
+        let fit = fits(m)
+        guard fit.0 else { throw Mismatch(strong: fit.strong, ambiguous: fit.ambiguous) }
         // The call audio is the others nearly always, and scoring all of it
         // at full resolution was three quarters of the pass on a speaker
         // call. Windows end to end first (a third of the work); full resolution

@@ -12,6 +12,7 @@ struct BenchmarkSection: View {
     var body: some View {
         Section("Your benchmark") {
             Toggle("Keep corrected lines as a benchmark", isOn: $enabled)
+                .onChange(of: enabled) { _, on in if !on { Benchmark.cancelQueued() } }
             Text("A line you correct keeps a copy of its audio (every voice in it) in Documents → Transcriberr Backups → benchmark. If Documents syncs to iCloud, so do these clips.")
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             if summary.isEmpty {
@@ -50,7 +51,7 @@ struct BenchmarkSection: View {
         }
         .onAppear { reload() }
         .confirmationDialog("Delete all \(count) checked lines and their audio clips?", isPresented: $confirmDelete) {
-            Button("Delete", role: .destructive) { Benchmark.deleteAll(); reload() }
+            Button("Delete", role: .destructive) { Task { await Benchmark.deleteAll(); reload() } }
         }
     }
 

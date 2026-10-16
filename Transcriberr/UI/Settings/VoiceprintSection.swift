@@ -109,6 +109,9 @@ struct VoiceprintSection: View {
                     : ""
                 return "Learned from \(Int(print.seconds.rounded())) s of your voice on \(date). Meetings find you on the mic by your voice. What the speakers play is never taken for you, your words survive when you talk over someone, and your voice coming back in the call audio is recognised as yours.\(quality)"
             }
+            if VoiceprintStore.isUnreadable {
+                return "Your saved voice print can no longer be read (it is damaged or was made by an older model), so meetings use the loudness timeline. Record it again below."
+            }
             return "Read a short passage aloud once, about 30 seconds, with the microphone you use for meetings. Meetings then find you by your voice instead of by loudness. Without it they fall back to the loudness timeline. The recording stays on this Mac."
         }
     }

@@ -154,4 +154,13 @@ final class DisputeTests: XCTestCase {
         store.forgetLearnedTerm("Blits")
         XCTAssertEqual(store.vocabulary, "Kaiko, Blits")
     }
+
+    func testClickingTheSecondCopyChangesTheSecondCopy() {
+        let d1 = WordDispute(chosen: "Kaico", alternative: "Kaiko", before: "ask", after: "first", start: 0, end: 30)
+        let d2 = WordDispute(chosen: "Kaico", alternative: "Kaiko", before: "ask", after: "again", start: 0, end: 30)
+        let text = "ask Kaico first, then ask Kaico again"
+        let hit = DisputeIndex.hit(1, disputes: [d1, d2], in: [(0, 10, text)], row: 0)
+        XCTAssertNotNil(hit)
+        XCTAssertEqual(DisputeIndex.pick(hit!, in: text).text, "ask Kaico first, then ask Kaiko again")
+    }
 }

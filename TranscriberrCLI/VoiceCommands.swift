@@ -118,6 +118,8 @@ func cmdVoice(_ args: [String]) async -> Int32 {
             }
             summary("mic", micScores)
             summary("sys", sysScores)
+            let fit = VoiceTimeline.fits(micScores)
+            print("[voice] print fits this mic: \(fit.0 ? "yes" : "NO — runs fall back to loudness") (\(fit.strong) clear windows, \(fit.ambiguous) borderline)")
             if let csv = opt("--csv") {
                 var lines = ["t,mic,sys,me"]
                 for i in 0..<max(micScores.count, sysScores.count) {

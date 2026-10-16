@@ -57,20 +57,36 @@ enum Benchmark {
     /// record the first edit (the user's own words) as the engine's text.
     @MainActor private static var tail: Task<BenchmarkItem?, Never>?
 
+    /// Bumped by Delete and by switching the benchmark off: queued writes
+    /// from before it are dropped instead of recreating what was deleted
+    /// (a whole checked meeting queues hundreds of clips).
+    @MainActor private(set) static var generation = 0
+
     @MainActor @discardableResult
-    static func enqueue(_ s: Source, machine: String) -> Task<BenchmarkItem?, Never>? {
+    static func enqueue(_ s: Source, machine: String, in dir: URL = root) -> Task<BenchmarkItem?, Never>? {
         guard isEnabled else { return nil }
         let previous = tail
-        let task = Task<BenchmarkItem?, Never> {
+        let gen = generation
+        let task = Task<BenchmarkItem?, Never> { @MainActor in
             _ = await previous?.value
-            return await record(s, machine: machine)
+            guard gen == generation, isEnabled else { return nil }
+            return await record(s, machine: machine, in: dir)
         }
         tail = task
         return task
     }
 
-    /// Deletes every reference and clip (Settings → Delete benchmark).
-    static func deleteAll(in dir: URL = root) {
+    /// Stops queued writes (the benchmark was switched off or deleted).
+    @MainActor static func cancelQueued() {
+        generation += 1
+    }
+
+    /// Deletes every reference and clip (Settings → Delete benchmark). The
+    /// write in flight finishes first, then everything goes.
+    @MainActor static func deleteAll(in dir: URL = root) async {
+        cancelQueued()
+        _ = await tail?.value
+        tail = nil
         try? FileManager.default.removeItem(at: dir)
     }
 

@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.3.4
+- The Transcriberr connection for AI assistants (MCP) keeps working after an update: it notices the new version and restarts itself, instead of failing with "Could not open the database" until it was reconnected by hand.
+
 ## 4.3.3
 - Meetings no longer list extra speakers who said three words. The speaker detection splits off a few seconds of someone's voice in most meetings; those scraps now go back to the person they belong to. A two-person call shows two people again.
 - "GUEST" is gone from meetings with several people: a line the speaker detection did not place gets the voice nearest to it, and one-word noise in silence ("100%", "0%") is removed.

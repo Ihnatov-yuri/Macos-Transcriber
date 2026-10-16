@@ -1,33 +1,42 @@
 import SwiftUI
 
-/// Whisper models in the Models tab: which are on disk, the one in use, and
-/// Download / Delete for each. The engine picks its model in the Engines tab.
+/// Whisper models in the Models tab: which are on disk, which language each
+/// picked one serves, and Download / Delete for each. The two picks are made
+/// in the Engines tab.
 struct WhisperModelsSection: View {
-    @AppStorage(WhisperModel.settingsKey) private var selected = WhisperModel.defaultID
+    @AppStorage(WhisperModel.englishSettingsKey) private var english = WhisperModel.englishDefaultID
+    @AppStorage(WhisperModel.settingsKey) private var other = WhisperModel.defaultID
     @State private var downloads = WhisperDownloads.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Whisper").uiLabel(10, color: AppColor.ink2)
-            Text("argmaxinc/whisperkit-coreml · stored in ~/Documents/huggingface · the model in use is picked in the Engines tab")
+            Text("argmaxinc/whisperkit-coreml · stored in ~/Documents/huggingface · the models in use are picked in the Engines tab")
                 .uiLabel(9, color: AppColor.ink3)
             VStack(spacing: 0) {
                 ForEach(WhisperModel.all) { model in
-                    WhisperModelRow(model: model, inUse: model.id == WhisperModel.model(selected).id,
-                                    downloads: downloads, select: { selected = model.id })
+                    WhisperModelRow(model: model, uses: uses(model), downloads: downloads)
                     HairlineSoft()
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// "English", "Other languages", both, or none.
+    private func uses(_ m: WhisperModel) -> [String] {
+        var u: [String] = []
+        if WhisperModel.model(english).id == m.id { u.append("English") }
+        if WhisperModel.model(other).id == m.id { u.append("Other languages") }
+        return u
+    }
 }
 
 private struct WhisperModelRow: View {
     let model: WhisperModel
-    let inUse: Bool
+    let uses: [String]
     let downloads: WhisperDownloads
-    let select: () -> Void
+    private var inUse: Bool { !uses.isEmpty }
     @State private var confirmingDelete = false
 
     var body: some View {
@@ -75,16 +84,10 @@ private struct WhisperModelRow: View {
             }
         } else if model.isDownloaded {
             VStack(alignment: .trailing, spacing: 4) {
-                Text(inUse ? "In use" : "Installed").uiLabel(10, color: AppColor.accentOnLight)
-                HStack(spacing: 6) {
-                    if !inUse {
-                        TapButton(action: select) {
-                            LitButtonChrome(.secondary, compact: true) { Text("Use") }
-                        }
-                    }
-                    TapButton { confirmingDelete = true } label: {
-                        LitButtonChrome(.destructive, compact: true) { Text("Delete") }
-                    }
+                Text(inUse ? "In use · \(uses.joined(separator: " + "))" : "Installed")
+                    .uiLabel(10, color: AppColor.accentOnLight)
+                TapButton { confirmingDelete = true } label: {
+                    LitButtonChrome(.destructive, compact: true) { Text("Delete") }
                 }
             }
             .confirmationDialog("Delete Whisper \(model.name)?", isPresented: $confirmingDelete, titleVisibility: .visible) {

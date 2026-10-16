@@ -43,7 +43,6 @@ struct EnginesSettingsTab: View {
     @AppStorage("ui.superGemmaRulings") private var gemmaRulings = "english"
     @Environment(AppContainer.self) private var container
     @AppStorage("ui.myName") private var myName = ""
-    @AppStorage(WhisperModel.settingsKey) private var whisperModel = WhisperModel.defaultID
 
     private var audioEngines: [BackendFactory.Kind] {
         BackendFactory.Kind.allCases.filter(\.supportsAudio)
@@ -75,12 +74,8 @@ struct EnginesSettingsTab: View {
                 )) {
                     ForEach(liveEngines, id: \.rawValue) { Text($0.displayName).tag($0) }
                 }
-                Picker("Whisper model", selection: $whisperModel) {
-                    ForEach(WhisperModel.all) { m in
-                        Text("\(m.name)\(m.englishOnly ? " (English only)" : "")\(m.isDownloaded ? "" : " · not downloaded")").tag(m.id)
-                    }
-                }
-                Text("Speech models download automatically on first use: Parakeet v3/v2 (~1 GB each, Neural Engine) and the Whisper model picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models. Super's Whisper reading was measured with large-v3.")
+                WhisperModelPickers()
+                Text("Whisper uses the first model when a recording's languages are English only, the second for anything else, auto-detect included. On the reference set, turbo compressed made English Super about 4x faster at the same accuracy; in Ukrainian every model but large-v3 lost 5-15 points. Speech models download automatically on first use: Parakeet v3/v2 (~1 GB each, Neural Engine) and the Whisper models picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Super · dual-engine merge") {

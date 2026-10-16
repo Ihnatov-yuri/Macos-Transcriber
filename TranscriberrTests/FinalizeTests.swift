@@ -152,4 +152,51 @@ extension FinalizeTests {
             beforeHeadOf: "True. But consider the cost.")
         XCTAssertEqual(out, "I think that is true.", "4-letter words never trim alone")
     }
+
+    // MARK: - Scrap clusters and GUEST (2026-10-16)
+
+    private func region(_ a: Double, _ b: Double, _ k: String) -> DiarizationRunner.SpeakerSegment {
+        DiarizationRunner.SpeakerSegment(startSeconds: a, endSeconds: b, speakerId: k)
+    }
+
+    func testScrapClustersFoldIntoTheirNeighbours() {
+        // Two real voices and a 4 s scrap next to B.
+        var real: [DiarizationRunner.SpeakerSegment] = []
+        for i in 0..<20 {
+            let t = Double(i) * 10
+            real.append(region(t, t + 8, i % 2 == 0 ? "A" : "B"))
+        }
+        let folded = DiarizationRunner.foldScraps(real + [region(205, 209, "C")])
+        let ids: [String] = folded.map { $0.speakerId }
+        XCTAssertEqual(Set(ids), ["A", "B"])
+        XCTAssertEqual(folded.last?.speakerId, "B", "the scrap goes to the nearest real region")
+        // A quiet but real voice (here 24 s over several regions) stays.
+        let quiet = real + [region(300, 306, "D"), region(320, 326, "D"), region(340, 352, "D")]
+        let quietIds: [String] = DiarizationRunner.foldScraps(quiet).map { $0.speakerId }
+        XCTAssertEqual(Set(quietIds), ["A", "B", "D"])
+        // One voice only: nothing to fold into.
+        let one: [String] = DiarizationRunner.foldScraps([region(0, 3, "A")]).map { $0.speakerId }
+        XCTAssertEqual(one, ["A"])
+    }
+
+    func testCallAudioOutsideTheRegionsGetsTheNearestVoiceNotGuest() {
+        let diar = [region(0, 10, "S1"), region(20, 30, "S2"), region(100, 110, "S1")]
+        let input = [
+            RawSegment(startSeconds: 2, endSeconds: 8, text: "We start with the budget"),
+            RawSegment(startSeconds: 21, endSeconds: 29, text: "Sounds good to me"),
+            // In a gap, 1 s after S2: S2's.
+            RawSegment(startSeconds: 31, endSeconds: 33, text: "and the timeline too"),
+            // In silence, far from any speech: noise, dropped.
+            RawSegment(startSeconds: 60, endSeconds: 61, text: "100%"),
+            // Far, but a real sentence: kept, nearest voice.
+            RawSegment(startSeconds: 70, endSeconds: 75, text: "Can everyone hear me now please"),
+        ]
+        let out = makeRunner().finalizeSegments(input, diarize: true, splitTracks: true, expectedSpeakers: 0,
+                                                diarSegments: diar, myName: "Yuri")
+        XCTAssertFalse(out.contains { $0.speakerKey == "GUEST" }, "\(out.map { ($0.speakerKey, $0.text) })")
+        XCTAssertFalse(out.contains { $0.text.contains("100%") })
+        XCTAssertTrue(out.contains { $0.text.contains("timeline") })
+        XCTAssertTrue(out.contains { $0.text.contains("hear me") })
+        XCTAssertEqual(Set(out.compactMap(\.speakerKey)).count, 2)
+    }
 }

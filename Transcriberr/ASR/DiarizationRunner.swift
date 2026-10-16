@@ -120,6 +120,43 @@ final class DiarizationRunner: @unchecked Sendable {
 
     // MARK: - Post-processing
 
+    /// A cluster this small is a scrap of someone else's voice, not a person.
+    static let scrapSeconds = 8.0
+    static let scrapShare = 0.03
+
+    /// Folds scrap clusters into their neighbours. VBx leaves a cluster of
+    /// a few seconds in most meetings (measured 2026-10-16 on three: 4.1,
+    /// 4.5 and 5.4 s, while every real voice spoke 24 s or more), and each
+    /// became a speaker of its own with three or four words. A cluster under
+    /// `scrapSeconds` AND under `scrapShare` of all speech gives each of its
+    /// regions to the speaker of the nearest region of a real cluster.
+    static func foldScraps(_ diar: [SpeakerSegment]) -> [SpeakerSegment] {
+        var total: [String: Double] = [:]
+        for d in diar { total[d.speakerId, default: 0] += d.endSeconds - d.startSeconds }
+        let all = total.values.reduce(0, +)
+        let scraps = Set(total.filter { $0.value < scrapSeconds && $0.value < scrapShare * all }.keys)
+        guard !scraps.isEmpty, scraps.count < total.count else { return diar }
+        let real = diar.filter { !scraps.contains($0.speakerId) }
+        AppLog.info("diar", "folding scrap clusters \(scraps.sorted().map { "\($0) (\(String(format: "%.1f", total[$0]!)) s)" }) into their neighbours")
+        return diar.map { d in
+            guard scraps.contains(d.speakerId),
+                  let near = real.min(by: { gap($0, d) < gap($1, d) }) else { return d }
+            return SpeakerSegment(startSeconds: d.startSeconds, endSeconds: d.endSeconds, speakerId: near.speakerId)
+        }
+    }
+
+    /// Seconds between two regions (0 when they touch or overlap).
+    static func gap(_ a: SpeakerSegment, _ b: SpeakerSegment) -> Double {
+        max(0, max(a.startSeconds, b.startSeconds) - min(a.endSeconds, b.endSeconds))
+    }
+
+    /// The speaker of the diarizer region nearest to `start`…`end`, and how
+    /// far it is.
+    static func nearest(_ start: Double, _ end: Double, in diar: [SpeakerSegment]) -> (speaker: String, gap: Double)? {
+        let probe = SpeakerSegment(startSeconds: start, endSeconds: end, speakerId: "")
+        return diar.map { ($0.speakerId, gap($0, probe)) }.min { $0.1 < $1.1 }
+    }
+
     /// Match each ASR segment to the diarizer cluster that overlaps it most.
     func assignSpeakers(
         segments: [RawSegment],

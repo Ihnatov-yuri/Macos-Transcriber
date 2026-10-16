@@ -342,6 +342,10 @@ final class TranscriptionRunner: @unchecked Sendable {
                     exact: params.expectedSpeakersExact
                 )
                 AppLog.info("runner", "diar pre-pass produced \(diarSegments.count) regions")
+                // Before anything uses them: Parakeet's per-chunk speaker
+                // hints come from these regions too. Not when the user said
+                // the room has exactly N voices.
+                if !params.expectedSpeakersExact { diarSegments = DiarizationRunner.foldScraps(diarSegments) }
             } catch {
                 AppLog.error("runner", "diar pre-pass failed (continuing without hints): \(error.localizedDescription)")
                 diarSegments = []
@@ -880,6 +884,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             diarSegments: diarSegments,
             myName: myNameSetting.isEmpty ? nil : myNameSetting
         )
+        let exactSpeakers = params.expectedSpeakersExact
         allSegments = await Task.detached(priority: .userInitiated) { [self] in
             finalizeSegments(
                 segmentsToFinalize,
@@ -892,7 +897,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                 micSpeech: micSpeech,
                 voice: voice,
                 micEcho: micHadEcho,
-                clusterVoice: clusterVoice
+                clusterVoice: clusterVoice,
+                foldScraps: !exactSpeakers
             )
         }.value
         if ensembleTwoPass {
@@ -918,6 +924,10 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// echo scrub → boundary trim → diar fill → identity → cap-fold →
     /// renumber → filler removal → coalesce → names → self-fold — is
     /// unit-testable with crafted inputs. No audio, no async, no database.
+    /// A call-audio piece this far from any speech the diarizer heard, with
+    /// one or two words, is noise (see the split-track fill below).
+    nonisolated static let phantomGapSeconds = 5.0
+
     func finalizeSegments(
         _ input: [RawSegment],
         diarize: Bool,
@@ -929,9 +939,13 @@ final class TranscriptionRunner: @unchecked Sendable {
         micSpeech: [ClosedRange<Double>]? = nil,
         voice: VoiceTimeline? = nil,
         micEcho: Bool = false,
-        clusterVoice: [String: Float]? = nil
+        clusterVoice: [String: Float]? = nil,
+        foldScraps: Bool = true
     ) -> [RawSegment] {
         var segments = input
+        // Again here so a replayed dump from an older build folds too
+        // (idempotent: a folded list has no scraps left).
+        let diarSegments = foldScraps ? DiarizationRunner.foldScraps(diarSegments) : diarSegments
         // ---------- split-track echo guard ----------
         // Without headphones the mic also hears the speakers, so the mic
         // track can contain a degraded acoustic copy of what the sys track
@@ -1052,11 +1066,32 @@ final class TranscriptionRunner: @unchecked Sendable {
                 }
             }
 
-            // Split-track: any segment STILL unlabeled is from the system
-            // track (mic segments were labeled ME at parse). Give it the
-            // single diarized sys cluster if there is exactly one, else a
-            // renameable GUEST identity — the self-intro and addressee name
-            // rules then apply to it like to any speaker.
+            // Split-track: a call-audio piece outside every diarizer region
+            // (word-timed pieces often are) goes to the speaker NEAREST in
+            // time. It used to become "GUEST", a speaker of its own, in every
+            // meeting with two or more other voices. One or two words in
+            // silence, far from any speech the diarizer heard ("100%", "0%"
+            // on a quiet track), are the recognizer's noise: dropped.
+            if splitTracks, !diarSegments.isEmpty {
+                var dropped: [String] = []
+                segments = segments.compactMap { seg in
+                    guard seg.speakerKey == nil else { return seg }
+                    guard let near = DiarizationRunner.nearest(seg.startSeconds, seg.endSeconds, in: diarSegments) else { return seg }
+                    let words = seg.text.split(whereSeparator: \.isWhitespace).count
+                    if near.gap >= Self.phantomGapSeconds && words <= 2 {
+                        dropped.append(seg.text)
+                        return nil
+                    }
+                    var s = seg
+                    s.speakerKey = near.speaker
+                    return s
+                }
+                if !dropped.isEmpty { AppLog.info("runner", "dropped \(dropped.count) call-audio scraps far from any speech: \(dropped.prefix(8))") }
+            }
+            // Still unlabeled (no diarization at all): the single diarized
+            // sys cluster if there is exactly one, else a renameable GUEST
+            // identity — the self-intro and addressee name rules then apply
+            // to it like to any speaker.
             if splitTracks {
                 let sysKeys = Set(segments.compactMap(\.speakerKey)).subtracting(["ME"])
                 let fallbackKey = sysKeys.count == 1 ? sysKeys.first! : "GUEST"

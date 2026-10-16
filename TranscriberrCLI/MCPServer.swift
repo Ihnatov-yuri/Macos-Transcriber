@@ -36,17 +36,57 @@ final class MCPServer {
         return opened
     }
 
+    /// This executable as it was when the server started. A client keeps one
+    /// server process for as long as it runs (days), so after a release the
+    /// old code went on reading a store whose schema had moved on, and every
+    /// call failed ("Cannot migrate store in-place") until the user
+    /// reconnected by hand. When the file on disk changes, the server
+    /// re-executes itself in place: same process, same stdin/stdout, so the
+    /// client's connection survives, and the unread requests are handed over.
+    private static let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+    private static func stamp() -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: executable.path))?[.modificationDate] as? Date
+    }
+    private let startedWith = MCPServer.stamp()
+    static let replayKey = "TRANSCRIBERR_MCP_REPLAY"
+
+    /// Replaced on disk, and the new file has stopped changing (a build
+    /// writes it in steps).
+    private var isStale: Bool {
+        guard let then = startedWith, let now = Self.stamp() else { return false }
+        return now != then && Date().timeIntervalSince(now) > 3
+    }
+
+    private func reexec(handingOver pending: Data) {
+        setenv(Self.replayKey, pending.base64EncodedString(), 1)
+        FileHandle.standardError.write("transcriberr mcp: binary updated, restarting in place\n".data(using: .utf8)!)
+        let path = Self.executable.path
+        var argv: [UnsafeMutablePointer<CChar>?] = [strdup(path), strdup("mcp"), nil]
+        execv(path, &argv)
+        // Only reached when exec failed: carry on with the old code.
+        unsetenv(Self.replayKey)
+        FileHandle.standardError.write("transcriberr mcp: restart failed (\(errno)), keeping the running version\n".data(using: .utf8)!)
+    }
+
     func run() -> Int32 {
         let stdin = FileHandle.standardInput
         var buffer = Data()
+        // Requests the previous version read but had not answered.
+        if let handed = ProcessInfo.processInfo.environment[Self.replayKey], let data = Data(base64Encoded: handed) {
+            unsetenv(Self.replayKey)
+            buffer = data
+        }
         while true {
-            let chunk = stdin.availableData
-            if chunk.isEmpty {   // EOF
-                // A final request with no trailing newline is still a request.
-                if !buffer.isEmpty { handleLine(buffer) }
-                return 0
+            if buffer.firstIndex(of: 0x0A) == nil {
+                let chunk = stdin.availableData
+                if chunk.isEmpty {   // EOF
+                    // A final request with no trailing newline is still a request.
+                    if !buffer.isEmpty { handleLine(buffer) }
+                    return 0
+                }
+                buffer.append(chunk)
             }
-            buffer.append(chunk)
+            if isStale { reexec(handingOver: buffer) }
             while let nl = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer.subdata(in: buffer.startIndex..<nl)
                 buffer.removeSubrange(buffer.startIndex...nl)

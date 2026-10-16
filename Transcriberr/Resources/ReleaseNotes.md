@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.3.3
+- Meetings no longer list extra speakers who said three words. The speaker detection splits off a few seconds of someone's voice in most meetings; those scraps now go back to the person they belong to. A two-person call shows two people again.
+- "GUEST" is gone from meetings with several people: a line the speaker detection did not place gets the voice nearest to it, and one-word noise in silence ("100%", "0%") is removed.
+
 ## 4.3.2
 - If your voice print does not match the microphone of a meeting (enrolled on the laptop, the meeting on AirPods, or a cold), the meeting no longer loses your words: it falls back to how meetings worked before the voice print. A reading that sounded mixed is no longer saved as your print.
 - Short answers ("yes, Tuesday works") are no longer dropped from your side of a meeting transcribed without word timings.

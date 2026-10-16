@@ -859,10 +859,15 @@ extension DetailView {
     func pickAlternative(_ seg: Segment, disputeIndex k: Int) {
         var list = DisputeIndex.decode(recording.disputesJSON)
         guard list.indices.contains(k) else { return }
-        // Found again in the stored text: the row showed the styled text.
-        var claimed = Set<Int>()
-        guard let hit = DisputeIndex.hits(in: seg.text, start: seg.startSeconds, end: seg.endSeconds,
-                                          disputes: [list[k]], claimed: &claimed).first else { return }
+        // Found again in the stored text (the row showed the styled text),
+        // the way the transcript found it: every dispute, earlier segments
+        // claiming theirs first, so the second copy of a word is the one
+        // clicked and not the first.
+        let ordered = recording.segments.sorted { $0.startSeconds < $1.startSeconds }
+        guard let row = ordered.firstIndex(where: { $0.id == seg.id }),
+              let hit = DisputeIndex.hit(k, disputes: list,
+                                         in: ordered.map { ($0.startSeconds, $0.endSeconds, $0.text) }, row: row)
+        else { return }
         let sentenceStart = DisputeLearning.startsSentence(hit.range, in: seg.text)
         let picked = DisputeIndex.pick(hit, in: seg.text)
         seg.text = picked.text
@@ -1030,7 +1035,7 @@ struct TranscriptPane: View {
 
     private func disputeKey(_ segs: [Segment]) -> DisputeKey {
         DisputeKey(json: recording.disputesJSON, style: style, running: isRunning,
-                   texts: segs.map { $0.text.utf8.count &* 31 &+ Int($0.startSeconds * 10) })
+                   texts: segs.map { $0.text.hashValue &+ Int($0.startSeconds * 10) })
     }
 
     private func disputeHits(in segs: [Segment]) -> [UUID: DisputeRow] {

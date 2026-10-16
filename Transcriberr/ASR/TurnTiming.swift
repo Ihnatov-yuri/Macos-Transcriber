@@ -53,9 +53,14 @@ enum TurnTiming {
     }
     static let minSpeechCoverage = 0.25
 
+    /// Any speech interval (padded) inside `a`…`b`.
+    static func overlapsSpeech(_ a: Double, _ b: Double, micSpeech: [ClosedRange<Double>]) -> Bool {
+        micSpeech.contains { $0.upperBound + micSpeechPad > a && $0.lowerBound - micSpeechPad < b }
+    }
+
     static func isSpoken(_ a: Double, _ b: Double, micSpeech: [ClosedRange<Double>]) -> Bool {
         if b - a < longPieceSeconds {
-            return micSpeech.contains { $0.upperBound + micSpeechPad > a && $0.lowerBound - micSpeechPad < b }
+            return overlapsSpeech(a, b, micSpeech: micSpeech)
         }
         let covered = micSpeech.reduce(0.0) { $0 + max(0, min(b, $1.upperBound) - max(a, $1.lowerBound)) }
         return covered >= minSpeechCoverage * (b - a)

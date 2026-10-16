@@ -227,6 +227,10 @@ final class TranscriptionRunner: @unchecked Sendable {
         continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
     ) async throws {
         AppLog.info("runner", "start \(params.file.lastPathComponent) backend=\(params.backend.rawValue) modelDir=\(params.modelDirectory?.path ?? "nil") diarize=\(params.diarize) hybrid=\(params.hybridDiarize) translate=\(params.translateTo ?? "—")")
+        // One Whisper model for the whole run (see WhisperModel.pin).
+        let whisperModel = WhisperModel.pin(for: params.languages)
+        defer { WhisperModel.unpin() }
+        if [.whisper, .ensemble].contains(params.backend) { AppLog.info("runner", "Whisper model for this run: \(whisperModel.name)") }
         try await holdWhileRecording(params, continuation: continuation)
 
         // ---------- decode + chunk ----------
@@ -289,6 +293,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                         AppLog.info("runner", "voice print: you speak \(secs(voice!.mic)) s on the mic, \(secs(voice!.sys)) s in the call audio (\(String(format: "%.1f", Date().timeIntervalSince(t0))) s)")
                     } catch is CancellationError {
                         throw CancellationError()
+                    } catch let mismatch as VoiceTimeline.Mismatch {
+                        AppLog.warn("runner", "\(mismatch.localizedDescription) — using the speech timeline, as without a print")
                     } catch {
                         AppLog.warn("runner", "voice print scoring failed, using the speech timeline: \(error.localizedDescription)")
                     }
@@ -1011,9 +1017,12 @@ final class TranscriptionRunner: @unchecked Sendable {
             // No word timelines (Super without max quality): the chunk
             // segments are too long to time, but a mic chunk with none of
             // the user's voice in it is still not the user.
+            // Any of the user's voice in the chunk keeps it: a chunk is up to
+            // ~30 s, and a 4 s "yes, Tuesday works" in it fell under the
+            // coverage rule that is meant for timed pieces.
             segments = segments.filter { seg in
                 guard seg.speakerKey == "ME" else { return true }
-                let keep = TurnTiming.isSpoken(seg.startSeconds, seg.endSeconds, micSpeech: voice.mic)
+                let keep = TurnTiming.overlapsSpeech(seg.startSeconds, seg.endSeconds, micSpeech: voice.mic)
                 if !keep { AppLog.info("runner", "ME segment @\(Int(seg.startSeconds))s is not your voice — dropped") }
                 return keep
             }

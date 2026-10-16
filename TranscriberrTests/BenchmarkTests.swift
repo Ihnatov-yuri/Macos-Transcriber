@@ -115,4 +115,16 @@ final class BenchmarkTests: XCTestCase {
         XCTAssertEqual(Double(clip.count), 16_000, accuracy: 200)
         XCTAssertGreaterThan(clip[8_000].magnitude, 0.1)
     }
+
+    @MainActor
+    func testSwitchingOffDropsQueuedWrites() async throws {
+        let wav = try audio(seconds: 4)
+        let src = Benchmark.Source(segmentId: UUID(), recordingId: UUID(), recordingTitle: "c", audioPath: wav.path,
+                                   language: nil, speaker: nil, start: 1, end: 2, text: "hello", engine: nil)
+        let task = Benchmark.enqueue(src, machine: "hello", in: dir)
+        Benchmark.cancelQueued()
+        let result = await task?.value
+        XCTAssertNil(result)
+        XCTAssertTrue(Benchmark.items(in: dir).isEmpty)
+    }
 }

@@ -64,10 +64,18 @@ struct MeetingContext: Codable, Sendable, Equatable {
     }
 
     /// One line for Gemma's arbitration prompt.
+    /// Invite text written by whoever sent it, as one short line: it goes
+    /// into Gemma's prompt and must not carry instructions or layout.
+    static func promptSafe(_ s: String, max: Int) -> String {
+        String(s.split(whereSeparator: \.isNewline).joined(separator: " ")
+            .replacingOccurrences(of: #"[<>{}\[\]`]"#, with: " ", options: .regularExpression)
+            .prefix(max)).trimmingCharacters(in: .whitespaces)
+    }
+
     var promptLine: String {
-        var s = "Meeting: \(title)"
+        var s = "Meeting: \(Self.promptSafe(title, max: 80))"
         if !attendees.isEmpty {
-            s += ". Attendees: \(attendees.prefix(Self.maxNamedAttendees).joined(separator: ", "))"
+            s += ". Attendees: \(attendees.prefix(Self.maxNamedAttendees).map { Self.promptSafe($0, max: 40) }.joined(separator: ", "))"
             if attendees.count > Self.maxNamedAttendees { s += " and \(attendees.count - Self.maxNamedAttendees) more" }
         }
         return s + "."
@@ -183,15 +191,18 @@ struct MeetingContext: Codable, Sendable, Equatable {
             return DateInterval(start: Date(timeIntervalSince1970: ms / 1000), duration: length)
         }
         if name.hasPrefix("Recording_") {
-            // "Recording_yyyy-MM-dd_HH-mm-ss-mmm…": the start, local time. A
-            // recording recovered after a crash has its row created from the
-            // file, so createdAtMillis cannot be trusted to be the stop.
+            // The row is created at Stop, in UTC: the start is `duration`
+            // before it. A recording recovered after a crash had its row made
+            // from the file's creation date, which is its START; the name's
+            // local-time stamp ("Recording_yyyy-MM-dd_HH-mm-ss-…") tells the
+            // two apart. The stamp is never used as the time itself: read in
+            // another time zone it is off by the difference.
+            let created = Date(timeIntervalSince1970: Double(createdAtMillis) / 1000)
             let stamp = name.dropFirst("Recording_".count).prefix(19)
-            if let start = recordingStamp.date(from: String(stamp)) {
-                return DateInterval(start: start, duration: length)
+            if let named = recordingStamp.date(from: String(stamp)), abs(named.timeIntervalSince(created)) < 120 {
+                return DateInterval(start: created, duration: length)
             }
-            let end = Date(timeIntervalSince1970: Double(createdAtMillis) / 1000)
-            return DateInterval(start: end.addingTimeInterval(-length), duration: length)
+            return DateInterval(start: created.addingTimeInterval(-length), duration: length)
         }
         return nil
     }
@@ -206,7 +217,7 @@ struct MeetingContext: Codable, Sendable, Equatable {
                                             end: end.addingTimeInterval(3600), calendars: nil)
         let duration = end.timeIntervalSince(start)
         let best = store.events(matching: pred)
-            .filter { !$0.isAllDay && $0.availability != .free }
+            .filter { !$0.isAllDay && $0.availability != .free && isUsersMeeting($0) }
             .map { e -> (EKEvent, TimeInterval) in
                 (e, min(end, e.endDate).timeIntervalSince(max(start, e.startDate)))
             }
@@ -250,6 +261,17 @@ struct MeetingContext: Codable, Sendable, Equatable {
             checker.checkSpelling(of: w, startingAt: 0, language: $0, wrap: false,
                                   inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
         }
+    }
+
+    /// An event the user was actually in: not a subscribed or birthday
+    /// calendar, not declined, and when it lists people, the user is one of
+    /// them (a colleague's shared calendar shows meetings the user is not in).
+    static func isUsersMeeting(_ e: EKEvent) -> Bool {
+        if let cal = e.calendar, cal.type == .subscription || cal.type == .birthday { return false }
+        guard let people = e.attendees, !people.isEmpty else { return true }
+        if e.organizer?.isCurrentUser == true { return true }
+        guard let me = people.first(where: \.isCurrentUser) else { return false }
+        return me.participantStatus != .declined
     }
 
     static func context(of event: EKEvent) -> MeetingContext {

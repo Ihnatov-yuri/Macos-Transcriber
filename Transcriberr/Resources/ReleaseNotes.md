@@ -6,6 +6,13 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.3.2
+- If your voice print does not match the microphone of a meeting (enrolled on the laptop, the meeting on AirPods, or a cold), the meeting no longer loses your words: it falls back to how meetings worked before the voice print. A reading that sounded mixed is no longer saved as your print.
+- Short answers ("yes, Tuesday works") are no longer dropped from your side of a meeting transcribed without word timings.
+- Picking a Whisper model while a transcription runs no longer switches models halfway through it. An English-only Whisper model is not used for other languages, the model a run is using cannot be deleted, and without internet a missing model is replaced by one on this Mac.
+- Calendar invites from colleagues' shared calendars, subscribed calendars and meetings you declined are no longer used.
+- Deleting or switching off the benchmark stops the clips still being written. Clicking the second underlined copy of a word changes that copy.
+
 ## 4.3.1
 - Names from a calendar invite no longer make ordinary words win Super's vote: an attendee called "Kees van der Berg" or "Will Smith" used to tip every "van" or "will" the engines disagreed on.
 - Clicking a disputed word back now always leaves no rule behind, and takes back only the vocabulary entry the first click added.

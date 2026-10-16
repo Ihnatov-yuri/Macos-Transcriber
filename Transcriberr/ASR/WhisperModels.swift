@@ -42,9 +42,51 @@ struct WhisperModel: Identifiable, Hashable, Sendable {
         all.first { $0.id == id } ?? all[0]
     }
 
-    /// The model in use, falling back to the default for an unknown id.
+    /// The model in use: the running job's pin, else the setting (the
+    /// default for an unknown id).
     static var selected: WhisperModel {
-        model(UserDefaults.standard.string(forKey: settingsKey) ?? defaultID)
+        pinLock.lock(); defer { pinLock.unlock() }
+        return model(pinnedID ?? UserDefaults.standard.string(forKey: settingsKey) ?? defaultID)
+    }
+
+    /// The model a run uses, fixed when it starts. A pick in Settings or in a
+    /// recording's engine menu during a run used to make the next load
+    /// (a wedge recovery, the next chunk's check) rebuild Whisper with the
+    /// new model, so one transcript came from two models. Jobs run one at a
+    /// time; the pin is released when the run ends.
+    private static let pinLock = NSLock()
+    nonisolated(unsafe) private static var pinnedID: String?
+
+    /// Pins the setting for this run. An English-only model on a run that
+    /// is not English (distil-large-v3 reading Ukrainian) is replaced by the
+    /// default; a model that is not on disk is still pinned (it downloads on
+    /// load, and falls back there if it cannot).
+    @discardableResult
+    static func pin(for languages: Set<String>, setting: String? = nil) -> WhisperModel {
+        var m = model(setting ?? UserDefaults.standard.string(forKey: settingsKey) ?? defaultID)
+        let english = !languages.isEmpty && languages.allSatisfy { $0.lowercased() == "english" }
+        if m.englishOnly && !english {
+            AppLog.warn("whisper", "\(m.name) is English only — this run uses \(model(defaultID).name)")
+            m = model(defaultID)
+        }
+        pinLock.lock(); pinnedID = m.id; pinLock.unlock()
+        return m
+    }
+
+    static func unpin() {
+        pinLock.lock(); pinnedID = nil; pinLock.unlock()
+    }
+
+    /// The pinned model's id while a run is in flight.
+    static var inUse: String? {
+        pinLock.lock(); defer { pinLock.unlock() }
+        return pinnedID
+    }
+
+    /// A downloaded model to fall back on when the chosen one cannot be
+    /// fetched (offline): the default first.
+    static var fallback: WhisperModel? {
+        ([model(defaultID)] + all).first { $0.isDownloaded }
     }
 
     /// Where WhisperKit keeps its downloads: ~/Documents/huggingface (its
@@ -109,6 +151,12 @@ final class WhisperDownloads {
     }
 
     func delete(_ model: WhisperModel) {
+        // The running job's model: its next wedge recovery would download it
+        // again in the middle of the run.
+        guard WhisperModel.inUse != model.id else {
+            failures[model.id] = "In use by the running transcription. Delete it when the run has finished."
+            return
+        }
         try? FileManager.default.removeItem(at: model.folder)
         AppLog.info("whisper", "deleted \(model.id)")
         revision += 1

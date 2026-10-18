@@ -72,12 +72,21 @@ final class AppContainer: @unchecked Sendable {
     /// mic prewarm, no writes to the user's real library, no model loads.
     static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
+    /// The test host is the app itself, launched by xcodebuild: on the
+    /// named store it opened the user's real library while every test ran.
+    /// Tests build their own containers; the host needs none on disk.
+    static func storeConfiguration(schema: Schema, testHost: Bool) -> ModelConfiguration {
+        testHost
+            ? ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            : ModelConfiguration("Transcriberr", schema: schema)
+    }
+
     /// Built once, by the App's own init, on the main actor — the main
     /// ModelContext and the `@MainActor` job manager are created right here.
     @MainActor
     init() {
         let schema = Schema(TranscriberrSchema.models)
-        let config = ModelConfiguration("Transcriberr", schema: schema)
+        let config = Self.storeConfiguration(schema: schema, testHost: Self.isTestHost)
         let mc: ModelContainer
         do {
             mc = try ModelContainer(for: schema, configurations: config)

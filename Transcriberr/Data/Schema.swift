@@ -12,6 +12,7 @@ enum TranscriberrSchema {
         Recording.self,
         Segment.self,
         OutputDoc.self,
+        OutputVersion.self,
         TranscriptVersion.self,
         PendingTask.self,
         Folder.self,
@@ -57,6 +58,11 @@ final class Recording {
 
     @Relationship(deleteRule: .cascade, inverse: \TranscriptVersion.recording)
     var versions: [TranscriptVersion] = []
+
+    /// Every generated output, kept when Generate replaces it (4.5.0). The
+    /// current one per preset is still the OutputDoc in `outputs`.
+    @Relationship(deleteRule: .cascade, inverse: \OutputVersion.recording)
+    var outputVersions: [OutputVersion] = []
 
     // Library organization. Inverses are declared on Folder/Tag, so both
     // sides default to .nullify — deleting a Recording never touches shared
@@ -170,6 +176,44 @@ final class OutputDoc {
         self.title = title
         self.markdown = markdown
         self.createdAtMillis = createdAtMillis
+    }
+}
+
+/// One generated output as it was made: the text, and the prompt and engine
+/// that made it, so a regenerated summary can be compared with and restored
+/// to an earlier one. Immutable; see RecordingRepository.replaceOutput.
+@Model
+final class OutputVersion {
+    @Attribute(.unique) var id: UUID
+    var recording: Recording?
+    var presetId: String
+    var title: String
+    var markdown: String
+    /// When the output was generated (not when it was archived).
+    var createdAtMillis: Int64
+    /// Nil for outputs made before 4.5.0, archived without this record.
+    var engineLabel: String?
+    var systemPrompt: String?
+    var userPrompt: String?
+
+    init(
+        id: UUID = UUID(),
+        presetId: String,
+        title: String,
+        markdown: String,
+        createdAtMillis: Int64,
+        engineLabel: String? = nil,
+        systemPrompt: String? = nil,
+        userPrompt: String? = nil
+    ) {
+        self.id = id
+        self.presetId = presetId
+        self.title = title
+        self.markdown = markdown
+        self.createdAtMillis = createdAtMillis
+        self.engineLabel = engineLabel
+        self.systemPrompt = systemPrompt
+        self.userPrompt = userPrompt
     }
 }
 

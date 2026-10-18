@@ -22,31 +22,46 @@ struct DetailView: View {
     @State private var editingSegment: Segment?
     @State private var renamingSpeaker: String?
     @State private var showingSplit = false
+    @State private var findingPeople = false
+    /// Read on appear and on change, never per render: it is a file.
+    @State private var hasPeople = false
+    @State private var peopleNote: String?
 
-    enum Tab: String, CaseIterable, Identifiable {
-        case transcript, summary, minutes, clean, translate, context, versions
-        var id: String { rawValue }
+    /// Transcript, then one tab per post-processing preset in Settings
+    /// order, then any output whose preset was since deleted, then Versions.
+    enum Tab: Hashable, Identifiable {
+        case transcript
+        case output(presetId: String, label: String)
+        case versions
+        var id: String {
+            switch self {
+            case .transcript: return "transcript"
+            case .output(let presetId, _): return "output:" + presetId
+            case .versions: return "versions"
+            }
+        }
         var label: String {
             switch self {
             case .transcript: return "Transcript"
-            case .summary:    return "Summary"
-            case .minutes:    return "Minutes"
-            case .clean:      return "Clean"
-            case .translate:  return "Translate"
-            case .context:    return "Context-rewrite"
-            case .versions:   return "Versions"
+            case .output(_, let label): return label
+            case .versions: return "Versions"
             }
         }
-        var presetId: String {
-            switch self {
-            case .transcript, .versions: return ""
-            case .summary:    return "summary"
-            case .minutes:    return "minutes"
-            case .clean:      return "clean"
-            case .translate:  return "translate_polish"
-            case .context:    return "context_rewrite"
-            }
+    }
+
+    private var tabs: [Tab] {
+        let presets = container.presetStore.presets
+        let known = Set(presets.map(\.id))
+        var orphans: [Tab] = []
+        var seen: Set<String> = []
+        for doc in recording.outputs.sorted(by: { $0.createdAtMillis < $1.createdAtMillis })
+        where !known.contains(doc.presetId) && seen.insert(doc.presetId).inserted {
+            orphans.append(.output(presetId: doc.presetId, label: doc.title))
         }
+        return [.transcript]
+            + presets.map { .output(presetId: $0.id, label: $0.name.isEmpty ? "Untitled" : $0.name) }
+            + orphans
+            + [.versions]
     }
 
     var body: some View {
@@ -64,6 +79,7 @@ struct DetailView: View {
             if model?.recording.id != recording.id {
                 model = DetailModel(container: container, recording: recording)
                 tab = .transcript
+                peopleNote = nil
                 proseMode = container.uiPrefs.proseMode
                 showTimestamps = container.uiPrefs.showTimestamps
                 transcriptStyle = container.uiPrefs.transcriptStyle
@@ -99,6 +115,10 @@ struct DetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { paneHeight = $0 }
+            .onAppear { hasPeople = !PeopleStore.shared.load().isEmpty }
+            .onReceive(NotificationCenter.default.publisher(for: PeopleStore.didChange)) { _ in
+                hasPeople = !PeopleStore.shared.load().isEmpty
+            }
         }
         .sheet(item: $editingSegment) { seg in
             SegmentEditSheet(segment: seg, container: container)
@@ -167,11 +187,55 @@ struct DetailView: View {
 
                     }
                     Text("Rename ↗").uiLabel(9, color: AppColor.ink3)
+                    if hasPeople {
+                        TapButton { findPeople() } label: {
+                            Text(findingPeople ? "Finding people…" : (peopleNote ?? "Find people ↗"))
+                                .uiLabel(9, color: findingPeople ? AppColor.ink3 : AppColor.accentOnLight)
+                        }
+                        .help("Name this recording's speakers after the people saved in Settings.")
+                    }
                 }
                 .padding(.horizontal, AppMetric.sheetPadding)
                 .padding(.vertical, 8)
                 HairlineSoft()
             }
+        }
+    }
+
+    /// Transcript, versions, outputs with their history and prompts, and
+    /// optionally the audio, into a folder the user picks.
+    private func exportFolder(includeAudio: Bool) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        panel.message = "Choose where to put the folder for \u{201C}\(recording.title)\u{201D}."
+        guard panel.runModal() == .OK, let parent = panel.url else { return }
+        do {
+            let folder = try RecordingFolderExporter.export(
+                recording, presets: container.presetStore, to: parent, includeAudio: includeAudio)
+            NSWorkspace.shared.activateFileViewerSelecting([folder])
+        } catch {
+            AppLog.error("detail", "folder export failed: \(error.localizedDescription)")
+            let alert = NSAlert()
+            alert.messageText = "Could not export the recording"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
+
+    /// Saved people are matched after every run; this is for recordings
+    /// made before a person was saved.
+    private func findPeople() {
+        guard !findingPeople, let repo = model?.container.repository else { return }
+        findingPeople = true
+        Task { @MainActor in
+            let named = await PeopleNamer.apply(to: recording, repository: repo)
+            if named > 0 { try? TranscriptExporter.export(recording: recording) }
+            peopleNote = named == 0 ? "No saved person found ↗"
+                : named == 1 ? "1 speaker named ↗" : "\(named) speakers named ↗"
+            findingPeople = false
         }
     }
 
@@ -323,6 +387,9 @@ struct DetailView: View {
                 Button("Share audio file") { shareSidecar(.audio) }
                 Divider()
                 Button("Share transcript as text…") { shareTranscript() }.disabled(!hasTranscript)
+                Divider()
+                Button("Export to a folder…") { exportFolder(includeAudio: false) }
+                Button("Export to a folder, with audio…") { exportFolder(includeAudio: true) }
             } label: {
                 Text("Share ↗")
                     .uiLabel(10, color: hasTranscript ? AppColor.accentOnLight : AppColor.ink3)
@@ -759,14 +826,14 @@ struct DetailView: View {
             HStack(spacing: 0) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 0) {
-                        ForEach(Tab.allCases) { t in
+                        ForEach(tabs) { t in
                             TapButton { tab = t } label: {
                                 VStack(spacing: 4) {
-                                    Text(t.label).uiLabel(10, color: tab == t ? AppColor.ink : AppColor.ink2)
+                                    Text(t.label).uiLabel(10, color: tab.id == t.id ? AppColor.ink : AppColor.ink2)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 10)
                                     Rectangle()
-                                        .fill(tab == t ? AppColor.accent : Color.clear)
+                                        .fill(tab.id == t.id ? AppColor.accent : Color.clear)
                                         .frame(width: 28, height: 1.5)
                                 }
                             }
@@ -818,7 +885,9 @@ struct DetailView: View {
 
     @ViewBuilder
     private func tabContent(_ model: DetailModel) -> some View {
-        switch tab {
+        // A tab whose preset was deleted or renamed meanwhile: match by id,
+        // and fall back to the transcript when the tab is gone.
+        switch tabs.first(where: { $0.id == tab.id }) ?? .transcript {
         case .transcript:
             TranscriptPane(
                 recording: recording,
@@ -838,8 +907,8 @@ struct DetailView: View {
                     SpeakerPalette.colors[(order.firstIndex(of: key) ?? 0) % SpeakerPalette.colors.count]
                 }
             )
-        case .summary, .minutes, .clean, .translate, .context:
-            OutputPane(model: model, presetId: tab.presetId)
+        case .output(let presetId, _):
+            OutputPane(model: model, presetId: presetId)
         case .versions:
             VersionsPane(model: model)
         }
@@ -992,7 +1061,7 @@ private struct VersionsPane: View {
         .padding(.vertical, AppMetric.s)
     }
 
-    private static let dateFormatter: DateFormatter = {
+    static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "d MMM · HH:mm"
         return f
@@ -1264,6 +1333,11 @@ struct TranscriptPane: View {
 struct OutputPane: View {
     let model: DetailModel
     let presetId: String
+    @State private var showingHistory = false
+
+    private var historyCount: Int {
+        model.recording.outputVersions.filter { $0.presetId == presetId }.count
+    }
 
     private var doc: OutputDoc? {
         model.recording.outputs.first { $0.presetId == presetId }
@@ -1303,35 +1377,49 @@ struct OutputPane: View {
                     EmptyView()
                 }
                 Spacer()
-                TapButton {
-                    guard !isBusy else { return }
-                    Task { @MainActor in
-                        // Presets are text generation; speech-only backends
-                        // coerce to the configured text engine. Resolve the
-                        // model dir for the EFFECTIVE engine (LiteRT and API
-                        // engines self-resolve / need none).
-                        let effective: BackendFactory.Kind =
-                            model.backend.supportsTextGeneration
-                                ? model.backend
-                                : model.container.uiPrefs.textEngine
-                        let modelDir: URL? = nil   // LiteRT/cloud self-resolve
-                        await model.container.postProcessor.run(
-                            presetId: presetId,
-                            recording: model.recording,
-                            backend: effective,
-                            modelDirectory: modelDir
-                        )
+                if historyCount > 1 || showingHistory {
+                    TapButton { showingHistory.toggle() } label: {
+                        Text(showingHistory ? "Back to output" : "History (\(historyCount))")
+                            .uiLabel(10, color: AppColor.ink2)
                     }
-                } label: {
-                    Text(isBusy ? "Working…" : "Generate ↗")
-                        .uiLabel(10, color: isBusy ? AppColor.ink3 : AppColor.accentOnLight)
+                    .help("Earlier outputs of this preset, with the prompt and engine that made each.")
+                }
+                if model.container.presetStore.preset(presetId) == nil {
+                    Text("Its preset was deleted · restore it in Settings to generate again")
+                        .uiLabel(9, color: AppColor.ink3)
+                } else {
+                    TapButton {
+                        guard !isBusy else { return }
+                        Task { @MainActor in
+                            // Presets are text generation; speech-only backends
+                            // coerce to the configured text engine. Resolve the
+                            // model dir for the EFFECTIVE engine (LiteRT and API
+                            // engines self-resolve / need none).
+                            let effective: BackendFactory.Kind =
+                                model.backend.supportsTextGeneration
+                                    ? model.backend
+                                    : model.container.uiPrefs.textEngine
+                            let modelDir: URL? = nil   // LiteRT/cloud self-resolve
+                            await model.container.postProcessor.run(
+                                presetId: presetId,
+                                recording: model.recording,
+                                backend: effective,
+                                modelDirectory: modelDir
+                            )
+                        }
+                    } label: {
+                        Text(isBusy ? "Working…" : "Generate ↗")
+                            .uiLabel(10, color: isBusy ? AppColor.ink3 : AppColor.accentOnLight)
+                    }
                 }
             }
             .padding(.horizontal, AppMetric.sheetPadding)
             .padding(.vertical, 10)
             HairlineSoft()
 
-            if let doc {
+            if showingHistory {
+                OutputHistoryList(model: model, presetId: presetId) { showingHistory = false }
+            } else if let doc {
                 ScrollView {
                     Text(LocalizedStringKey(doc.markdown))
                         .font(AppFont.text(16))
@@ -1352,5 +1440,126 @@ struct OutputPane: View {
                 .padding(AppMetric.xl)
             }
         }
+    }
+}
+
+// MARK: - Output history
+
+/// Earlier outputs of one preset, newest first: the text, the engine and
+/// prompt that made it, Restore (it becomes the tab's output, the current one
+/// stays here) and Delete.
+private struct OutputHistoryList: View {
+    let model: DetailModel
+    let presetId: String
+    var onRestored: () -> Void
+    @State private var expandedId: UUID?
+    @State private var showingPrompt: UUID?
+
+    private var versions: [OutputVersion] {
+        model.container.repository.outputVersions(presetId: presetId, in: model.recording)
+    }
+
+    private var currentMarkdown: String? {
+        model.recording.outputs.first { $0.presetId == presetId }?.markdown
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(versions, id: \.id) { v in
+                    row(v)
+                    HairlineSoft()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func row(_ v: OutputVersion) -> some View {
+        let isOpen = expandedId == v.id
+        let isCurrent = v.markdown == currentMarkdown
+        VStack(alignment: .leading, spacing: AppMetric.s) {
+            TapButton { expandedId = isOpen ? nil : v.id } label: {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: AppMetric.s) {
+                            Text(VersionsPane.dateFormatter.string(
+                                from: Date(timeIntervalSince1970: Double(v.createdAtMillis) / 1000)))
+                                .uiLabel(10)
+                            if isCurrent { Text("Current").uiLabel(9, color: AppColor.accentOnLight) }
+                        }
+                        Text(v.engineLabel ?? "Made before 4.5.0")
+                            .uiLabel(9, color: AppColor.ink2)
+                        if !isOpen {
+                            Text(v.markdown.prefix(160).replacingOccurrences(of: "\n", with: " "))
+                                .font(AppFont.text(12))
+                                .foregroundStyle(AppColor.ink3)
+                                .lineLimit(2)
+                        }
+                    }
+                    Spacer()
+                    Text(isOpen ? "▾" : "▸").uiLabel(10, color: AppColor.ink3)
+                }
+                .contentShape(Rectangle())
+            }
+            if isOpen {
+                Text(LocalizedStringKey(v.markdown))
+                    .font(AppFont.text(15))
+                    .lineSpacing(4)
+                    .foregroundStyle(AppColor.ink)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if showingPrompt == v.id, let user = v.userPrompt {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("System").uiLabel(9, color: AppColor.ink2)
+                        Text(v.systemPrompt ?? "").font(AppFont.text(12)).textSelection(.enabled)
+                        Text("User template").uiLabel(9, color: AppColor.ink2)
+                        Text(user).font(AppFont.text(12)).textSelection(.enabled)
+                    }
+                    .foregroundStyle(AppColor.ink2)
+                    .padding(AppMetric.m)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.55)))
+                }
+                HStack(spacing: AppMetric.l) {
+                    if !isCurrent {
+                        TapButton {
+                            do {
+                                try model.container.repository.restoreOutput(v, to: model.recording)
+                                onRestored()
+                            } catch {
+                                AppLog.error("detail", "output restore failed: \(error.localizedDescription)")
+                            }
+                        } label: {
+                            Text("Restore as current")
+                                .uiLabel(9, color: AppColor.accentOnLight)
+                                .padding(.horizontal, AppMetric.s)
+                                .padding(.vertical, 4)
+                                .overlay(Rectangle().stroke(AppColor.accent.opacity(0.6), lineWidth: 1))
+                        }
+                    }
+                    if v.userPrompt != nil {
+                        TapButton { showingPrompt = showingPrompt == v.id ? nil : v.id } label: {
+                            Text(showingPrompt == v.id ? "Hide prompt" : "Show prompt")
+                                .uiLabel(9, color: AppColor.ink2)
+                        }
+                    }
+                    if !isCurrent {
+                        TapButton {
+                            expandedId = nil
+                            try? model.container.repository.deleteOutputVersion(v, from: model.recording)
+                        } label: {
+                            Text("Delete")
+                                .uiLabel(9, color: AppColor.ink2)
+                                .padding(.horizontal, AppMetric.s)
+                                .padding(.vertical, 4)
+                                .overlay(Rectangle().stroke(AppColor.hair, lineWidth: 1))
+                        }
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .padding(.horizontal, AppMetric.sheetPadding)
+        .padding(.vertical, AppMetric.s)
     }
 }

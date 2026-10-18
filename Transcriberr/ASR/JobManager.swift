@@ -562,6 +562,12 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         }
                     }
                     applySelfNameIfMeeting(recording)
+                    // Saved people next, so the version below already
+                    // carries their names. Never fails the run.
+                    if !PeopleStore.shared.load().isEmpty {
+                        statuses[recording.id]?.stage = "Finding people…"
+                        await PeopleNamer.apply(to: recording, repository: repository)
+                    }
                     // Replaced on every run: an older run's disputes would
                     // underline words the new transcript no longer has.
                     recording.disputesJSON = DisputeIndex.encode(runDisputes)

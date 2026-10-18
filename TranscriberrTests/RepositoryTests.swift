@@ -159,6 +159,59 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(rec.segments.first?.speakerName, "Yuri")
     }
 
+    /// 4.5.0: a hand edit made after the last run existed only in the live
+    /// segments, and restoring an older version deleted it for good.
+    func testRestoreKeepsHandEditsAsAVersion() async throws {
+        let rec = try makeRecording(title: "t", seconds: 1,
+            segs: [(0, 1, "engine text", "ME", "Yuri")])
+        try repo.snapshotVersion(of: rec, engineId: "e1", engineLabel: "E1")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try repo.correctSegment(rec.segments[0], to: "hand-corrected text")
+
+        try repo.restoreVersion(rec.versions.first { $0.engineId == "e1" }!, to: rec)
+        XCTAssertEqual(rec.segments.first?.text, "engine text")
+        let saved = rec.versions.first { $0.engineId == "manual-before-restore" }
+        XCTAssertEqual(saved.map { repo.decodeVersion($0).map(\.text) }, ["hand-corrected text"])
+        XCTAssertEqual(saved?.engineLabel, "Before restore")
+
+        // Restoring again with nothing edited adds no copy of the same text.
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try repo.restoreVersion(rec.versions.first { $0.engineId == "e1" }!, to: rec)
+        XCTAssertEqual(rec.versions.count, 2)
+    }
+
+    func testCorrectSegmentSavesAndSkipsNoOps() throws {
+        let rec = try makeRecording(title: "t", seconds: 1,
+            segs: [(0, 1, "teh cat", nil, nil)])
+        let seg = rec.segments[0]
+        XCTAssertFalse(try repo.correctSegment(seg, to: "teh cat"))
+        XCTAssertTrue(try repo.correctSegment(seg, to: "the cat"))
+        XCTAssertFalse(container.mainContext.hasChanges, "the correction is saved, not left pending")
+        XCTAssertEqual(try repo.get(id: rec.id)?.segments.first?.text, "the cat")
+    }
+
+    /// PostProcessor now writes through replaceOutput, so it must leave one
+    /// output per preset in the relationship, not only in the store.
+    func testReplaceOutputLeavesOneDocPerPreset() throws {
+        let rec = try makeRecording(title: "t", seconds: 1, segs: [(0, 1, "x", nil, nil)])
+        try repo.replaceOutput(OutputDoc(presetId: "summary", title: "Summary", markdown: "first"), for: rec)
+        try repo.replaceOutput(OutputDoc(presetId: "minutes", title: "Minutes", markdown: "m"), for: rec)
+        try repo.replaceOutput(OutputDoc(presetId: "summary", title: "Summary", markdown: "second"), for: rec)
+        XCTAssertEqual(rec.outputs.filter { $0.presetId == "summary" }.map(\.markdown), ["second"])
+        XCTAssertEqual(rec.outputs.count, 2)
+        let stored = try container.mainContext.fetch(FetchDescriptor<OutputDoc>())
+        XCTAssertEqual(stored.filter { $0.presetId == "summary" }.count, 1)
+    }
+
+    func testTestHostNeverOpensTheNamedStore() {
+        let schema = Schema(TranscriberrSchema.models)
+        XCTAssertTrue(AppContainer.storeConfiguration(schema: schema, testHost: true).isStoredInMemoryOnly)
+        let app = AppContainer.storeConfiguration(schema: schema, testHost: false)
+        XCTAssertFalse(app.isStoredInMemoryOnly)
+        XCTAssertEqual(app.name, "Transcriberr")
+        XCTAssertTrue(AppContainer.isTestHost)
+    }
+
     // MARK: - Merge recordings (context-menu action)
 
     func testMergeRecordingsOffsetsRemapsAndNames() async throws {

@@ -10,6 +10,9 @@ final class KBServiceTests: XCTestCase {
     var storeURL: URL!
     var recID: UUID!
     var backupRoot: URL!
+    /// Kept so tearDown can close it before deleting its file: left to
+    /// itself, its autosave ran after the file was gone (disk I/O errors).
+    var seedContainer: ModelContainer?
 
     override func setUp() async throws {
         // Redirect BackupService off the user's real backups folder — see
@@ -22,6 +25,8 @@ final class KBServiceTests: XCTestCase {
         let schema = Schema(TranscriberrSchema.models)
         let config = ModelConfiguration("Transcriberr", schema: schema, url: storeURL)
         let container = try ModelContainer(for: schema, configurations: config)
+        container.mainContext.autosaveEnabled = false
+        seedContainer = container
         let repo = RecordingRepository(context: container.mainContext)
 
         let rec = Recording(title: "Standup Meeting", audioPath: "/tmp/a.wav",
@@ -54,6 +59,7 @@ final class KBServiceTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        seedContainer = nil
         for suffix in ["", "-shm", "-wal"] {
             try? FileManager.default.removeItem(
                 at: URL(fileURLWithPath: storeURL.path + suffix))

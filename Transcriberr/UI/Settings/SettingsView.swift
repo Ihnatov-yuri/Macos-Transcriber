@@ -367,6 +367,10 @@ struct RecorderSettingsTab: View {
 
             Divider().frame(maxWidth: 520)
 
+            PeopleSection()
+
+            Divider().frame(maxWidth: 520)
+
             Text("Apple's voice-processing audio unit cleans up the input the same way FaceTime / Voice Memos do — echo cancellation, spectral noise suppression, AGC. Free and very effective.")
                 .font(AppFont.text(12))
                 .foregroundStyle(AppColor.ink2)
@@ -438,75 +442,196 @@ struct PromptsSettingsTab: View {
 
 struct PresetsSettingsTab: View {
     @Environment(AppContainer.self) private var container
+    @State private var expanded: Set<String> = []
+    @State private var deleting: PostProcessingPreset?
+
+    private var store: PresetStore { container.presetStore }
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppMetric.m) {
-            Text("Edits save automatically · expand a preset to edit its prompts")
-                .uiLabel(9, color: AppColor.ink2)
-            ForEach(container.presetStore.presets) { preset in
-                DisclosureGroup(preset.name) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("System").uiLabel(9, color: AppColor.ink2)
-                        TextEditor(text: binding(for: preset.id, \.systemTemplate))
-                            .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 70)
-                        Text("User template").uiLabel(9, color: AppColor.ink2)
-                        TextEditor(text: binding(for: preset.id, \.userTemplate))
-                            .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 110)
+            HStack {
+                Text("Each preset is a tab in a recording, in this order. Edits save automatically.")
+                    .uiLabel(9, color: AppColor.ink2)
+                Spacer()
+                TapButton {
+                    let id = store.add()
+                    expanded.insert(id)
+                } label: {
+                    LitButtonChrome(.secondary, compact: true) { Text("Add preset") }
+                }
+            }
+            ForEach(store.presets) { preset in
+                DisclosureGroup(isExpanded: Binding(
+                    get: { expanded.contains(preset.id) },
+                    set: { if $0 { expanded.insert(preset.id) } else { expanded.remove(preset.id) } }
+                )) {
+                    editor(preset)
+                } label: {
+                    HStack(spacing: AppMetric.s) {
+                        Text(preset.name.isEmpty ? "Untitled" : preset.name)
+                        if preset.kind == .rewrite {
+                            Text("Rewrite").uiLabel(9, color: AppColor.ink3)
+                        }
+                        if !preset.isBuiltin {
+                            Text("Yours").uiLabel(9, color: AppColor.accentOnLight)
+                        }
                     }
-                    .padding(.vertical, 6)
                 }
                 .font(AppFont.text(13))
                 HairlineSoft()
             }
-            TapButton { container.presetStore.resetToDefaults() } label: {
-                LitButtonChrome(.ghost, compact: true) { Text("Reset all presets to defaults") }
+            let deleted = store.deletedWithHistory.filter { !$0.preset.isBuiltin }
+            if !deleted.isEmpty {
+                Text("Deleted presets").uiLabel(9, color: AppColor.ink2)
+                ForEach(deleted) { rev in
+                    HStack {
+                        Text(rev.preset.name).font(AppFont.text(13))
+                        Spacer()
+                        TapButton { store.restore(rev) } label: {
+                            LitButtonChrome(.ghost, compact: true) { Text("Bring back") }
+                        }
+                    }
+                }
+                HairlineSoft()
             }
+            TapButton { store.restoreBuiltins() } label: {
+                LitButtonChrome(.ghost, compact: true) { Text("Restore built-in presets") }
+            }
+            .help("Puts the shipped presets back as they were, including deleted ones. Presets you added stay.")
+        }
+        .confirmationDialog(
+            "Delete the preset \u{201C}\(deleting?.name ?? "")\u{201D}?",
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            titleVisibility: .visible,
+            presenting: deleting
+        ) { preset in
+            Button("Delete", role: .destructive) {
+                store.delete(preset.id)
+                expanded.remove(preset.id)
+            }
+        } message: { preset in
+            Text(preset.isBuiltin
+                 ? "Outputs it already made stay in their recordings. Restore built-in presets brings it back."
+                 : "Outputs it already made stay in their recordings.")
         }
     }
 
-    private func binding(for id: String, _ keyPath: WritableKeyPath<PostProcessingPreset, String>) -> Binding<String> {
+    @ViewBuilder
+    private func editor(_ preset: PostProcessingPreset) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: AppMetric.m) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Name").uiLabel(9, color: AppColor.ink2)
+                    TextField("Tab name", text: binding(for: preset.id, \.name))
+                        .textFieldStyle(.roundedBorder)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Output title").uiLabel(9, color: AppColor.ink2)
+                    TextField("Heading of the output", text: binding(for: preset.id, \.outputTitle))
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+            Picker("Runs as", selection: binding(for: preset.id, \.kind)) {
+                Text("Analysis: reads the transcript once and writes about it")
+                    .tag(PostProcessingPreset.Kind.analysis)
+                Text("Rewrite: gives back the whole transcript, changed")
+                    .tag(PostProcessingPreset.Kind.rewrite)
+            }
+            .font(AppFont.text(12))
+            Text("System").uiLabel(9, color: AppColor.ink2)
+            TextEditor(text: binding(for: preset.id, \.systemTemplate))
+                .font(AppFont.text(12))
+                .frame(minHeight: 70)
+            Text("User template").uiLabel(9, color: AppColor.ink2)
+            TextEditor(text: binding(for: preset.id, \.userTemplate))
+                .font(AppFont.text(12))
+                .frame(minHeight: 110)
+            Text(preset.placesTranscript
+                 ? "{transcript_with_speakers} is the transcript with names; {transcript} is the text alone."
+                 : "No {transcript_with_speakers} in the template, so the transcript is added at the end.")
+                .font(AppFont.text(11))
+                .foregroundStyle(preset.placesTranscript ? AppColor.ink3 : AppColor.accentOnLight)
+            HStack(spacing: AppMetric.m) {
+                TapButton { store.move(preset.id, by: -1) } label: {
+                    LitButtonChrome(.ghost, compact: true) { Text("Move up") }
+                }
+                TapButton { store.move(preset.id, by: 1) } label: {
+                    LitButtonChrome(.ghost, compact: true) { Text("Move down") }
+                }
+                TapButton {
+                    if let id = store.duplicate(preset.id) { expanded.insert(id) }
+                } label: {
+                    LitButtonChrome(.ghost, compact: true) { Text("Duplicate") }
+                }
+                if preset.isBuiltin {
+                    TapButton { store.resetBuiltin(preset.id) } label: {
+                        LitButtonChrome(.ghost, compact: true) { Text("Reset to shipped") }
+                    }
+                }
+                TapButton { store.checkpoint(preset.id, reason: .saved) } label: {
+                    LitButtonChrome(.ghost, compact: true) { Text("Save version") }
+                }
+                .help("Keep these prompts in the preset's history. Each run also keeps the prompts it used.")
+                Spacer()
+                TapButton { deleting = preset } label: {
+                    LitButtonChrome(.destructive, compact: true) { Text("Delete…") }
+                }
+            }
+            .padding(.top, 4)
+            history(preset)
+        }
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func history(_ preset: PostProcessingPreset) -> some View {
+        let revisions = store.revisions(for: preset.id)
+        if !revisions.isEmpty {
+            DisclosureGroup("History (\(revisions.count))") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(revisions) { rev in
+                        HStack(alignment: .top, spacing: AppMetric.m) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(Self.revisionDate.string(from: rev.savedAt)) · \(rev.label)")
+                                    .font(AppFont.text(12))
+                                Text(rev.preset.userTemplate.prefix(140).replacingOccurrences(of: "\n", with: " "))
+                                    .font(AppFont.text(11))
+                                    .foregroundStyle(AppColor.ink3)
+                                    .lineLimit(2)
+                            }
+                            Spacer()
+                            if rev.preset == preset {
+                                Text("Current").uiLabel(9, color: AppColor.accentOnLight)
+                            } else {
+                                TapButton { store.restore(rev) } label: {
+                                    LitButtonChrome(.ghost, compact: true) { Text("Restore") }
+                                }
+                                .help("Puts these prompts back. The current ones are kept in the history.")
+                            }
+                        }
+                        HairlineSoft()
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .font(AppFont.text(12))
+        }
+    }
+
+    private static let revisionDate: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM · HH:mm"
+        return f
+    }()
+
+    private func binding<T>(for id: String, _ keyPath: WritableKeyPath<PostProcessingPreset, T>) -> Binding<T> {
         Binding(
-            get: { container.presetStore.preset(id)?[keyPath: keyPath] ?? "" },
+            get: { store.preset(id)?[keyPath: keyPath] ?? PresetStore.Builtin.summary[keyPath: keyPath] },
             set: { newValue in
-                guard let idx = container.presetStore.presets.firstIndex(where: { $0.id == id }) else { return }
-                container.presetStore.presets[idx][keyPath: keyPath] = newValue
+                guard let idx = store.presets.firstIndex(where: { $0.id == id }) else { return }
+                store.presets[idx][keyPath: keyPath] = newValue
             }
         )
-    }
-}
-
-struct PresetEditor: View {
-    @Environment(AppContainer.self) private var container
-    let presetId: String
-
-    var body: some View {
-        if let idx = container.presetStore.presets.firstIndex(where: { $0.id == presetId }) {
-            Form {
-                TextField("Name", text: Binding(
-                    get: { container.presetStore.presets[idx].name },
-                    set: { container.presetStore.presets[idx].name = $0 }
-                ))
-                Section("System") {
-                    TextEditor(text: Binding(
-                        get: { container.presetStore.presets[idx].systemTemplate },
-                        set: { container.presetStore.presets[idx].systemTemplate = $0 }
-                    ))
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 80)
-                }
-                Section("User") {
-                    TextEditor(text: Binding(
-                        get: { container.presetStore.presets[idx].userTemplate },
-                        set: { container.presetStore.presets[idx].userTemplate = $0 }
-                    ))
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 140)
-                }
-            }
-            .formStyle(.grouped)
-        }
     }
 }
 

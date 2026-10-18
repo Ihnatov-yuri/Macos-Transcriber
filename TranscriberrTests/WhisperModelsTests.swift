@@ -56,6 +56,18 @@ final class WhisperModelsTests: XCTestCase {
         XCTAssertNil(d.string(forKey: WhisperModel.settingsKey))
     }
 
+    /// A version is saved after the run's pin is released; its label is
+    /// taken at the start and names the model the run's language picks.
+    func testRunLabelNamesTheWhisperModelForTheLanguage() {
+        let en = BackendFactory.Kind.whisper.runLabel(languages: ["English"])
+        XCTAssertEqual(en, "Whisper \(WhisperModel.forRun(["English"]).name) (local, CoreML)")
+        XCTAssertEqual(BackendFactory.Kind.whisper.runLabel(languages: ["Ukrainian"]),
+                       "Whisper \(WhisperModel.forRun(["Ukrainian"]).name) (local, CoreML)")
+        XCTAssertNil(WhisperModel.inUse)
+        XCTAssertEqual(BackendFactory.Kind.parakeet.runLabel(languages: ["English"]),
+                       BackendFactory.Kind.parakeet.displayName)
+    }
+
     func testOnlyDistilIsEnglishOnly() {
         XCTAssertEqual(WhisperModel.all.filter(\.englishOnly).map(\.id), ["distil-whisper_distil-large-v3"])
     }

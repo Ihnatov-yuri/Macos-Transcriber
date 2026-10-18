@@ -25,7 +25,7 @@ final class BackendFactory: @unchecked Sendable {
             case .parakeetV2: return "Parakeet v2 (English, ANE)"
             case .whisper:
                 // A run pins its model by language; outside one there are two.
-                return WhisperModel.inUse.map { "Whisper \(WhisperModel.model($0).name) (local, CoreML)" }
+                return WhisperModel.inUse.map { Self.whisperLabel(WhisperModel.model($0)) }
                     ?? "Whisper (local, CoreML)"
             case .gemmaLiteRT: return "Gemma 4 (Google LiteRT — as on Android)"
             case .ensemble:   return "Super · dual-engine merge (local)"
@@ -34,6 +34,15 @@ final class BackendFactory: @unchecked Sendable {
             case .gemini:     return "Google Gemini"
             }
         }
+
+        /// The name a run in these languages is saved under (Detail →
+        /// VERSIONS). Taken when the job starts: the run's Whisper pin is
+        /// released before the job stores its version.
+        func runLabel(languages: Set<String>) -> String {
+            self == .whisper ? Self.whisperLabel(WhisperModel.forRun(languages)) : displayName
+        }
+
+        private static func whisperLabel(_ m: WhisperModel) -> String { "Whisper \(m.name) (local, CoreML)" }
 
         var isLocal: Bool {
             switch self {

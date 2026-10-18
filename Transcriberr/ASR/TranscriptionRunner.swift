@@ -191,9 +191,14 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// (raw mic, cleaned mic, sys, both chunk sets — over 2 GB for a
     /// two-hour meeting); each copy now dies as soon as its successor
     /// exists, and the peak is three.
+    ///
+    /// Also where the call track has sound at all (`sysSound`, see
+    /// `VoiceActivity.soundRanges`), for finalize to tell a short reply from
+    /// a word read into silence.
     private nonisolated static func cancelEchoAndChunk(
         mic: inout [Float], sys: [Float], decoder: AudioDecoder, keepCleanedMic: Bool = false
-    ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double, cleanedMic: [Float]?, micHadEcho: Bool) {
+    ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double, cleanedMic: [Float]?, micHadEcho: Bool,
+                sysSound: [ClosedRange<Double>]) {
         let micChunks: [AudioDecoder.Chunk]
         let micDur: Double
         var keptMic: [Float]?
@@ -217,7 +222,8 @@ final class TranscriptionRunner: @unchecked Sendable {
             Set(tagged.enumerated().compactMap { $1.1 ? $0 : nil }),
             max(micDur, sysDur),
             keptMic,
-            micHadEcho
+            micHadEcho,
+            VoiceActivity.soundRanges(sys)
         )
     }
 
@@ -250,6 +256,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         var micChunkIndices: Set<Int> = []
         var cleanedMic: [Float]?
         var micHadEcho = false
+        var sysSound: [ClosedRange<Double>]?
         // The user's voice print, when enrolled: who is speaking on each
         // track, by voice (see VoiceActivity). Split-track meetings only.
         let voiceprint = splitTracks ? VoiceprintStore.load() : nil
@@ -282,6 +289,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                     keepCleanedMic: micNeeded || voiceprint != nil)
                 cleanedMic = prepared.cleanedMic
                 micHadEcho = prepared.micHadEcho
+                sysSound = prepared.sysSound
                 if let voiceprint, let mic = prepared.cleanedMic {
                     continuation.yield(.stage(text: "Finding your voice…", fraction: 0.05))
                     let t0 = Date()
@@ -342,10 +350,6 @@ final class TranscriptionRunner: @unchecked Sendable {
                     exact: params.expectedSpeakersExact
                 )
                 AppLog.info("runner", "diar pre-pass produced \(diarSegments.count) regions")
-                // Before anything uses them: Parakeet's per-chunk speaker
-                // hints come from these regions too. Not when the user said
-                // the room has exactly N voices.
-                if !params.expectedSpeakersExact { diarSegments = DiarizationRunner.foldScraps(diarSegments) }
             } catch {
                 AppLog.error("runner", "diar pre-pass failed (continuing without hints): \(error.localizedDescription)")
                 diarSegments = []
@@ -367,6 +371,14 @@ final class TranscriptionRunner: @unchecked Sendable {
             } catch {
                 AppLog.warn("runner", "voice print scoring failed, speakers stay unnamed: \(error.localizedDescription)")
             }
+        }
+        // Scrap clusters fold before anything uses the regions: Parakeet's
+        // per-chunk speaker hints come from them too. After the voice print
+        // has scored them, so a user who says only a few seconds is not
+        // folded into someone else. Not when the user said the room has
+        // exactly N voices.
+        if !params.expectedSpeakersExact {
+            diarSegments = DiarizationRunner.foldScraps(diarSegments, scores: clusterVoice)
         }
 
         // ---------- load backend ----------
@@ -874,7 +886,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             segments: allSegments, diarize: params.diarize, splitTracks: splitTracks,
             expectedSpeakers: params.expectedSpeakers, diarSegments: diarSegments,
             myName: myNameSetting.isEmpty ? nil : myNameSetting, timelines: timelines, micSpeech: loudness,
-            voice: voice, micEcho: micHadEcho, clusterVoice: clusterVoice))
+            voice: voice, micEcho: micHadEcho, clusterVoice: clusterVoice, sysSound: sysSound))
 
         let segmentsToFinalize = allSegments
         let finalizeArgs = (
@@ -898,7 +910,8 @@ final class TranscriptionRunner: @unchecked Sendable {
                 voice: voice,
                 micEcho: micHadEcho,
                 clusterVoice: clusterVoice,
-                foldScraps: !exactSpeakers
+                foldScraps: !exactSpeakers,
+                sysSound: sysSound
             )
         }.value
         if ensembleTwoPass {
@@ -925,8 +938,12 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// renumber → filler removal → coalesce → names → self-fold — is
     /// unit-testable with crafted inputs. No audio, no async, no database.
     /// A call-audio piece this far from any speech the diarizer heard, with
-    /// one or two words, is noise (see the split-track fill below).
+    /// one or two words and no sound under it or no letters in it, is noise
+    /// (see the split-track fill below).
     nonisolated static let phantomGapSeconds = 5.0
+    /// How far around a piece the call track's sound is looked for: word
+    /// times are a little loose.
+    nonisolated static let soundPadSeconds = 0.5
 
     func finalizeSegments(
         _ input: [RawSegment],
@@ -940,12 +957,13 @@ final class TranscriptionRunner: @unchecked Sendable {
         voice: VoiceTimeline? = nil,
         micEcho: Bool = false,
         clusterVoice: [String: Float]? = nil,
-        foldScraps: Bool = true
+        foldScraps: Bool = true,
+        sysSound: [ClosedRange<Double>]? = nil
     ) -> [RawSegment] {
         var segments = input
         // Again here so a replayed dump from an older build folds too
         // (idempotent: a folded list has no scraps left).
-        let diarSegments = foldScraps ? DiarizationRunner.foldScraps(diarSegments) : diarSegments
+        let diarSegments = foldScraps ? DiarizationRunner.foldScraps(diarSegments, scores: clusterVoice) : diarSegments
         // ---------- split-track echo guard ----------
         // Without headphones the mic also hears the speakers, so the mic
         // track can contain a degraded acoustic copy of what the sys track
@@ -1069,24 +1087,37 @@ final class TranscriptionRunner: @unchecked Sendable {
             // Split-track: a call-audio piece outside every diarizer region
             // (word-timed pieces often are) goes to the speaker NEAREST in
             // time. It used to become "GUEST", a speaker of its own, in every
-            // meeting with two or more other voices. One or two words in
-            // silence, far from any speech the diarizer heard ("100%", "0%"
-            // on a quiet track), are the recognizer's noise: dropped.
+            // meeting with two or more other voices.
+            //
+            // One or two words far from any speech the diarizer heard are
+            // dropped when the call track is silent there, or when they hold
+            // no letter. Far alone is no proof: the diarizer drops speech
+            // under a second, so a quick reply between two stretches of the
+            // user talking is always far, and 4.3.3 deleted real ones ("yes",
+            // "Yeah.", "Добре,"). Measured on a Ukrainian call (2026-10-18):
+            // every far piece had a short burst under it; Whisper heard
+            // "Угу" where Parakeet wrote "10", "100%", "0%" and ".", and
+            // "Добре" where it wrote "Добре,". A backchannel misread comes
+            // out as digits or punctuation, a reply as a word. Without
+            // `sysSound` (a dump from before 4.4.1), distance alone.
             if splitTracks, !diarSegments.isEmpty {
                 var dropped: [String] = []
                 segments = segments.compactMap { seg in
                     guard seg.speakerKey == nil else { return seg }
                     guard let near = DiarizationRunner.nearest(seg.startSeconds, seg.endSeconds, in: diarSegments) else { return seg }
                     let words = seg.text.split(whereSeparator: \.isWhitespace).count
-                    if near.gap >= Self.phantomGapSeconds && words <= 2 {
-                        dropped.append(seg.text)
+                    let a = seg.startSeconds - Self.soundPadSeconds, b = seg.endSeconds + Self.soundPadSeconds
+                    let sounded = sysSound?.contains { $0.upperBound > a && $0.lowerBound < b } ?? false
+                    let lexical = seg.text.contains(where: \.isLetter)
+                    if near.gap >= Self.phantomGapSeconds && words <= 2 && (!sounded || !lexical) {
+                        dropped.append("\(seg.text) @\(Int(seg.startSeconds))s")
                         return nil
                     }
                     var s = seg
                     s.speakerKey = near.speaker
                     return s
                 }
-                if !dropped.isEmpty { AppLog.info("runner", "dropped \(dropped.count) call-audio scraps far from any speech: \(dropped.prefix(8))") }
+                if !dropped.isEmpty { AppLog.info("runner", "dropped \(dropped.count) call-audio scraps (silence or no words): \(dropped.prefix(8))") }
             }
             // Still unlabeled (no diarization at all): the single diarized
             // sys cluster if there is exactly one, else a renameable GUEST
@@ -1107,7 +1138,7 @@ final class TranscriptionRunner: @unchecked Sendable {
             // cluster that sounds like the user is ME (see ClusterVoice).
             // No cluster clear of the threshold, or two near it, and nothing
             // is renamed.
-            if !splitTracks, let clusterVoice, let mine = ClusterVoice.user(in: clusterVoice),
+            if !splitTracks, let mine = DiarizationRunner.userCluster(diarSegments, scores: clusterVoice),
                segments.contains(where: { $0.speakerKey == mine }) {
                 AppLog.info("runner", "voice print: cluster \(mine) is you")
                 segments = segments.map { seg in

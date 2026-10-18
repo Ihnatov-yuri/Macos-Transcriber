@@ -130,19 +130,63 @@ final class DiarizationRunner: @unchecked Sendable {
     /// became a speaker of its own with three or four words. A cluster under
     /// `scrapSeconds` AND under `scrapShare` of all speech gives each of its
     /// regions to the speaker of the nearest region of a real cluster.
-    static func foldScraps(_ diar: [SpeakerSegment]) -> [SpeakerSegment] {
-        var total: [String: Double] = [:]
-        for d in diar { total[d.speakerId, default: 0] += d.endSeconds - d.startSeconds }
-        let all = total.values.reduce(0, +)
-        let scraps = Set(total.filter { $0.value < scrapSeconds && $0.value < scrapShare * all }.keys)
+    ///
+    /// One track with a voice print (`scores`, see ClusterVoice): the user
+    /// may say only a few seconds (one question in a talk), so the user's
+    /// cluster is never a scrap. And nearness is no reason to give another
+    /// voice's scrap to the user: a scrap goes to the user's cluster only
+    /// when it sounds like the user, otherwise to the nearest other voice,
+    /// and stays as it is when there is none.
+    static func foldScraps(_ diar: [SpeakerSegment], scores: [String: Float]? = nil) -> [SpeakerSegment] {
+        let total = speechSeconds(diar)
+        let user = userCluster(diar, scores: scores)
+        let scraps = scrapClusters(total).subtracting(user.map { [$0] } ?? [])
         guard !scraps.isEmpty, scraps.count < total.count else { return diar }
         let real = diar.filter { !scraps.contains($0.speakerId) }
         AppLog.info("diar", "folding scrap clusters \(scraps.sorted().map { "\($0) (\(String(format: "%.1f", total[$0]!)) s)" }) into their neighbours")
         return diar.map { d in
-            guard scraps.contains(d.speakerId),
-                  let near = real.min(by: { gap($0, d) < gap($1, d) }) else { return d }
-            return SpeakerSegment(startSeconds: d.startSeconds, endSeconds: d.endSeconds, speakerId: near.speakerId)
+            guard scraps.contains(d.speakerId) else { return d }
+            let target: String?
+            if let user, let s = scores?[d.speakerId], s >= VoiceActivity.onThreshold {
+                target = user
+            } else {
+                target = real.filter { $0.speakerId != user }.min(by: { gap($0, d) < gap($1, d) })?.speakerId
+            }
+            guard let target else { return d }
+            return SpeakerSegment(startSeconds: d.startSeconds, endSeconds: d.endSeconds, speakerId: target)
         }
+    }
+
+    private static func speechSeconds(_ diar: [SpeakerSegment]) -> [String: Double] {
+        var total: [String: Double] = [:]
+        for d in diar { total[d.speakerId, default: 0] += d.endSeconds - d.startSeconds }
+        return total
+    }
+
+    private static func scrapClusters(_ total: [String: Double]) -> Set<String> {
+        let all = total.values.reduce(0, +)
+        return Set(total.filter { $0.value < scrapSeconds && $0.value < scrapShare * all }.keys)
+    }
+
+    /// The cluster the voice print names as the user, among the clusters in
+    /// `diar`. When a scrap of the user's own voice also scores high and
+    /// spoils the margin (ClusterVoice.user names nobody then), the pick is
+    /// made again without the scraps; and when the user says so little that
+    /// every cluster sounding like them is a scrap, with the best of them
+    /// only. Folded or not, the same diarization gives the same answer.
+    static func userCluster(_ diar: [SpeakerSegment], scores: [String: Float]?) -> String? {
+        guard let scores else { return nil }
+        let total = speechSeconds(diar)
+        // No regions (labels came with the segments): every scored cluster.
+        let present = total.isEmpty ? scores : scores.filter { total[$0.key] != nil }
+        if let user = ClusterVoice.user(in: present) { return user }
+        let scraps = scrapClusters(total)
+        var real = present.filter { !scraps.contains($0.key) }
+        if let user = ClusterVoice.user(in: real) { return user }
+        guard let best = present.sorted(by: { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }).first
+        else { return nil }
+        real[best.key] = best.value
+        return ClusterVoice.user(in: real)
     }
 
     /// Seconds between two regions (0 when they touch or overlap).

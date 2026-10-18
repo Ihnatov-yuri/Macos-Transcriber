@@ -63,10 +63,17 @@ final class MeetingBriefTests: XCTestCase {
             .init(from: "хаускіпінг", to: "housekeeping"),
             .init(from: "мастер-карда", to: "MasterCard"),
         ]
+        // None of them is a word. Not the system spell checker here: it says
+        // "known" for everything when it does not answer in time, which
+        // failed this test once on the first run after a build. The real
+        // dictionary is tested in testDictionaryWordsAreLeftAlone.
+        let noWords: (String) -> Bool = { _ in false }
         XCTAssertEqual(MeetingBriefBuilder.acceptedFixes(
-            fixes, transcript: transcript, vocabulary: "MasterCard", terms: ["Muse", "housekeeping"]), fixes)
+            fixes, transcript: transcript, vocabulary: "MasterCard", terms: ["Muse", "housekeeping"],
+            isDictionaryWord: noWords), fixes)
         // The same fixes with nothing attesting the replacements are refused.
-        XCTAssertEqual(MeetingBriefBuilder.acceptedFixes(fixes, transcript: transcript, vocabulary: ""), [])
+        XCTAssertEqual(MeetingBriefBuilder.acceptedFixes(
+            fixes, transcript: transcript, vocabulary: "", isDictionaryWord: noWords), [])
     }
 
     func testRejectsUnsafeFixes() {
@@ -102,7 +109,8 @@ final class MeetingBriefTests: XCTestCase {
             [.init(from: "Контроль", to: "Control")], transcript: text, vocabulary: ""), [])
     }
 
-    func testDictionaryWordsAreLeftAlone() {
+    func testDictionaryWordsAreLeftAlone() throws {
+        try waitForSpellChecker()
         let text = "Наш менеджер сказав, що manager вирішує. А хаускіпінг, тобто housekeeping, автоматизують."
         let fixes: [MeetingBrief.Fix] = [
             .init(from: "менеджер", to: "manager"),
@@ -110,6 +118,17 @@ final class MeetingBriefTests: XCTestCase {
         ]
         XCTAssertEqual(MeetingBriefBuilder.acceptedFixes(fixes, transcript: text, vocabulary: ""),
                        [.init(from: "хаускіпінг", to: "housekeeping")])
+    }
+
+    /// The system spell checker answers "no misspelling" when it cannot
+    /// answer in time, and every word then looks like a dictionary word.
+    /// Seen once, on the first run after a build; a second ask answered.
+    private func waitForSpellChecker() throws {
+        for _ in 0..<20 {
+            if !MeetingBriefBuilder.isDictionaryWord("жщцхфшщ") { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        throw XCTSkip("the system spell checker does not answer")
     }
 
     func testRejectsChainsEitherWayRound() {

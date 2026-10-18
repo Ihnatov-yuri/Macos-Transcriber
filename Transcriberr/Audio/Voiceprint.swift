@@ -609,4 +609,31 @@ enum VoiceActivity {
         let quiet = levels[levels.count / 5]
         return max(0.003, quiet * 3)
     }
+
+    /// Where a track has sound at all: 20 ms frames at or above
+    /// `speechFloor`, gaps under 0.2 s bridged, runs under 0.1 s (clicks)
+    /// left out. In seconds. The diarizer drops speech under a second, so a
+    /// quick "Yes." has no region; this still sees it.
+    static func soundRanges(_ samples: [Float]) -> [ClosedRange<Double>] {
+        let frame = 320, rate = sampleRate
+        guard samples.count >= frame else { return [] }
+        let floor = speechFloor(samples)
+        var runs: [ClosedRange<Double>] = []
+        var start: Int?, lastLoud = 0
+        var i = 0
+        while i + frame <= samples.count {
+            if rms(samples[i..<(i + frame)]) >= floor {
+                if let s = start, i - lastLoud > Int(0.2 * rate) {
+                    runs.append(Double(s) / rate...Double(lastLoud + frame) / rate)
+                    start = i
+                } else if start == nil {
+                    start = i
+                }
+                lastLoud = i
+            }
+            i += frame
+        }
+        if let s = start { runs.append(Double(s) / rate...Double(lastLoud + frame) / rate) }
+        return runs.filter { $0.upperBound - $0.lowerBound >= 0.1 }
+    }
 }

@@ -701,7 +701,8 @@ func cmdRefinalize(path: String) -> Int32 {
         micSpeech: voice == nil ? dump.micSpeechRanges : nil,
         voice: voice,
         micEcho: dump.micEcho ?? false,
-        clusterVoice: ProcessInfo.processInfo.environment["TRANSCRIBERR_NO_VOICE"] == "1" ? nil : dump.clusterVoice)
+        clusterVoice: ProcessInfo.processInfo.environment["TRANSCRIBERR_NO_VOICE"] == "1" ? nil : dump.clusterVoice,
+        sysSound: dump.sysSoundRanges)
     for s in out {
         print(String(format: "%.1f\t%.1f\t", s.startSeconds, s.endSeconds) + "\(s.speakerKey ?? "?")\t\(s.text)")
     }

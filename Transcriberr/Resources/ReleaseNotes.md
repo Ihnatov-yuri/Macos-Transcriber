@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.4.1
+- Short replies from the other side of a call ("Yes", "Добре", "Yeah") are kept again. Since 4.3.3 a reply of one or two words between two stretches of you talking was taken for noise and deleted. Now only words read into silence, or a quick "uh-huh" misheard as a number like "100%", are left out.
+- In a recording made on one track, with your voice print set up, you are found even when you said only a few seconds, such as one question in a long talk. Since 4.3.3 those few seconds could be given to someone else, and another person's few words could be given to you.
+- Detail → Versions names the Whisper model a run used again ("Whisper large-v3 turbo compressed"), not just "Whisper".
+
 ## 4.4.0
 - Whisper now has two models: one for recordings in English and one for every other language. English uses large-v3 turbo compressed by default, which makes Super about four times faster in English (under a minute for five minutes of meeting) with the same accuracy. Other languages keep large-v3, the only model that stays accurate in Ukrainian.
 - If you had picked a smaller Whisper model, it now serves English and other languages go back to large-v3. Both choices are in Settings → Engines.

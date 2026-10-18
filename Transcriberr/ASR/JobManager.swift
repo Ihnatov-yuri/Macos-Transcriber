@@ -394,6 +394,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
         LanguageOverrideLog.reset()
 
         var wipedOldTranscript = false
+        // Before the run: it names the Whisper model only while it runs.
+        let engineLabel = params.backend.runLabel(languages: params.languages)
         let stream = runner.run(params)
         var allSegments: [Segment] = []
         var runDisputes: [WordDispute] = []
@@ -571,7 +573,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         try repository.snapshotVersion(
                             of: recording,
                             engineId: params.backend.rawValue,
-                            engineLabel: params.backend.displayName
+                            engineLabel: engineLabel
                         )
                     } catch {
                         AppLog.warn("job", "version snapshot failed: \(error.localizedDescription)")

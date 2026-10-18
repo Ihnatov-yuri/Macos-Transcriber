@@ -868,16 +868,99 @@ final class RecordingRepository: @unchecked Sendable {
         BackupService.backupRecording(recording)
     }
 
-    func replaceOutput(_ doc: OutputDoc, for recording: Recording) throws {
-        // delete any existing output for the same preset
+    /// A hand correction of one segment. Returns false when the text did not
+    /// change. A failed save puts the old text back and throws: the sheet
+    /// used `try? save()` and closed, so the correction looked saved and was
+    /// gone on the next launch.
+    @discardableResult
+    func correctSegment(_ segment: Segment, to text: String) throws -> Bool {
+        let before = segment.text
+        guard before != text else { return false }
+        segment.text = text
+        do {
+            try context.save()
+        } catch {
+            segment.text = before
+            throw error
+        }
+        return true
+    }
+
+    /// What made an output: kept on its OutputVersion.
+    struct OutputProvenance {
+        var engineLabel: String
+        var systemPrompt: String
+        var userPrompt: String
+    }
+
+    /// The one write path for a generated output: PostProcessor goes
+    /// through here too, so what the tests cover is what production runs.
+    /// The output it replaces is kept as an OutputVersion first (one made
+    /// before 4.5.0 has none yet), and the new one gets its own.
+    func replaceOutput(_ doc: OutputDoc, for recording: Recording,
+                       provenance: OutputProvenance? = nil) throws {
+        for old in recording.outputs where old.presetId == doc.presetId {
+            archive(presetId: old.presetId, title: old.title, markdown: old.markdown,
+                    createdAtMillis: old.createdAtMillis, provenance: nil, in: recording)
+        }
+        // Delete any existing output for the same preset, from the context
+        // AND the relationship array: a context delete alone does not drop
+        // it from `recording.outputs` until the next fetch.
         for old in recording.outputs where old.presetId == doc.presetId {
             context.delete(old)
         }
+        recording.outputs.removeAll { $0.presetId == doc.presetId }
         doc.recording = recording
         context.insert(doc)
         recording.outputs.append(doc)
+        archive(presetId: doc.presetId, title: doc.title, markdown: doc.markdown,
+                createdAtMillis: doc.createdAtMillis, provenance: provenance, in: recording)
         try context.save()
         BackupService.backupOutput(doc, recordingId: recording.id)
+    }
+
+    /// A version of this text for this preset, unless one exists. Same text
+    /// is the same output: a restore swaps an existing version back in and
+    /// adds none.
+    private func archive(presetId: String, title: String, markdown: String, createdAtMillis: Int64,
+                         provenance: OutputProvenance?, in recording: Recording) {
+        guard !recording.outputVersions.contains(where: { $0.presetId == presetId && $0.markdown == markdown })
+        else { return }
+        let v = OutputVersion(presetId: presetId, title: title, markdown: markdown,
+                              createdAtMillis: createdAtMillis,
+                              engineLabel: provenance?.engineLabel,
+                              systemPrompt: provenance?.systemPrompt,
+                              userPrompt: provenance?.userPrompt)
+        v.recording = recording
+        context.insert(v)
+        recording.outputVersions.append(v)
+    }
+
+    /// Earlier and current outputs of one preset, newest first.
+    func outputVersions(presetId: String, in recording: Recording) -> [OutputVersion] {
+        recording.outputVersions
+            .filter { $0.presetId == presetId }
+            .sorted { $0.createdAtMillis > $1.createdAtMillis }
+    }
+
+    /// Makes an earlier output the current one again. The one it replaces
+    /// stays in the history.
+    func restoreOutput(_ version: OutputVersion, to recording: Recording) throws {
+        let current = recording.outputs.first { $0.presetId == version.presetId }
+        guard current?.markdown != version.markdown else { return }
+        let doc = OutputDoc(presetId: version.presetId, title: current?.title ?? version.title,
+                            markdown: version.markdown, createdAtMillis: version.createdAtMillis)
+        try replaceOutput(doc, for: recording)
+    }
+
+    /// Removes one earlier output. The current one cannot be deleted here.
+    func deleteOutputVersion(_ version: OutputVersion, from recording: Recording) throws {
+        if recording.outputs.contains(where: { $0.presetId == version.presetId && $0.markdown == version.markdown }) {
+            return
+        }
+        recording.outputVersions.removeAll { $0.id == version.id }
+        context.delete(version)
+        try context.save()
     }
 
     // MARK: - Transcript versions
@@ -977,8 +1060,13 @@ final class RecordingRepository: @unchecked Sendable {
                                    from: Data(version.segmentsJSON.utf8))) ?? []
     }
 
-    /// Swap a stored version back in as the live transcript.
+    /// Swap a stored version back in as the live transcript. The live one
+    /// is saved as a version first: hand edits made since the last run exist
+    /// nowhere else. Identical content is skipped by the snapshot's dedup,
+    /// and an empty transcript (healEmptyTranscripts) is never saved.
     func restoreVersion(_ version: TranscriptVersion, to recording: Recording) throws {
+        try snapshotVersion(of: recording, engineId: "manual-before-restore",
+                            engineLabel: "Before restore")
         let segs = decodeVersion(version).map {
             Segment(startSeconds: $0.start, endSeconds: $0.end, text: $0.text,
                     speaker: $0.speaker, speakerName: $0.speakerName)

@@ -118,13 +118,29 @@ actor OpenAIBackend: ASRBackend {
         let (data, resp) = try await URLSession.shared.data(for: req)
         try ensureOK(resp, data: data)
 
+        return try Self.parseTextResponse(data)
+    }
+
+    /// The reply's text, or an error unless it finished: `length` is a
+    /// reply cut at max_tokens, which used to be saved as a whole output.
+    static func parseTextResponse(_ data: Data) throws -> String {
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let choices = json?["choices"] as? [[String: Any]],
-           let msg = choices.first?["message"] as? [String: Any],
-           let content = msg["content"] as? String {
-            return content
+        guard let choice = (json?["choices"] as? [[String: Any]])?.first else {
+            throw ASRError.backendUnavailable(reason: "OpenAI returned unexpected payload.")
         }
-        throw ASRError.backendUnavailable(reason: "OpenAI returned unexpected payload.")
+        switch choice["finish_reason"] as? String {
+        case "stop":
+            break
+        case "length":
+            throw ASRError.backendUnavailable(reason: "OpenAI's answer was cut off at its length limit.")
+        case let other:
+            throw ASRError.backendUnavailable(reason: "OpenAI stopped without finishing (\(other ?? "none")).")
+        }
+        guard let content = (choice["message"] as? [String: Any])?["content"] as? String,
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ASRError.backendUnavailable(reason: "OpenAI returned no text.")
+        }
+        return content
     }
 
     // MARK: - Helpers

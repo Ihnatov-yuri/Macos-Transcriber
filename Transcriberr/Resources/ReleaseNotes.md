@@ -6,6 +6,21 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.5.0
+- Transcriberr can learn the people you talk to. In a recording, click a speaker's name, type who it is and press Remember this voice. Later recordings name that person on their own. Saving the same name from another recording adds it to their voice, so they are found on calls and in the room alike.
+- Settings → Audio input → People lists everyone saved, to rename or delete. The voices stay on this Mac, outside Time Machine, and deleting one removes it. A recording made before someone was saved can be named with Find people next to its speakers.
+- Generating a summary or any other output again no longer throws the old one away. History in the output tab lists every earlier one, with the engine and prompt that made it. Restore any of them; the one it replaces stays in the list.
+- Each preset keeps its earlier prompts: the ones each run used, the ones you keep with Save version, and the state before a reset or restore. Restore any of them from History in the preset. A deleted preset you added can be brought back.
+- Share → Export to a folder writes everything about a recording into one folder: the transcript, every saved version, each output with its earlier ones and their prompts, the presets' prompts, and with audio if you choose. A manifest lists every file with its checksum.
+- You can add your own post-processing presets. Settings → Post-processing presets → Add preset gives a new one with its own tab in every recording, next to Summary and Minutes. Write what you want from the transcript, for example a read of how each speaker argues, and press Generate in that tab.
+- Every preset can be renamed, duplicated, moved up or down (its tab moves with it) and deleted. Duplicate a built-in to start from its prompt without changing the original.
+- A preset runs either as an analysis, which reads the transcript once and writes about it, or as a rewrite, which gives back the whole transcript changed, as Clean does.
+- A prompt without {transcript_with_speakers} still gets the transcript, added at the end, instead of running on nothing.
+- Deleting a preset keeps the outputs it made; their tab stays in the recording. Restore built-in presets brings back the shipped ones and no longer deletes the presets you added.
+- Restoring an older version in Versions now keeps the transcript you are leaving as a version of its own ("Before restore"). Corrections you typed since the last run were lost before.
+- A correction that cannot be saved now says so and leaves your text in the editor. Before, the editor closed as if it had saved.
+- Gemini and OpenAI answers that stop early, cut off at their length limit or by a filter, now show as a failure you can retry, and the previous output stays. Before, half a summary could be saved as the whole one.
+
 ## 4.4.1
 - Short replies from the other side of a call ("Yes", "Добре", "Yeah") are kept again. Since 4.3.3 a reply of one or two words between two stretches of you talking was taken for noise and deleted. Now only words read into silence, or a quick "uh-huh" misheard as a number like "100%", are left out.
 - In a recording made on one track, with your voice print set up, you are found even when you said only a few seconds, such as one question in a long talk. Since 4.3.3 those few seconds could be given to someone else, and another person's few words could be given to you.

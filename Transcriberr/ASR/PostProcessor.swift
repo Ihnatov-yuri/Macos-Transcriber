@@ -77,6 +77,9 @@ final class PostProcessor: @unchecked Sendable {
             AppLog.error("postproc", "unknown preset \(presetId)")
             return
         }
+        // The prompts this output is made with stay restorable after the
+        // preset is edited (Settings → preset → History).
+        presets.checkpoint(presetId, reason: .run)
         if kind == .gemmaLiteRT,
            !ModelCatalog.entries.contains(where: {
                $0.backend == .gemmaLiteRT
@@ -157,8 +160,8 @@ final class PostProcessor: @unchecked Sendable {
         // local model cannot faithfully copy 20k+ chars in one generation —
         // attention drifts, words drop, endings turn telegraphic. So they run
         // CHUNKED: one speaker-turn window at a time, each with the tail of
-        // the already-processed text as history. Summaries stay single-shot.
-        let rewritePresets: Set<String> = ["clean", "context_rewrite", "translate_polish"]
+        // the already-processed text as history. Analyses stay single-shot.
+        let isRewrite = preset.kind == .rewrite
 
         do {
             setStatus(key, .running)
@@ -178,13 +181,13 @@ final class PostProcessor: @unchecked Sendable {
             // brief when one is already cached and never wait for one.
             let brief = await meetingBrief(
                 transcript: transcriptWithSpeakers, vocabulary: vocab, backend: backend,
-                buildIfMissing: rewritePresets.contains(presetId))
+                buildIfMissing: isRewrite)
             if let brief, !brief.fixes.isEmpty {
                 transcript = MeetingBriefBuilder.apply(brief.fixes, to: transcript)
                 transcriptWithSpeakers = MeetingBriefBuilder.apply(brief.fixes, to: transcriptWithSpeakers)
             }
             let markdown: String
-            if rewritePresets.contains(presetId) {
+            if isRewrite {
                 markdown = try await runChunked(
                     preset: preset,
                     backend: backend,
@@ -196,7 +199,7 @@ final class PostProcessor: @unchecked Sendable {
             } else {
                 // Snippets expand in the template only: a literal
                 // `{snippet:…}` spoken into the transcript stays text.
-                let user = vocabPrefix + snippets.substitute(preset.userTemplate)
+                let user = vocabPrefix + snippets.substitute(preset.templateWithTranscript)
                     .replacingOccurrences(of: "{transcript_with_speakers}", with: transcriptWithSpeakers)
                     .replacingOccurrences(of: "{transcript}", with: transcript)
                 let maxTokens = 1500
@@ -221,7 +224,10 @@ final class PostProcessor: @unchecked Sendable {
                         "Model returned \(trimmed.count) chars — kept the previous output. Try again."]
                 )
             }
-            try persist(markdown: markdown, preset: preset, recording: recording)
+            try persist(markdown: markdown, preset: preset, recording: recording,
+                        provenance: .init(engineLabel: kind.displayName,
+                                          systemPrompt: preset.systemTemplate,
+                                          userPrompt: preset.userTemplate))
             AppLog.info("postproc", "preset=\(presetId) done (\(markdown.count) chars)")
             setStatus(key, .done)
         } catch {
@@ -282,7 +288,7 @@ final class PostProcessor: @unchecked Sendable {
         transcriptWithSpeakers: String,
         transcript: String
     ) async throws -> String {
-        let source = preset.userTemplate.contains("{transcript_with_speakers}")
+        let source = preset.templateWithTranscript.contains("{transcript_with_speakers}")
             ? transcriptWithSpeakers : transcript
         let windows = Self.windows(source, maxChars: Self.chunkMaxChars)
         guard !windows.isEmpty else {
@@ -295,7 +301,7 @@ final class PostProcessor: @unchecked Sendable {
         var stitched: [String] = []
         var failures = 0
         for (i, w) in windows.enumerated() {
-            var body = snippets.substitute(preset.userTemplate)
+            var body = snippets.substitute(preset.templateWithTranscript)
                 .replacingOccurrences(of: "{transcript_with_speakers}", with: w)
                 .replacingOccurrences(of: "{transcript}", with: w)
             if let prev = stitched.last {
@@ -434,7 +440,8 @@ final class PostProcessor: @unchecked Sendable {
     private func persist(
         markdown: String,
         preset: PostProcessingPreset,
-        recording: Recording
+        recording: Recording,
+        provenance: RecordingRepository.OutputProvenance
     ) throws {
         guard let ctx = recording.modelContext else {
             // No context — recording must have been deleted underneath us.
@@ -445,31 +452,13 @@ final class PostProcessor: @unchecked Sendable {
             )
         }
 
-        // Delete any existing output for this preset (from the context, not
-        // just the relationship array — the array filter doesn't propagate
-        // a context delete on its own).
-        let staleDocs = recording.outputs.filter { $0.presetId == preset.id }
-        for doc in staleDocs {
-            ctx.delete(doc)
-        }
-        // Defensive: drop them from the in-memory relationship as well so the
-        // immediate next read sees a clean slate.
-        recording.outputs.removeAll { $0.presetId == preset.id }
-
         let doc = OutputDoc(
             presetId: preset.id,
             title: preset.outputTitle,
             markdown: markdown
         )
-        doc.recording = recording
-        ctx.insert(doc)
-        recording.outputs.append(doc)
-        try ctx.save()
-        // The file-based shadow copy. This is the ONLY production path that
-        // writes an OutputDoc (RecordingRepository.replaceOutput is the
-        // tested twin nobody calls), so without this line generated
-        // summaries/minutes never reached ~/Documents/Transcriberr Backups
-        // — restore-backups had nothing to restore for them.
-        BackupService.backupOutput(doc, recordingId: recording.id)
+        // The repository's path, not a copy of it: it also writes the
+        // file-based shadow copy in ~/Documents/Transcriberr Backups.
+        try RecordingRepository(context: ctx).replaceOutput(doc, for: recording, provenance: provenance)
     }
 }

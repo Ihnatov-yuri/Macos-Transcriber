@@ -102,11 +102,8 @@ actor GoogleGeminiBackend: ASRBackend {
         // finishReason SAFETY or MAX_TOKENS returns exactly this. Swallowing
         // it as "" made the runner record a chunk that produced no text and
         // the run still report success, so the audio vanished silently.
-        guard let text = parseFirstText(from: data) else {
-            throw ASRError.backendUnavailable(
-                reason: "Gemini returned no text for this chunk (blocked or truncated response).")
-        }
-        return text
+        // A silent chunk is an empty STOP, and stays a valid empty chunk.
+        return try Self.parseTextResponse(data, allowEmpty: true)
     }
 
     func generateText(
@@ -142,7 +139,10 @@ actor GoogleGeminiBackend: ASRBackend {
 
         let (data, resp) = try await URLSession.shared.data(for: req)
         try ensureOK(resp, data: data)
-        return parseFirstText(from: data) ?? ""
+        // Never "" on a reply it could not read: PostProcessor's length guard
+        // caught the empty case, but a MAX_TOKENS reply cut mid-sentence
+        // passed it and was saved as a finished summary.
+        return try Self.parseTextResponse(data, allowEmpty: false)
     }
 
     // MARK: - Helpers
@@ -165,15 +165,29 @@ actor GoogleGeminiBackend: ASRBackend {
         }
     }
 
-    private func parseFirstText(from data: Data) -> String? {
+    /// The reply's visible text, or an error for anything but a finished
+    /// one: SAFETY, RECITATION and MAX_TOKENS can all carry partial text,
+    /// which used to be returned as if it were complete. Thought parts are
+    /// never part of the answer.
+    nonisolated static func parseTextResponse(_ data: Data, allowEmpty: Bool) throws -> String {
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let candidates = json?["candidates"] as? [[String: Any]],
-           let first = candidates.first,
-           let content = first["content"] as? [String: Any],
-           let parts = content["parts"] as? [[String: Any]] {
-            return parts.compactMap { $0["text"] as? String }.joined()
+        guard let first = (json?["candidates"] as? [[String: Any]])?.first else {
+            throw ASRError.backendUnavailable(reason: "Gemini returned no answer (blocked prompt).")
         }
-        return nil
+        let finish = first["finishReason"] as? String ?? "none"
+        guard finish == "STOP" else {
+            throw ASRError.backendUnavailable(reason: finish == "MAX_TOKENS"
+                ? "Gemini's answer was cut off at its length limit."
+                : "Gemini stopped without finishing (\(finish)).")
+        }
+        let parts = ((first["content"] as? [String: Any])?["parts"] as? [[String: Any]]) ?? []
+        let text = parts.filter { $0["thought"] as? Bool != true }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        guard allowEmpty || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ASRError.backendUnavailable(reason: "Gemini returned no text.")
+        }
+        return text
     }
 
     /// Build a minimal RIFF/WAV blob in memory for 16-bit-converted PCM.

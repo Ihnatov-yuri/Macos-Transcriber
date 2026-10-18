@@ -10,6 +10,9 @@ struct SpeakerRenameSheet: View {
     let onClose: () -> Void
 
     @State private var name: String
+    @State private var learning = false
+    @State private var voiceNote: String?
+    @State private var voiceFailed = false
 
     init(speakerKey: String, initialName: String, recording: Recording,
          container: AppContainer, onClose: @escaping () -> Void) {
@@ -39,6 +42,28 @@ struct SpeakerRenameSheet: View {
                         .tint(AppColor.accentOnLight)
                     Hairline()
                 }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Voice").uiLabel(9, color: AppColor.ink2)
+                    Text("Remember this speaker's voice under the name above. Later recordings then name them on their own.")
+                        .font(AppFont.text(12))
+                        .foregroundStyle(AppColor.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: AppMetric.m) {
+                        TapButton { rememberVoice() } label: {
+                            LitButtonChrome(.secondary, compact: true) {
+                                Text(learning ? "Listening…" : "Remember this voice")
+                            }
+                        }
+                        .disabled(learning)
+                        if learning { PulseDot(diameter: 6) }
+                    }
+                    if let voiceNote {
+                        Text(voiceNote)
+                            .font(AppFont.text(12))
+                            .foregroundStyle(voiceFailed ? AppColor.statusError : AppColor.ink2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 Spacer()
                 HStack {
                     TapButton { onClose() } label: {
@@ -52,7 +77,37 @@ struct SpeakerRenameSheet: View {
             }
             .padding(AppMetric.l)
         }
-        .frame(minWidth: 360, minHeight: 200)
+        .frame(minWidth: 400, minHeight: 320)
+    }
+
+    /// Learns the voice from this recording and saves it under the typed
+    /// name (added to a saved person of that name), and names the speaker.
+    private func rememberVoice() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            voiceFailed = true
+            voiceNote = "Type the person's name first."
+            return
+        }
+        guard !learning else { return }
+        learning = true
+        voiceNote = nil
+        Task { @MainActor in
+            defer { learning = false }
+            do {
+                let print = try await PeopleVoice.learn(speaker: speakerKey, in: recording)
+                let person = try PeopleStore.shared.remember(print, as: trimmed)
+                try container.repository.setSpeakerName(person.name, for: speakerKey, in: recording)
+                try? TranscriptExporter.export(recording: recording)
+                voiceFailed = false
+                voiceNote = person.sources == 1
+                    ? "Saved \(person.name)'s voice (\(Int(print.seconds)) s of speech)."
+                    : "Added to \(person.name)'s voice, now learned from \(person.sources) recordings."
+            } catch {
+                voiceFailed = true
+                voiceNote = error.localizedDescription
+            }
+        }
     }
 
     private func save() {
@@ -71,6 +126,7 @@ struct SegmentEditSheet: View {
     let container: AppContainer
     @Environment(\.dismiss) private var dismiss
     @State private var text: String
+    @State private var saveError: String?
     /// Copied at init: the body must not read the model, which a run or a
     /// version restore can delete while the sheet is open (see Save).
     private let startSeconds: Double
@@ -116,9 +172,14 @@ struct SegmentEditSheet: View {
                             return
                         }
                         let before = segment.text
-                        segment.text = text
-                        try? segment.modelContext?.save()
-                        if let rec = segment.recording, before != text {
+                        let changed: Bool
+                        do {
+                            changed = try container.repository.correctSegment(segment, to: text)
+                        } catch {
+                            saveError = error.localizedDescription
+                            return
+                        }
+                        if let rec = segment.recording, changed {
                             // A correction is a checked reference.
                             let source = Benchmark.source(segment, in: rec)
                             Benchmark.enqueue(source, machine: before)
@@ -138,6 +199,13 @@ struct SegmentEditSheet: View {
             .padding(AppMetric.l)
         }
         .frame(minWidth: 460, minHeight: 280)
+        .alert("Could not save the correction", isPresented: Binding(
+            get: { saveError != nil }, set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK") { saveError = nil }
+        } message: {
+            Text("Your text is still in the editor. \(saveError ?? "")")
+        }
     }
 
     private func timestamp(_ s: Double) -> String {

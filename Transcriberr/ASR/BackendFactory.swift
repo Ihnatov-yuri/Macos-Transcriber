@@ -21,7 +21,7 @@ final class BackendFactory: @unchecked Sendable {
 
         var displayName: String {
             switch self {
-            case .parakeet:   return "Parakeet v3 (local, ANE)"
+            case .parakeet:   return "\(Self.parakeetV3Name) (local, ANE)"
             case .parakeetV2: return "Parakeet v2 (English, ANE)"
             case .whisper:
                 // A run pins its model by language; outside one there are two.
@@ -43,6 +43,19 @@ final class BackendFactory: @unchecked Sendable {
         }
 
         private static func whisperLabel(_ m: WhisperModel) -> String { "Whisper \(m.name) (local, CoreML)" }
+
+        /// Name of the Parakeet v3 weights in FluidAudio's model folder. A fine-tune installed in place of the
+        /// stock files (the folder name is fixed by FluidAudio) names itself with `display_name` in the
+        /// folder's config.json; stock has none and stays "Parakeet v3". Read once per launch.
+        static let parakeetV3Name: String = {
+            let config = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("FluidAudio/Models/parakeet-tdt-0.6b-v3/config.json")
+            guard let data = try? Data(contentsOf: config),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let name = json["display_name"] as? String, !name.isEmpty
+            else { return "Parakeet v3" }
+            return name
+        }()
 
         var isLocal: Bool {
             switch self {

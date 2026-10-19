@@ -25,6 +25,7 @@ struct DetailView: View {
     @State private var findingPeople = false
     /// Read on appear and on change, never per render: it is a file.
     @State private var hasPeople = false
+    @State private var peopleNames: [String] = []
     @State private var peopleNote: String?
 
     /// Transcript, then one tab per post-processing preset in Settings
@@ -115,10 +116,8 @@ struct DetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { paneHeight = $0 }
-            .onAppear { hasPeople = !PeopleStore.shared.load().isEmpty }
-            .onReceive(NotificationCenter.default.publisher(for: PeopleStore.didChange)) { _ in
-                hasPeople = !PeopleStore.shared.load().isEmpty
-            }
+            .onAppear { loadPeople() }
+            .onReceive(NotificationCenter.default.publisher(for: PeopleStore.didChange)) { _ in loadPeople() }
         }
         .sheet(item: $editingSegment) { seg in
             SegmentEditSheet(segment: seg, container: container)
@@ -186,7 +185,7 @@ struct DetailView: View {
                         }
 
                     }
-                    Text("Rename ↗").uiLabel(9, color: AppColor.ink3)
+                    Text("Click a speaker to rename or remember their voice ↗").uiLabel(9, color: AppColor.ink3)
                     if hasPeople {
                         TapButton { findPeople() } label: {
                             Text(findingPeople ? "Finding people…" : (peopleNote ?? "Find people ↗"))
@@ -222,6 +221,42 @@ struct DetailView: View {
             alert.messageText = "Could not export the recording"
             alert.informativeText = error.localizedDescription
             alert.runModal()
+        }
+    }
+
+    private func loadPeople() {
+        peopleNames = PeopleStore.shared.load().map(\.name)
+        hasPeople = !peopleNames.isEmpty
+    }
+
+    /// One line's speaker, picked in the transcript.
+    private func tag(_ seg: Segment, _ choice: TranscriptPane.TagChoice) {
+        guard !seg.isDeleted, seg.modelContext != nil else { return }
+        let repo = container.repository
+        do {
+            switch choice {
+            case .speaker(let key): try repo.tagSegment(seg, toSpeaker: key, in: recording)
+            case .name(let name): try repo.tagSegment(seg, as: name, in: recording)
+            case .clear: try repo.untagSegment(seg, in: recording)
+            case .someoneElse:
+                let alert = NSAlert()
+                alert.messageText = "Who said this?"
+                alert.informativeText = "This line goes to a speaker of that name, or a new one."
+                let field = NSTextField(string: "")
+                field.placeholderString = "Name"
+                field.frame = NSRect(x: 0, y: 0, width: 280, height: 22)
+                alert.accessoryView = field
+                alert.addButton(withTitle: "Tag")
+                alert.addButton(withTitle: "Cancel")
+                alert.window.initialFirstResponder = field
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                try repo.tagSegment(seg, as: name, in: recording)
+            }
+            try? TranscriptExporter.export(recording: recording)
+        } catch {
+            AppLog.error("detail", "tag line failed: \(error.localizedDescription)")
         }
     }
 
@@ -899,6 +934,9 @@ struct DetailView: View {
                 runStage: model.status?.stage,
                 backgroundRun: model.status?.background ?? false,
                 onEditSegment: { editingSegment = $0 },
+                speakerChoices: uniqueSpeakers(),
+                peopleNames: peopleNames,
+                onTag: { seg, choice in tag(seg, choice) },
                 onPickAlternative: { seg, k in pickAlternative(seg, disputeIndex: k) },
                 speakerColor: { [order = uniqueSpeakers().map(\.key)] key in
                     // Precomputed ONCE per render — calling uniqueSpeakers()
@@ -1080,6 +1118,12 @@ struct TranscriptPane: View {
     var runStage: String? = nil
     var backgroundRun: Bool = false
     var onEditSegment: (Segment) -> Void = { _ in }
+    /// Who said a line, picked on the line itself (its speaker name is a
+    /// menu, and so is a right-click on it).
+    enum TagChoice { case speaker(String), name(String), someoneElse, clear }
+    var speakerChoices: [(key: String, display: String)] = []
+    var peopleNames: [String] = []
+    var onTag: (Segment, TagChoice) -> Void = { _, _ in }
     /// The user clicked a disputed word: switch it to the other engine's
     /// reading (the Int is the dispute's index in `recording.disputesJSON`).
     var onPickAlternative: (Segment, Int) -> Void = { _, _ in }
@@ -1292,12 +1336,22 @@ struct TranscriptPane: View {
             .frame(width: 46, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 2) {
-                if let name = seg.speakerName ?? seg.speaker {
-                    HStack(spacing: 6) {
-                        Rectangle().fill(speakerColor(seg.speaker ?? "")).frame(width: 5, height: 5)
-                        Text(name).uiLabel(9, color: AppColor.accentOnLight)
+                Menu {
+                    tagMenu(seg)
+                } label: {
+                    if let name = seg.speakerName ?? seg.speaker {
+                        HStack(spacing: 6) {
+                            Rectangle().fill(speakerColor(seg.speaker ?? "")).frame(width: 5, height: 5)
+                            Text(name).uiLabel(9, color: AppColor.accentOnLight)
+                        }
+                    } else {
+                        Text("Who said this?").uiLabel(9, color: AppColor.ink3)
                     }
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Tag who said this line")
                 segmentText(seg, disputes: disputes)
                     .font(AppFont.text(15))
                     .foregroundStyle(AppColor.ink)
@@ -1320,6 +1374,44 @@ struct TranscriptPane: View {
         .contentShape(Rectangle())
         .onTapGesture { player.seek(to: seg.startSeconds) }
         .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in onEditSegment(seg) })
+        .contextMenu {
+            tagMenu(seg)
+            Divider()
+            Button("Edit text…") { onEditSegment(seg) }
+        }
+    }
+
+    /// The speakers of this recording, then saved people who are not one of
+    /// them yet, then a new name.
+    @ViewBuilder
+    private func tagMenu(_ seg: Segment) -> some View {
+        Section("Who said this?") {
+            ForEach(speakerChoices, id: \.key) { choice in
+                Button {
+                    onTag(seg, .speaker(choice.key))
+                } label: {
+                    if choice.key == seg.speaker {
+                        Label(choice.display, systemImage: "checkmark")
+                    } else {
+                        Text(choice.display)
+                    }
+                }
+            }
+        }
+        let present = Set(speakerChoices.map { $0.display.lowercased() })
+        let others = peopleNames.filter { !present.contains($0.lowercased()) }
+        if !others.isEmpty {
+            Section("Saved people") {
+                ForEach(others, id: \.self) { name in
+                    Button(name) { onTag(seg, .name(name)) }
+                }
+            }
+        }
+        Button("Someone else…") { onTag(seg, .someoneElse) }
+        if seg.speaker != nil {
+            Divider()
+            Button("Remove speaker") { onTag(seg, .clear) }
+        }
     }
 
     private func timestamp(_ s: Double) -> String {

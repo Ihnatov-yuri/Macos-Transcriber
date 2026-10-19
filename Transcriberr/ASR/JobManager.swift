@@ -392,6 +392,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
         }
         AppLog.info("job", "starting recording=\(recording.id.uuidString) backend=\(params.backend.rawValue)")
         LanguageOverrideLog.reset()
+        RunGapLog.reset()
 
         var wipedOldTranscript = false
         // Before the run: it names the Whisper model only while it runs.
@@ -585,8 +586,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         AppLog.warn("job", "version snapshot failed: \(error.localizedDescription)")
                     }
                     try? TranscriptExporter.export(recording: recording)
-                    let note = LanguageOverrideLog.message(LanguageOverrideLog.take())
-                    if let note { AppLog.info("job", "language note: \(note)") }
+                    let notes = [RunGapLog.message(RunGapLog.take()),
+                                LanguageOverrideLog.message(LanguageOverrideLog.take())]
+                        .compactMap { $0 }.joined(separator: " ")
+                    let note: String? = notes.isEmpty ? nil : notes
+                    if let note { AppLog.info("job", "run note: \(note)") }
                     statuses[recording.id] = Status(
                         id: recording.id, stage: "Done.", fraction: 1.0, failed: false, failureReason: nil,
                         note: note

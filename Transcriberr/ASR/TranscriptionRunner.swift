@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// End-to-end transcription of a single audio file via Gemma 4 (or any other
 /// `ASRBackend`). Mirror of Android's `asr/TranscriptionRunner.kt`.
@@ -1504,6 +1505,22 @@ final class TranscriptionRunner: @unchecked Sendable {
                     speakerHints: speakerHints
                 )
             }
+        } catch let gaveUp as WhisperBackend.DecodeBudgetExceeded {
+            // Whisper ran out of time (a busy Mac). Once more, then the part
+            // stays empty and the run's note says so: it used to come back
+            // as "" with no error at all.
+            AppLog.warn("runner", "\(gaveUp.localizedDescription) Trying the part once more.")
+            do {
+                return try await withChunkTimeout(seconds: timeout) {
+                    try await backend.transcribeChunk(
+                        samples: samples, languages: params.languages, translateTo: params.translateTo,
+                        diarize: params.diarize, previousContext: previousContext, speakerHints: speakerHints)
+                }
+            } catch is WhisperBackend.DecodeBudgetExceeded {
+                AppLog.error("runner", "Whisper ran out of time on the same part twice; it has no text")
+                RunGapLog.record(.outOfTime)
+                return ""
+            }
         } catch ASRError.chunkTimeout {
             // Surgical: rebuild only the wedged engine. A full ensemble
             // release()+load() here yanked engines from under the OTHER
@@ -1532,6 +1549,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // One lost chunk must not kill a 30-chunk run — skip it,
                 // recover the engine for the chunks behind it, move on.
                 AppLog.error("runner", "chunk wedged twice — skipping it, recovering engine for the rest")
+                RunGapLog.record(.wedged)
                 await noteWedge(backend: backend, continuation: continuation)
                 try? await backend.recoverWedge(modelPath: params.modelDirectory)
                 return ""
@@ -1846,5 +1864,30 @@ final class TranscriptionRunner: @unchecked Sendable {
     private func formatTime(_ s: Double) -> String {
         let total = Int(s)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// Parts of a run that came back with no text because the engine could not
+/// read them (ran out of time, or hung twice), for the run's note: the
+/// transcript alone shows nothing where they were.
+enum RunGapLog {
+    enum Kind: Sendable { case outOfTime, wedged }
+    private static let tally = OSAllocatedUnfairLock(initialState: [Kind: Int]())
+
+    static func record(_ kind: Kind) { tally.withLock { $0[kind, default: 0] += 1 } }
+    static func reset() { tally.withLock { $0.removeAll() } }
+
+    static func take() -> [Kind: Int] {
+        tally.withLock { t -> [Kind: Int] in defer { t.removeAll() }; return t }
+    }
+
+    static func message(_ counts: [Kind: Int]) -> String? {
+        let n = counts.values.reduce(0, +)
+        guard n > 0 else { return nil }
+        let parts = n == 1 ? "1 part" : "\(n) parts"
+        let why = counts[.wedged, default: 0] == n
+            ? "the engine hung on it twice"
+            : "the engine ran out of time, probably because the Mac was busy"
+        return "\(parts) of this recording \(n == 1 ? "has" : "have") no text: \(why). Run it again to fill \(n == 1 ? "it" : "them") in."
     }
 }

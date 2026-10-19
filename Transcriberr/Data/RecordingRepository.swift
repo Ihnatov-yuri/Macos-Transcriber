@@ -1142,6 +1142,61 @@ final class RecordingRepository: @unchecked Sendable {
 
     /// Stored user-entered name map (survives wipes; keys are stable for the
     /// same audio because clustering is deterministic).
+    /// Prefix of speaker keys made by tagging a line with a name no speaker
+    /// of the recording has. PeopleNamer leaves them alone: the user said
+    /// who that is.
+    static let taggedKeyPrefix = "TAGGED_"
+
+    /// Who said one line, set by hand in the transcript: that line moves to
+    /// the speaker of that name (an existing speaker of this recording, any
+    /// case), or to a new speaker of its own. The rest of the recording is
+    /// untouched; renaming a whole speaker stays with the speaker chips.
+    func tagSegment(_ segment: Segment, as name: String, in recording: Recording) throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw OrganizeError.emptyName }
+        let stored = storedSpeakerNames(recording)
+        var display: [String: String] = [:]
+        for s in recording.segments {
+            if let key = s.speaker, display[key] == nil, let n = s.speakerName ?? stored[key], !n.isEmpty { display[key] = n }
+        }
+        let key = display.sorted { $0.key < $1.key }
+            .first { $0.value.caseInsensitiveCompare(trimmed) == .orderedSame }?.key
+            ?? Self.newTaggedKey(taken: Set(recording.segments.compactMap(\.speaker)).union(stored.keys))
+        var map = stored
+        if map[key] == nil { map[key] = display[key] ?? trimmed }
+        if let data = try? JSONEncoder().encode(map) {
+            recording.speakerNamesJSON = String(decoding: data, as: UTF8.self)
+        }
+        segment.speaker = key
+        segment.speakerName = display[key] ?? trimmed
+        try context.save()
+        BackupService.backupRecording(recording)
+    }
+
+    /// The line moves to an existing speaker key of the recording.
+    func tagSegment(_ segment: Segment, toSpeaker key: String, in recording: Recording) throws {
+        let name = recording.segments.first { $0.speaker == key && ($0.speakerName?.isEmpty == false) }?.speakerName
+            ?? storedSpeakerNames(recording)[key]
+        segment.speaker = key
+        segment.speakerName = name
+        try context.save()
+        BackupService.backupRecording(recording)
+    }
+
+    /// The line has no speaker.
+    func untagSegment(_ segment: Segment, in recording: Recording) throws {
+        segment.speaker = nil
+        segment.speakerName = nil
+        try context.save()
+        BackupService.backupRecording(recording)
+    }
+
+    static func newTaggedKey(taken: Set<String>) -> String {
+        var n = 1
+        while taken.contains("\(taggedKeyPrefix)\(n)") { n += 1 }
+        return "\(taggedKeyPrefix)\(n)"
+    }
+
     func storedSpeakerNames(_ recording: Recording) -> [String: String] {
         guard let js = recording.speakerNamesJSON,
               let map = try? JSONDecoder().decode([String: String].self, from: Data(js.utf8))

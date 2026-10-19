@@ -35,10 +35,6 @@ struct AudioDecoder: Sendable {
     /// raw float buffer never has to live in memory before resampling.
     func decodeAll(file: URL) async throws -> [Float] {
         let asset = AVURLAsset(url: file)
-        guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
-            throw DecoderError.noAudioTrack
-        }
-
         let outSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: 16_000,
@@ -49,6 +45,13 @@ struct AudioDecoder: Sendable {
             AVLinearPCMIsBigEndianKey: false,
         ]
         do {
+            // Inside the fallback's reach: loading the track is where
+            // AVFoundation refuses a file it cannot open, with nothing but
+            // "The operation could not be completed", and that used to end
+            // the decode before the AVAudioFile path was tried.
+            guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
+                throw DecoderError.noAudioTrack
+            }
             let reader = try AVAssetReader(asset: asset)
             let output = AVAssetReaderTrackOutput(track: track, outputSettings: outSettings)
             output.alwaysCopiesSampleData = false
@@ -95,8 +98,17 @@ struct AudioDecoder: Sendable {
             // Teams/Discord, and our own freshly-written WAVs). AVAudioFile +
             // AVAudioConverter reads the format-registry set instead — a much
             // wider net — and resamples to 16 kHz mono itself.
-            AppLog.warn("decoder", "AVAssetReader failed (\(error.localizedDescription)) — AVAudioFile fallback")
-            return try Self.decodeViaAudioFile(file)
+            let first = Self.describe(error)
+            AppLog.warn("decoder", "AVAssetReader failed (\(first)) — AVAudioFile fallback")
+            do {
+                return try Self.decodeViaAudioFile(file)
+            } catch {
+                // Both readers' own reasons, with domain and code: the
+                // fallback's message alone ("The operation could not be
+                // completed") said nothing about what went wrong.
+                throw DecoderError.undecodable(file: file.lastPathComponent,
+                                               reader: first, audioFile: Self.describe(error))
+            }
         }
     }
 
@@ -280,12 +292,28 @@ struct AudioDecoder: Sendable {
         return (pcm, chunks, duration)
     }
 
+    /// An error as "message [domain code]", plus its underlying error:
+    /// AVFoundation's and Core Audio's messages are often generic, the codes
+    /// are not.
+    static func describe(_ error: Error) -> String {
+        if let d = error as? DecoderError { return d.localizedDescription }
+        let ns = error as NSError
+        var s = "\(ns.localizedDescription) [\(ns.domain) \(ns.code)]"
+        if let u = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+            s += " ← \(u.localizedDescription) [\(u.domain) \(u.code)]"
+        }
+        return s
+    }
+
     enum DecoderError: LocalizedError {
         case noAudioTrack
         case readerStartFailed(String)
         case readerFailed(String)
+        case undecodable(file: String, reader: String, audioFile: String)
         var errorDescription: String? {
             switch self {
+            case .undecodable(let f, let r, let a):
+                return "Could not decode \(f). AVAssetReader: \(r). AVAudioFile: \(a)."
             case .noAudioTrack:               return "No audio track found in file."
             case .readerStartFailed(let m):   return "AVAssetReader could not start: \(m)"
             case .readerFailed(let m):        return "AVAssetReader failed: \(m)"

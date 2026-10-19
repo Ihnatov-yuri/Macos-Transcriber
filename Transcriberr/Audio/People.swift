@@ -152,6 +152,8 @@ enum PeopleMatch {
     static func renamable(names: [String: String?], people: [Person], me: String) -> Set<String> {
         let known = Set(people.map { $0.name.lowercased() })
         return Set(names.compactMap { key, name in
+            // Lines tagged by hand: the user already said who that is.
+            if key.hasPrefix(RecordingRepository.taggedKeyPrefix) { return nil }
             guard let name, !name.isEmpty else { return key }
             if name.lowercased() == me.lowercased() { return nil }
             return known.contains(name.lowercased()) ? key : nil
@@ -213,6 +215,23 @@ enum PeopleVoice {
             throw VoiceprintStore.MixedReading(similarity: print.selfSimilarity)
         }
         return print
+    }
+
+    /// A voice print from a reading recorded at this Mac (Settings → People
+    /// → Add person → Record them now), held to the same bar as the user's.
+    static func learn(reading samples: [Float]) async throws -> Voiceprint {
+        let print = try await VoiceEmbedder.shared.enroll(samples)
+        guard print.selfSimilarity >= VoiceprintStore.minSelfSimilarity else {
+            throw VoiceprintStore.MixedReading(similarity: print.selfSimilarity)
+        }
+        return print
+    }
+
+    /// Seconds each speaker talks in a recording, for picking who to learn.
+    static func speakingTime(_ segments: [Segment]) -> [String: Double] {
+        var out: [String: Double] = [:]
+        for s in segments { if let key = s.speaker { out[key, default: 0] += max(0, s.endSeconds - s.startSeconds) } }
+        return out
     }
 
     /// Each speaker's clip embeddings, as ClusterVoice takes them.

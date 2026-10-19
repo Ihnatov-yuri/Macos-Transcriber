@@ -212,6 +212,42 @@ final class RepositoryTests: XCTestCase {
         XCTAssertTrue(AppContainer.isTestHost)
     }
 
+    // MARK: - Tagging one line (transcript menu)
+
+    func testTagLineMovesOnlyThatLineToAnExistingSpeakerByName() throws {
+        let rec = try makeRecording(title: "t", seconds: 3, segs: [
+            (0, 1, "a", "S1", "Kate"), (1, 2, "b", "S1", "Kate"), (2, 3, "c", "S2", "Anna")])
+        let line = rec.segments.sorted { $0.startSeconds < $1.startSeconds }[1]
+        try repo.tagSegment(line, as: "anna", in: rec)
+        XCTAssertEqual(line.speaker, "S2")
+        XCTAssertEqual(line.speakerName, "Anna")
+        XCTAssertEqual(rec.segments.filter { $0.speaker == "S1" }.count, 1, "the other Kate line stays")
+    }
+
+    func testTagLineWithANewNameMakesItsOwnSpeaker() throws {
+        let rec = try makeRecording(title: "t", seconds: 3, segs: [
+            (0, 1, "a", "S1", "Kate"), (1, 2, "b", nil, nil), (2, 3, "c", nil, nil)])
+        let lines = rec.segments.sorted { $0.startSeconds < $1.startSeconds }
+        try repo.tagSegment(lines[1], as: "Piet", in: rec)
+        try repo.tagSegment(lines[2], as: "Piet", in: rec)
+        XCTAssertEqual(lines[1].speaker, "TAGGED_1")
+        XCTAssertEqual(lines[2].speaker, "TAGGED_1", "the same new name is the same speaker")
+        XCTAssertEqual(repo.storedSpeakerNames(rec)["TAGGED_1"], "Piet")
+        try repo.untagSegment(lines[2], in: rec)
+        XCTAssertNil(lines[2].speaker)
+        XCTAssertNil(lines[2].speakerName)
+        XCTAssertThrowsError(try repo.tagSegment(lines[2], as: "  ", in: rec))
+    }
+
+    func testTagLineToSpeakerKeyTakesItsName() throws {
+        let rec = try makeRecording(title: "t", seconds: 2, segs: [
+            (0, 1, "a", "S1", "Kate"), (1, 2, "b", "S2", nil)])
+        let line = rec.segments.first { $0.speaker == "S2" }!
+        try repo.tagSegment(line, toSpeaker: "S1", in: rec)
+        XCTAssertEqual(line.speaker, "S1")
+        XCTAssertEqual(line.speakerName, "Kate")
+    }
+
     // MARK: - Merge recordings (context-menu action)
 
     func testMergeRecordingsOffsetsRemapsAndNames() async throws {

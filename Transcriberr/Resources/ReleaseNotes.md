@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.5.1
+- When a fine-tuned Parakeet v3 is installed in place of the stock model, Transcriberr shows its name instead of "Parakeet v3" (for example Ihnatov Parakeet UK).
+
 ## 4.5.0
 - Transcriberr can learn the people you talk to. In a recording, click a speaker's name, type who it is and press Remember this voice. Later recordings name that person on their own. Saving the same name from another recording adds it to their voice, so they are found on calls and in the room alike.
 - Settings → Audio input → People lists everyone saved, to rename or delete. The voices stay on this Mac, outside Time Machine, and deleting one removes it. A recording made before someone was saved can be named with Find people next to its speakers.

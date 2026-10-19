@@ -116,6 +116,16 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// up first keeps a slow decode from ever looking like a hang.
     static var decodeBudget: TimeInterval { setting("TRANSCRIBERR_WHISPER_BUDGET", "whisper.decodeBudget", 100) }
 
+    /// A chunk decode that ran past `decodeBudget` and was stopped.
+    struct DecodeBudgetExceeded: LocalizedError, Equatable {
+        let chunkSeconds: Double
+        let seconds: Double
+        var errorDescription: String? {
+            String(format: "Whisper ran out of time on a %.0f s part (stopped after %.0f s); the Mac was probably busy.",
+                   chunkSeconds, seconds)
+        }
+    }
+
     /// Native calls allowed at once. One Neural Engine (or GPU) serves every
     /// call, so more of them in flight only make each slower and fight
     /// Parakeet and the diarizer for the CPU; 0 = no limit.
@@ -390,9 +400,14 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             // 2026-10-01: 5 recoveries in 15 minutes; the Mac froze). Parakeet's
             // reading of the chunk stands in the vote.
             AppLog.warn("whisper", String(
-                format: "gave up on a %.0fs chunk after %.0fs (decode budget) — Parakeet's reading stands",
+                format: "gave up on a %.0fs chunk after %.0fs (decode budget)",
                 Double(samples.count) / 16_000, decodeSeconds))
-            return ("", [], [])
+            // Thrown, never returned as "": an empty reading looked like
+            // silence, so a busy Mac (20 chunks at once in a bench, all past
+            // the budget) gave empty text and no error. Super keeps
+            // Parakeet's reading of the chunk; a Whisper run retries it once
+            // and then says how many parts have no text.
+            throw DecodeBudgetExceeded(chunkSeconds: Double(samples.count) / 16_000, seconds: decodeSeconds)
         }
         if decodeSeconds > 20, let t = results.first?.timings {
             AppLog.info("whisper", String(

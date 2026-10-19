@@ -96,7 +96,7 @@ final class PeopleTests: XCTestCase {
     func testRenamableSkipsTheUserAndHandTypedNames() {
         let people = [person("Kate", [1, 0, 0, 0])]
         let keys = PeopleMatch.renamable(names: [
-            "S1": nil, "S2": "", "S3": "kate", "S4": "Yuri", "S5": "My boss",
+            "S1": nil, "S2": "", "S3": "kate", "S4": "Yuri", "S5": "My boss", "TAGGED_1": "Kate",
         ], people: people, me: "Yuri")
         XCTAssertEqual(keys, ["S1", "S2", "S3"])
     }
@@ -114,5 +114,15 @@ final class PeopleTests: XCTestCase {
         let speech = PeopleVoice.cleanSpeech(of: "A", regions: regions, samples: samples)
         XCTAssertEqual(speech.count, Int(3.5 * Double(rate)), "only 8.25-11.75 s")
         XCTAssertEqual(speech.first, Float(Int(8.25 * Double(rate))))
+    }
+
+    func testSpeakingTimePerSpeaker() {
+        let segs = [
+            Segment(startSeconds: 0, endSeconds: 4, text: "a", speaker: "S1", speakerName: nil),
+            Segment(startSeconds: 4, endSeconds: 5, text: "b", speaker: "S2", speakerName: nil),
+            Segment(startSeconds: 5, endSeconds: 7.5, text: "c", speaker: "S1", speakerName: nil),
+            Segment(startSeconds: 8, endSeconds: 9, text: "d", speaker: nil, speakerName: nil),
+        ]
+        XCTAssertEqual(PeopleVoice.speakingTime(segs), ["S1": 6.5, "S2": 1])
     }
 }

@@ -36,6 +36,14 @@ actor EnsembleBackend: ASRBackend {
         self.factory = factory
     }
 
+    /// Tests: a pair of engines without loading any model.
+    func useEnginesForTesting(_ a: ASRBackend, _ kindA: BackendFactory.Kind,
+                              _ b: ASRBackend, _ kindB: BackendFactory.Kind) {
+        engineA = a; engineB = b
+        self.kindA = kindA; self.kindB = kindB
+        isReady = true
+    }
+
     /// Languages of the upcoming run — set by the runner before `load` so
     /// the pair can be checked against them.
     private var runLanguages: Set<String> = []
@@ -236,7 +244,12 @@ actor EnsembleBackend: ASRBackend {
             if case .success(let a) = ra, case .success(let b) = rb {
                 return await mergeDetailed(a, b, context: previousContext, languages: languages)
             }
-            // fall through to the generic text path on error
+            // One engine failed: the other's reading stands. Falling through
+            // re-ran BOTH engines, so a Whisper chunk stopped at its decode
+            // budget got a second 100 s decode and Parakeet's work was redone.
+            if case .success(let a) = ra { return a.text }
+            if case .success(let b) = rb { return b.text }
+            // Both failed: the generic text path below tries once more.
         }
 
         // GENERIC PATH — at least one sub-engine has no word confidences
@@ -598,6 +611,12 @@ actor EnsembleBackend: ASRBackend {
             do { rb = .success(try await taskB) } catch { rb = .failure(error) }
             for (kind, r) in [(kindA, ra), (kindB, rb)] {
                 if case .failure(let e) = r { AppLog.warn("ensemble", "\(kind.rawValue) failed on this chunk: \(e.localizedDescription)") }
+            }
+            // One engine failed: the other's reading stands (see transcribeChunk).
+            switch (ra, rb) {
+            case (.success(let a), .failure): return RichChunk(text: a.text, agreement: 1, textA: a.text, textB: "")
+            case (.failure, .success(let b)): return RichChunk(text: b.text, agreement: 1, textA: "", textB: b.text)
+            default: break
             }
             if case .success(let a) = ra, case .success(let b) = rb {
                 if let ruled = TranscriptHygiene.phantomResolution(a.text, b.text) {

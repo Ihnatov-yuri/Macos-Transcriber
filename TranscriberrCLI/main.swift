@@ -328,27 +328,55 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
     print(String(format: "load %.1fs", Date().timeIntervalSince(tl)))
     let audio = tracks.map { Double($0.1.count) / 16_000 }.reduce(0, +)
     let t0 = Date()
-    let results = await withTaskGroup(of: (Int, String, Double).self) { group in
-        for (i, t) in tracks.enumerated() {
+    // At most `parallel` files at once: the bench once read 20 short clips
+    // together, every one ran past Whisper's decode budget, and each came
+    // back empty with no error. Override with TRANSCRIBERR_BENCH_PARALLEL.
+    let parallel = max(1, Int(ProcessInfo.processInfo.environment["TRANSCRIBERR_BENCH_PARALLEL"] ?? "") ?? 2)
+    print("reading \(tracks.count) file(s), \(min(parallel, tracks.count)) at a time")
+    let results = await withTaskGroup(of: (Int, Result<String, Error>, Double).self) { group in
+        var next = 0
+        func submit() {
+            let i = next
+            let t = tracks[i]
             let b = backends[min(i, backends.count - 1)]
+            next += 1
             group.addTask {
                 let s = Date()
-                let r = try? await b.transcribeTimedSegments(samples: t.1, languages: [language])
-                return (i, r?.text ?? "", Date().timeIntervalSince(s))
+                do {
+                    let r = try await b.transcribeTimedSegments(samples: t.1, languages: [language])
+                    return (i, .success(r.text), Date().timeIntervalSince(s))
+                } catch {
+                    return (i, .failure(error), Date().timeIntervalSince(s))
+                }
             }
         }
-        var out: [(Int, String, Double)] = []
-        for await r in group { out.append(r) }
+        while next < min(parallel, tracks.count) { submit() }
+        var out: [(Int, Result<String, Error>, Double)] = []
+        for await r in group {
+            out.append(r)
+            if next < tracks.count { submit() }
+        }
         return out.sorted { $0.0 < $1.0 }
     }
     let wall = Date().timeIntervalSince(t0)
-    for (i, text, secs) in results {
+    var failed = 0
+    for (i, result, secs) in results {
         let path = tracks[i].0 + ".\(placement).txt"
-        try? text.write(toFile: path, atomically: true, encoding: .utf8)
-        print(String(format: "track %d: %.0fs audio in %.1fs, %d chars → %@", i,
-                     Double(tracks[i].1.count) / 16_000, secs, text.count, path))
+        switch result {
+        case .success(let text):
+            try? text.write(toFile: path, atomically: true, encoding: .utf8)
+            print(String(format: "track %d: %.0fs audio in %.1fs, %d chars → %@", i,
+                         Double(tracks[i].1.count) / 16_000, secs, text.count, path))
+        case .failure(let error):
+            // No .txt: an empty file would read as "Whisper heard nothing".
+            failed += 1
+            try? FileManager.default.removeItem(atPath: path)
+            print(String(format: "track %d: FAILED after %.1fs: %@ (%@)", i, secs,
+                         error.localizedDescription, tracks[i].0))
+        }
     }
     print(String(format: "WALL %.1fs for %.0fs of audio (%.2fx realtime)", wall, audio, audio / wall))
+    if failed > 0 { print("\(failed) of \(tracks.count) file(s) FAILED"); return 1 }
     return 0
 }
 

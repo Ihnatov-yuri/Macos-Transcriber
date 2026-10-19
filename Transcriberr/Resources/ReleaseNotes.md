@@ -6,6 +6,13 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.5.2
+- Settings → Audio input → People has Add person. Record the person reading a short passage at your Mac, or pick them as a speaker in one of your recordings, and Transcriberr learns their voice. Recordings made after that name them on their own.
+- The speakers above a transcript now say that clicking one also lets you remember their voice.
+- Tag who said each line in the transcript itself. Click the name above a line (or "Who said this?" on a line without one), or right-click the line, and pick a speaker of the recording, one of your saved people, or a new name. Only that line changes, and lines you tag are never renamed by a later voice match.
+- When Whisper runs out of time on a part of a recording (the Mac was busy), that part is tried once more. If it still has no text, the run says how many parts are empty instead of leaving silent gaps. In Super, Parakeet's reading of such a part stands, and Whisper is no longer asked to read it a second time.
+- An audio file that cannot be decoded now says why, with the reason from each of the two decoders that tried it. A file that AVFoundation refuses to open now always gets the second decoder.
+
 ## 4.5.1
 - When a fine-tuned Parakeet v3 is installed in place of the stock model, Transcriberr shows its name instead of "Parakeet v3" (for example Ihnatov Parakeet UK).
 

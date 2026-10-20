@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.5.3
+- Clicking anywhere on a line of the transcript now jumps the audio to that line. Before, a click on the words themselves was taken as the start of a text selection, so only clicks beside the text worked.
+- The jump lands exactly on the line and the highlight moves straight away, also while playback is paused.
+- Right-click a line and choose Copy line to copy its text. The prose view is still fully selectable.
+
 ## 4.5.2
 - Settings → Audio input → People has Add person. Record the person reading a short passage at your Mac, or pick them as a speaker in one of your recordings, and Transcriberr learns their voice. Recordings made after that name them on their own.
 - The speakers above a transcript now say that clicking one also lets you remember their voice.

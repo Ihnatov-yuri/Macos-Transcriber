@@ -1356,7 +1356,11 @@ struct TranscriptPane: View {
                     .font(AppFont.text(15))
                     .foregroundStyle(AppColor.ink)
                     .tint(AppColor.ink)
-                    .textSelection(.enabled)
+                    // Not selectable: on macOS a selectable Text takes the
+                    // mouse-down for itself, so a click on the words started
+                    // a selection and never reached the row's seek — only
+                    // clicks on the margin jumped the audio. Copy is in the
+                    // context menu; the prose view stays selectable.
                     .help(hits.isEmpty ? "" : hits.map { "\($0.dispute.chosen) · other engine heard \"\($0.dispute.alternative)\"" }
                         .joined(separator: "\n") + "\nClick an underlined word to use the other reading.")
                     .environment(\.openURL, OpenURLAction { url in
@@ -1377,6 +1381,10 @@ struct TranscriptPane: View {
         .contextMenu {
             tagMenu(seg)
             Divider()
+            Button("Copy line") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(style.apply(seg.text), forType: .string)
+            }
             Button("Edit text…") { onEditSegment(seg) }
         }
     }

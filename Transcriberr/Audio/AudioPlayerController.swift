@@ -52,7 +52,10 @@ final class AudioPlayerController: @unchecked Sendable {
             queue: .main
         ) { [weak self] t in
             let secs = t.seconds
-            Task { @MainActor [weak self] in self?.currentTime = secs }
+            Task { @MainActor [weak self] in
+                guard let self, !self.seeking else { return }
+                self.currentTime = secs
+            }
         }
         player = p
         let loaded = ObjectIdentifier(p)
@@ -95,8 +98,28 @@ final class AudioPlayerController: @unchecked Sendable {
     func toggle() { isPlaying ? pause() : play() }
 
     func seek(to seconds: Double) {
-        player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
+        guard let player else { return }
+        // Exact, and reflected at once. The default tolerance can land a
+        // compressed file well off the line that was clicked, and while
+        // paused the highlight waited for an observer tick that a stale,
+        // pre-seek tick could still overwrite.
+        let target = max(0, duration > 0 ? min(seconds, duration) : seconds)
+        seekGeneration &+= 1
+        let generation = seekGeneration
+        currentTime = target
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.seekGeneration == generation else { return }
+                self.seeking = false
+            }
+        }
+        seeking = true
     }
+
+    /// While a seek is in flight, periodic ticks still carry the old time.
+    @ObservationIgnored private var seeking = false
+    @ObservationIgnored private var seekGeneration = 0
 
     private func teardown() {
         waveformTask?.cancel()
@@ -107,6 +130,7 @@ final class AudioPlayerController: @unchecked Sendable {
         endObserver = nil
         player?.pause()
         player = nil
+        seeking = false
     }
 
     // No deinit cleanup: AVPlayer is fine to drop without removing observers

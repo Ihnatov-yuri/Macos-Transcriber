@@ -40,6 +40,7 @@ final class RecorderSettings: @unchecked Sendable {
         static let preprocessImports = "recorder.preprocessImports"
         static let micSensitivity = "recorder.micSensitivity"
         static let inputDeviceUID = "recorder.inputDeviceUID"
+        static let meetingEchoFilter = "recorder.meetingEchoFilter"
     }
 
     /// Input sensitivity for transcription. Default `.auto`.
@@ -65,6 +66,14 @@ final class RecorderSettings: @unchecked Sendable {
         didSet { defaults.set(noiseSuppression, forKey: Key.noiseSuppression) }
     }
 
+    /// Apple's echo filter on the microphone during meeting recordings,
+    /// unless the output is headphones (see `VoiceProcessedMic`). On by
+    /// default: on laptop speakers it is what keeps the far side from
+    /// playing back twice.
+    var meetingEchoFilter: Bool {
+        didSet { defaults.set(meetingEchoFilter, forKey: Key.meetingEchoFilter) }
+    }
+
     /// Run the same noise-suppression pass over *imported* files during
     /// decode. Slower (offline-renders the file once) but worthwhile for
     /// dirty source material.
@@ -77,6 +86,7 @@ final class RecorderSettings: @unchecked Sendable {
         // config we care about. The setting is opt-in in Settings → Audio Input.
         noiseSuppression = (defaults.object(forKey: Key.noiseSuppression) as? Bool) ?? false
         preprocessImports = (defaults.object(forKey: Key.preprocessImports) as? Bool) ?? false
+        meetingEchoFilter = (defaults.object(forKey: Key.meetingEchoFilter) as? Bool) ?? true
         inputDeviceUID = defaults.string(forKey: Key.inputDeviceUID)
         micSensitivity = (defaults.string(forKey: Key.micSensitivity)
             .flatMap(MicSensitivity.init(rawValue:))) ?? .auto

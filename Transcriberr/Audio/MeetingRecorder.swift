@@ -59,6 +59,11 @@ final class MeetingRecorder: @unchecked Sendable {
     /// (and the mic track) is attenuated. Smoothed so it never pumps.
     private var micGain: Float = 1
 
+    /// Apple's echo filter on the mic while on speakers (ioQueue-owned).
+    /// When it delivers, its cleaned samples replace the raw mic everywhere
+    /// below — gate, me-timeline, mix and the `.mic` track.
+    private var voiceMic: VoiceProcessedMic?
+
     init() {}
 
     /// Live captions consume these one-second chunks in real time; if the
@@ -341,6 +346,24 @@ final class MeetingRecorder: @unchecked Sendable {
     // MARK: - Capture graph
 
     private func setupCapture() async throws {
+        // 0. Apple's echo filter, before the aggregate reads the mic's
+        //    format (bringing it up can change that format). Skipped on
+        //    headphones: no echo to remove, and it would still turn every
+        //    other app down 4 dB. Assigned at once so a throw further down
+        //    still releases it through `teardownCoreAudio`.
+        if RecorderSettings.shared.meetingEchoFilter {
+            let route = VoiceProcessedMic.outputRoute()
+            if route.headphones {
+                AppLog.info("meeting", "echo filter off — output '\(route.name)' is headphones")
+            } else {
+                AppLog.info("meeting", "output '\(route.name)' — starting the echo filter")
+                let vp = VoiceProcessedMic()
+                if vp.start(inputUID: RecorderSettings.shared.inputDeviceUID) {
+                    ioQueue.sync { self.voiceMic = vp }
+                }
+            }
+        }
+
         // 1. System-audio process tap (all processes, mixed down). Its
         //    channel count is picked so it can never equal the microphone's:
         //    `handleIO` tells the two apart by channel count, and with the
@@ -439,6 +462,7 @@ final class MeetingRecorder: @unchecked Sendable {
             self.meIntervals.removeAll(keepingCapacity: true)
             self.meOpenAt = nil
             self.micGain = 1
+            self.voiceMic?.setTargetRate(self.nativeRate)
         }
         await MainActor.run { elapsedMs = 0 }
 
@@ -458,6 +482,16 @@ final class MeetingRecorder: @unchecked Sendable {
             AudioDeviceDestroyIOProcID(aggID, procID)
         }
         procID = nil
+        // After the IO proc is gone, so no cycle is still pulling from it.
+        // Every way capture ends comes through here — Stop, a failed start,
+        // a mic unplugged mid-meeting — so the unit (and the duck it puts
+        // on every other app) never outlives the recording.
+        let vp = ioQueue.sync { () -> VoiceProcessedMic? in
+            let v = self.voiceMic
+            self.voiceMic = nil
+            return v
+        }
+        vp?.stop()
         if aggID != kAudioObjectUnknown {
             AudioHardwareDestroyAggregateDevice(aggID)
             aggID = AudioObjectID(kAudioObjectUnknown)
@@ -533,6 +567,12 @@ final class MeetingRecorder: @unchecked Sendable {
                 if isTap { sysMono[f] += m } else { micMono[f] += m }
             }
         }
+        // Apple's echo filter, when on: the same mic with the far side's
+        // echo already removed. A nil cycle (still priming, or the unit
+        // stalled after a route change) keeps the raw mic.
+        var filtered = false
+        if let cleaned = voiceMic?.pull(frames) { micMono = cleaned; filtered = true }
+
         var micSq: Float = 0
         var sysSq: Float = 0
         for f in 0..<frames {
@@ -555,10 +595,16 @@ final class MeetingRecorder: @unchecked Sendable {
         // syllable is clipped; close gently so it never pumps.
         // Open on relative dominance OR clear absolute speech energy — a
         // loud far side must not be able to gate out the user's interjection.
-        micGain = Self.gateStep(micRMS: micRMS, tapRMS: tapRMS, currentGain: micGain)
-        // The RAW mic goes to the .mic.wav track — the offline echo
+        // With the echo filter delivering there is no echo left to gate, and
+        // the gate would only cut the user's quieter words over the far side
+        // out of the live mix (and the live captions read from it).
+        micGain = filtered ? 1 : Self.gateStep(micRMS: micRMS, tapRMS: tapRMS, currentGain: micGain)
+        // The ungated mic goes to the .mic.wav track — the offline echo
         // canceller needs unmodified ground truth (it subtracts the echo
-        // mathematically). The gate shapes only the playback mix.
+        // mathematically). The gate shapes only the playback mix. With the
+        // echo filter on this is the filtered mic; the canceller then finds
+        // no echo path (peak correlation 0.01-0.04 against its 0.1 bar,
+        // measured) and leaves it as it is.
         let rawMic = micMono
         if micGain < 0.999 {
             for f in 0..<frames { micMono[f] *= micGain }

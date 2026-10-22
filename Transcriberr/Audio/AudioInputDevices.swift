@@ -231,7 +231,7 @@ enum AudioInputDevices {
                 channels(id, scope: kAudioDevicePropertyScopeInput))
     }
 
-    private static func transportType(_ id: AudioDeviceID) -> UInt32 {
+    static func transportType(_ id: AudioDeviceID) -> UInt32 {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -271,7 +271,7 @@ enum AudioInputDevices {
         return lists.map { Int($0.mNumberChannels) }
     }
 
-    private static func string(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> String? {
+    static func string(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> String? {
         var addr = AudioObjectPropertyAddress(
             mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,

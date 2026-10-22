@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.6.0
+- Meetings recorded with the call on your Mac's speakers no longer play the other people back twice. Transcriberr now runs Apple's echo filter, the one calls in FaceTime and Teams use, on your microphone while a meeting records. Before, short bursts of echo got through every 15 to 20 seconds and sounded like doubled syllables.
+- Your own words stay whole when you talk over someone. In the test, every word said over the call came through and none of the call's words did.
+- The filter is off with headphones, where there is no echo. While it runs, other apps play about 4 dB quieter; that ends when you stop recording.
+- Settings → Audio input → Echo filter in meetings turns it off. Dictation is unchanged.
+
 ## 4.5.3
 - Clicking anywhere on a line of the transcript now jumps the audio to that line. Before, a click on the words themselves was taken as the start of a text selection, so only clicks beside the text worked.
 - The jump lands exactly on the line and the highlight moves straight away, also while playback is paused.

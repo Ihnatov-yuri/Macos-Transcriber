@@ -359,7 +359,7 @@ actor EnsembleBackend: ASRBackend {
         clearTimeline()
         let whisper = (kindA == .whisper ? engineA : kindB == .whisper ? engineB : nil) as? WhisperBackend
         let parakeet = [(kindA, engineA), (kindB, engineB)]
-            .first { $0.0 == .parakeet || $0.0 == .parakeetV2 }?.1 as? ParakeetBackend
+            .first { $0.0.isParakeet }?.1 as? ParakeetBackend
         let useWhisper = Self.longFormEnabled(languages: languages) && whisper != nil
         let t0 = Date()
         var whisperTracks: [Int: (words: [TimedWord], segments: [WhisperBackend.SegmentSpan])] = [:]
@@ -627,10 +627,10 @@ actor EnsembleBackend: ASRBackend {
                 // Parakeet v3 has no Arabic: it spells Arabic speech in Latin
                 // letters. When the other engine wrote Arabic, that reading
                 // stands alone rather than being voted against the guess.
-                if Self.arabicShare(a.text) >= 0.5, Self.arabicShare(b.text) < 0.2, kindB == .parakeet {
+                if Self.arabicShare(a.text) >= 0.5, Self.arabicShare(b.text) < 0.2, kindB == .parakeet || kindB == .parakeetUK {
                     return RichChunk(text: a.text, agreement: 1, textA: a.text, textB: b.text)
                 }
-                if Self.arabicShare(b.text) >= 0.5, Self.arabicShare(a.text) < 0.2, kindA == .parakeet {
+                if Self.arabicShare(b.text) >= 0.5, Self.arabicShare(a.text) < 0.2, kindA == .parakeet || kindA == .parakeetUK {
                     return RichChunk(text: b.text, agreement: 1, textA: a.text, textB: b.text)
                 }
                 let priorA = Self.votePrior(for: kindA, languages: languages)
@@ -1099,6 +1099,9 @@ actor EnsembleBackend: ASRBackend {
             return 0.5
         case .parakeet where lang == "ukrainian":   // documented weak spot vs Whisper
             return 0.5
+        // .parakeetUK in Ukrainian keeps 1: the fine-tune measured below
+        // Whisper large-v3's WER on clean clips (6.4% vs 8.2%), so it stands
+        // level with Whisper until meeting audio says otherwise.
         default:
             return 1
         }

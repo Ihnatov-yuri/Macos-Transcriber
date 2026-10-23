@@ -108,7 +108,7 @@ final class DetailModel {
         case .openAI:    return .openAI
         case .anthropic: return .anthropic
         case .gemini:    return .gemini
-        case .parakeet, .parakeetV2, .whisper, .gemmaLiteRT, .ensemble:
+        case .parakeet, .parakeetV2, .parakeetUK, .whisper, .gemmaLiteRT, .ensemble:
             return .openAI   // unused; local backends gated above
         }
     }

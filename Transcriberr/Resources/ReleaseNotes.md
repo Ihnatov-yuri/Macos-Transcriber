@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 4.7.0
+- Ihnatov Parakeet UK is now an engine of its own, next to stock Parakeet v3. It is Parakeet v3 fine-tuned for Ukrainian, and it downloads on first use (about 630 MB) from huggingface.co/ihnatov-yuri/parakeet-tdt-0.6b-v3-uk, so a new Mac gets it like the other speech models. Every file is checked against its fingerprint before it is used.
+- Pick it in Settings → Engines for transcription, live captions, dictation or as one side of Super. In Super it now counts the same as Whisper in Ukrainian; stock Parakeet v3 still counts half there.
+- If Parakeet UK was copied over Parakeet v3 by hand, Transcriberr moves it into its own place, puts stock Parakeet v3 back from the saved copy, and switches every setting that used it to Parakeet UK, so your transcripts come out the same as before.
+
 ## 4.6.0
 - Meetings recorded with the call on your Mac's speakers no longer play the other people back twice. Transcriberr now runs Apple's echo filter, the one calls in FaceTime and Teams use, on your microphone while a meeting records. Before, short bursts of echo got through every 15 to 20 seconds and sounded like doubled syllables.
 - Your own words stay whole when you talk over someone. In the test, every word said over the call came through and none of the call's words did.

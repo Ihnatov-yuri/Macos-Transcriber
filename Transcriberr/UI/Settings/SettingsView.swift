@@ -75,7 +75,7 @@ struct EnginesSettingsTab: View {
                     ForEach(liveEngines, id: \.rawValue) { Text($0.displayName).tag($0) }
                 }
                 WhisperModelPickers()
-                Text("Whisper uses the first model when a recording's languages are English only, the second for anything else, auto-detect included. On the reference set, turbo compressed made English Super about 4x faster at the same accuracy; in Ukrainian every model but large-v3 lost 5-15 points. Speech models download automatically on first use: Parakeet v3/v2 (~1 GB each, Neural Engine) and the Whisper models picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models.")
+                Text("Whisper uses the first model when a recording's languages are English only, the second for anything else, auto-detect included. On the reference set, turbo compressed made English Super about 4x faster at the same accuracy; in Ukrainian every model but large-v3 lost 5-15 points. Speech models download automatically on first use: Parakeet v3/v2/UK (~0.6-1 GB each, Neural Engine) and the Whisper models picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Super · dual-engine merge") {
@@ -144,9 +144,10 @@ struct EnginesSettingsTab: View {
             Section("Languages by engine") {
                 LabeledContent("Parakeet v3", value: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk… (no Arabic/Asian)")
                 LabeledContent("Parakeet v2", value: "English only — best English accuracy")
+                LabeledContent("Ihnatov Parakeet UK", value: "Parakeet v3 fine-tuned for Ukrainian — keeps v3's English")
                 LabeledContent("Whisper", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese (distil-large-v3: English only)")
                 LabeledContent("Gemma 4 LiteRT", value: "~140 languages incl. Gulf Arabic — strongest Arabic (as on Android)")
-                Text("Recommendations: English → Parakeet v3 (or v2). European languages → Parakeet v3. Arabic → Gemma LiteRT (Whisper as second opinion). Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge.")
+                Text("Recommendations: English → Parakeet v3 (or v2). Ukrainian → Ihnatov Parakeet UK. Other European languages → Parakeet v3. Arabic → Gemma LiteRT (Whisper as second opinion). Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Post-processing") {
@@ -174,9 +175,9 @@ struct ModelsSettingsTab: View {
             // Speech models are managed automatically; this tab manages the
             // Gemma text model (downloaded explicitly — they're big).
             VStack(alignment: .leading, spacing: 4) {
-                Text("Speech-to-text — Parakeet v3/v2 (automatic)")
+                Text("Speech-to-text — Parakeet v3/v2/UK (automatic)")
                     .uiLabel(10, color: AppColor.ink2)
-                Text("Downloaded on first use (~1 GB each) · cached in Application Support · engine choice in the Engines tab")
+                Text("Downloaded on first use (~0.6-1 GB each; Parakeet UK from huggingface.co/ihnatov-yuri) · cached in Application Support · engine choice in the Engines tab")
                     .uiLabel(9, color: AppColor.ink3)
             }
             Hairline()

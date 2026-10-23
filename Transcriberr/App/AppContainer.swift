@@ -105,6 +105,8 @@ final class AppContainer: @unchecked Sendable {
             postProcessTracker: audioPostProcessTracker
         )
 
+        // Before UIPrefs / DictationSettings read the engine choices.
+        if !Self.isTestHost { ParakeetUKModel.adoptMovedEngineChoices() }
         gemmaSettings = GemmaSettingsStore()
         promptStore   = PromptStore()
         presetStore   = PresetStore()
@@ -208,11 +210,13 @@ final class AppContainer: @unchecked Sendable {
         // Pre-warm Parakeet (the default speech-to-text engine). First-ever
         // launch downloads ~1 GB of CoreML models from HuggingFace; after
         // that this is a fast cache load, and every Run/live session starts
-        // instantly. Tests that need an engine load their own.
+        // instantly. Parakeet UK instead of stock when it is the default.
+        // Tests that need an engine load their own.
         if !Self.isTestHost {
+            let warm: BackendFactory.Kind = uiPrefs.defaultBackend == .parakeetUK ? .parakeetUK : .parakeet
             Task { [weak self] in
                 guard let self else { return }
-                let backend = self.backendFactory.backend(for: .parakeet)
+                let backend = self.backendFactory.backend(for: warm)
                 if await !backend.isReady {
                     try? await backend.load(modelPath: nil)
                 }

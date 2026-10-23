@@ -198,7 +198,7 @@ final class LiveTranscriber: @unchecked Sendable {
             return
         }
         self.backend = backend
-        streamsPartials = engine == .parakeet || engine == .parakeetV2
+        streamsPartials = engine.isParakeet
         status = .running
         AppLog.info("live", "started · \(engine.rawValue) · \(streamsPartials ? "streaming" : "phrase by phrase")")
         subscribe(to: source, session: token)

@@ -25,12 +25,18 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// with different weights and the best English WER — a genuinely
     /// distinct second engine for the local dual-ASR ensemble.
     private let version: AsrModelVersion
+    /// v3 weights fine-tuned for Ukrainian (`ParakeetUKModel`), loaded from
+    /// their own folder instead of FluidAudio's stock download.
+    private let ukFineTune: Bool
     private var manager: AsrManager?
 
-    init(version: AsrModelVersion = .v3) {
-        self.version = version
-        self.id = version == .v2 ? "parakeet-v2" : "parakeet-v3"
+    init(version: AsrModelVersion = .v3, ukFineTune: Bool = false) {
+        self.version = ukFineTune ? .v3 : version
+        self.ukFineTune = ukFineTune
+        self.id = ukFineTune ? "parakeet-uk" : version == .v2 ? "parakeet-v2" : "parakeet-v3"
     }
+
+    private var label: String { ukFineTune ? "Parakeet UK" : version == .v2 ? "Parakeet v2" : "Parakeet v3" }
 
     // MARK: - Lifecycle
 
@@ -61,19 +67,34 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// Builds a fresh AsrManager and swaps it in, with no gap where
     /// `manager` is nil.
     private func buildManager(generation gen: Int) async throws {
-        AppLog.info("parakeet", "loading Parakeet \(version == .v2 ? "v2" : "v3") models (downloads ~1 GB on first run)…")
+        AppLog.info("parakeet", "loading \(label) models (downloads ~1 GB on first run)…")
+        // A fine-tune left in the stock folder must move out before stock loads from it.
+        ParakeetUKModel.migrateInPlaceInstall()
         let mgr: AsrManager
         do {
             // The progress handler can fire from any thread.
             let lastLoggedPct = OSAllocatedUnfairLock(initialState: -1)
-            let models = try await AsrModels.downloadAndLoad(version: version) { progress in
-                let pct = Int(progress.fractionCompleted * 100)
+            let logProgress: @Sendable (Double) -> Void = { fraction in
+                let pct = Int(fraction * 100)
                 let shouldLog = lastLoggedPct.withLock { last in
                     guard pct / 10 != last / 10 else { return false }   // log every 10%
                     last = pct
                     return true
                 }
                 if shouldLog { AppLog.info("parakeet", "model download/load \(pct)%") }
+            }
+            let models: AsrModels
+            if ukFineTune {
+                try await ParakeetUKModel.ensureDownloaded(progress: logProgress)
+                models = try await AsrModels.load(from: ParakeetUKModel.modelDirectory, version: .v3)
+                // FluidAudio answers a folder that fails to load by deleting
+                // it and downloading STOCK v3 into it. Never run that as UK.
+                guard ParakeetUKModel.isFineTune(at: ParakeetUKModel.modelDirectory) else {
+                    try? FileManager.default.removeItem(at: ParakeetUKModel.modelDirectory)
+                    throw ASRError.modelLoadFailed(reason: "Parakeet UK files were replaced while loading — removed; they download again on the next load")
+                }
+            } else {
+                models = try await AsrModels.downloadAndLoad(version: version) { logProgress($0.fractionCompleted) }
             }
             mgr = AsrManager(config: .default)
             try await mgr.loadModels(models)
@@ -88,7 +109,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         }
         self.manager = mgr
         self.isReady = true
-        AppLog.info("parakeet", "ready")
+        AppLog.info("parakeet", "\(label) ready")
     }
 
     /// Wedge recovery: build a fresh manager first, then swap it in. The

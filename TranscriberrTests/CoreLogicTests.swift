@@ -211,6 +211,7 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeet, languages: ["English"]), 1)
         XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeetV2, languages: ["Ukrainian"]), 0.5)
         XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeetV2, languages: ["English"]), 1)
+        XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeetUK, languages: ["Ukrainian"]), 1)
         // Multi-language / auto runs carry no prior.
         XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeet, languages: []), 1)
     }

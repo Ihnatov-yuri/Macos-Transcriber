@@ -12,6 +12,7 @@ final class BackendFactory: @unchecked Sendable {
     enum Kind: String, CaseIterable, Sendable {
         case parakeet   = "parakeet-v3"
         case parakeetV2 = "parakeet-v2"
+        case parakeetUK = "parakeet-uk"
         case whisper    = "whisper-large-v3"
         case gemmaLiteRT = "gemma4-litert"
         case ensemble   = "ensemble"
@@ -23,6 +24,7 @@ final class BackendFactory: @unchecked Sendable {
             switch self {
             case .parakeet:   return "\(Self.parakeetV3Name) (local, ANE)"
             case .parakeetV2: return "Parakeet v2 (English, ANE)"
+            case .parakeetUK: return "\(ParakeetUKModel.displayName) (Ukrainian, ANE)"
             case .whisper:
                 // A run pins its model by language; outside one there are two.
                 return WhisperModel.inUse.map { Self.whisperLabel(WhisperModel.model($0)) }
@@ -48,8 +50,8 @@ final class BackendFactory: @unchecked Sendable {
         /// stock files (the folder name is fixed by FluidAudio) names itself with `display_name` in the
         /// folder's config.json; stock has none and stays "Parakeet v3". Read once per launch.
         static let parakeetV3Name: String = {
-            let config = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("FluidAudio/Models/parakeet-tdt-0.6b-v3/config.json")
+            ParakeetUKModel.migrateInPlaceInstall()
+            let config = ParakeetUKModel.stockDirectory.appendingPathComponent("config.json")
             guard let data = try? Data(contentsOf: config),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let name = json["display_name"] as? String, !name.isEmpty
@@ -59,10 +61,12 @@ final class BackendFactory: @unchecked Sendable {
 
         var isLocal: Bool {
             switch self {
-            case .parakeet, .parakeetV2, .whisper, .gemmaLiteRT, .ensemble: return true
+            case .parakeet, .parakeetV2, .parakeetUK, .whisper, .gemmaLiteRT, .ensemble: return true
             default: return false
             }
         }
+        /// The Parakeet family: one FluidAudio graph, different weights.
+        var isParakeet: Bool { self == .parakeet || self == .parakeetV2 || self == .parakeetUK }
         /// Engines that may TRANSCRIBE. Gemma 4 audio is selectable but
         /// EXPERIMENTAL — its 8-bit MLX build was shown to hallucinate; it is
         /// never the default and its display name says so. Gemma's primary
@@ -72,7 +76,7 @@ final class BackendFactory: @unchecked Sendable {
         /// Acoustic models (and the merge wrapper) can't — text work goes to Gemma.
         var supportsTextGeneration: Bool {
             switch self {
-            case .parakeet, .parakeetV2, .whisper, .ensemble: return false
+            case .parakeet, .parakeetV2, .parakeetUK, .whisper, .ensemble: return false
             default: return true
             }
         }
@@ -103,6 +107,7 @@ final class BackendFactory: @unchecked Sendable {
     private let cacheLock = NSLock()
     private var sharedParakeet: ParakeetBackend?
     private var sharedParakeetV2: ParakeetBackend?
+    private var sharedParakeetUK: ParakeetBackend?
     private var sharedWhisper: WhisperBackend?
     private var sharedLiteRT: GemmaLiteRTBackend?
     private var sharedEnsemble: EnsembleBackend?
@@ -134,6 +139,11 @@ final class BackendFactory: @unchecked Sendable {
             let b = ParakeetBackend(version: .v2)
             sharedParakeetV2 = b
             return b
+        case .parakeetUK:
+            if let b = sharedParakeetUK { return b }
+            let b = ParakeetBackend(ukFineTune: true)
+            sharedParakeetUK = b
+            return b
         case .whisper:
             if let b = sharedWhisper { return b }
             let b = WhisperBackend()
@@ -154,23 +164,25 @@ final class BackendFactory: @unchecked Sendable {
         }
     }
 
-    private func takeLocalBackends() -> (EnsembleBackend?, ParakeetBackend?, ParakeetBackend?, WhisperBackend?, GemmaLiteRTBackend?) {
+    private func takeLocalBackends() -> (EnsembleBackend?, ParakeetBackend?, ParakeetBackend?, ParakeetBackend?, WhisperBackend?, GemmaLiteRTBackend?) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        let taken = (sharedEnsemble, sharedParakeet, sharedParakeetV2, sharedWhisper, sharedLiteRT)
+        let taken = (sharedEnsemble, sharedParakeet, sharedParakeetV2, sharedParakeetUK, sharedWhisper, sharedLiteRT)
         sharedEnsemble = nil
         sharedParakeet = nil
         sharedParakeetV2 = nil
+        sharedParakeetUK = nil
         sharedWhisper = nil
         sharedLiteRT = nil
         return taken
     }
 
     func releaseLocalBackends() async {
-        let (ens, p3, p2, whisper, litert) = takeLocalBackends()
+        let (ens, p3, p2, uk, whisper, litert) = takeLocalBackends()
         await ens?.release()
         await p3?.release()
         await p2?.release()
+        await uk?.release()
         await whisper?.release()
         await litert?.release()
     }

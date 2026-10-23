@@ -284,7 +284,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // using the sys track as reference — the echo never reaches
                 // an engine, and the user's speech survives crosstalk.
                 continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
-                let micNeeded = prepareTimeline || params.backend == .parakeet || params.backend == .parakeetV2
+                let micNeeded = prepareTimeline || params.backend.isParakeet
                 let prepared = await Self.cancelEchoAndChunk(
                     mic: &rawMic, sys: sysSamples, decoder: decoder,
                     keepCleanedMic: micNeeded || voiceprint != nil)
@@ -449,7 +449,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         // stay sequential (single engine actor + real context use).
         let pipelineWidth: Int = {
             switch params.backend {
-            case .parakeet, .parakeetV2, .whisper: return 3
+            case .parakeet, .parakeetV2, .parakeetUK, .whisper: return 3
             case .ensemble:
                 // Always pipeline. Max quality no longer serializes chunks —
                 // measured: 98% of chunks agree and never needed context, so

@@ -1419,6 +1419,9 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// The name on the user's lines, as mic chunks get it at parse time.
     /// A nil name would let the self-introduction pass name ME after a
     /// quoted "I'm Joe", and a run starting with it render unnamed.
+    /// The speaker key of a split-track meeting's microphone lines.
+    nonisolated static let micSpeakerKey = "ME"
+
     nonisolated static func meName(_ myName: String?) -> String {
         let n = (myName ?? "").trimmingCharacters(in: .whitespaces)
         return n.isEmpty ? "Me" : n

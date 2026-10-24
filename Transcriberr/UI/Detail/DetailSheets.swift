@@ -2,120 +2,267 @@ import SwiftUI
 
 // MARK: - SpeakerRenameSheet
 
+/// "Who is this?" for one speaker of a recording: the one place to name a
+/// speaker, teach the app their voice, and say two speakers are one person.
+/// Listen plays their first clear line; "Sounds like" ranks saved people by
+/// voice; naming learns the voice too (through the sameness check) unless
+/// switched off.
 struct SpeakerRenameSheet: View {
     let speakerKey: String
     let initialName: String
     let recording: Recording
     let container: AppContainer
+    /// The other speakers of this recording, for "Same person as".
+    var others: [(key: String, display: String)] = []
+    /// Set while stepping through unnamed speakers: Save moves on.
+    var hasNext = false
+    /// Cancel: stops a step-through too (default: close).
+    var onCancel: (() -> Void)? = nil
     let onClose: () -> Void
 
     @State private var name: String
-    @State private var learning = false
-    @State private var voiceNote: String?
-    @State private var voiceFailed = false
+    @State private var learnVoice: Bool
+    @State private var working = false
+    @State private var note: String?
+    @State private var failed = false
+    @State private var soundsLike: [(name: String, score: Float)] = []
+    @State private var listening = true
+    @State private var saved: [String] = []
 
-    init(speakerKey: String, initialName: String, recording: Recording,
-         container: AppContainer, onClose: @escaping () -> Void) {
+    init(speakerKey: String, initialName: String, recording: Recording, container: AppContainer,
+         others: [(key: String, display: String)] = [], hasNext: Bool = false,
+         onCancel: (() -> Void)? = nil, onClose: @escaping () -> Void) {
         self.speakerKey = speakerKey
         self.initialName = initialName
         self.recording = recording
         self.container = container
+        self.others = others
+        self.hasNext = hasNext
+        self.onCancel = onCancel
         self.onClose = onClose
-        _name = State(initialValue: initialName == speakerKey ? "" : initialName)
+        let unnamed = initialName == speakerKey || SpeakerLabel.isPlaceholder(initialName)
+        _name = State(initialValue: unnamed ? "" : initialName)
+        _learnVoice = State(initialValue: speakerKey != TranscriptionRunner.micSpeakerKey)
+    }
+
+    private var trimmed: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var seconds: Double {
+        recording.segments.filter { $0.speaker == speakerKey }.map { $0.endSeconds - $0.startSeconds }.reduce(0, +)
+    }
+    private var firstLine: Double? {
+        recording.segments.filter { $0.speaker == speakerKey }.map(\.startSeconds).min()
+    }
+    private var savedMatch: Person? {
+        PeopleStore.shared.load().first { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }
+    }
+    /// Saved people to pick from, filtered by what is typed.
+    private var picks: [String] {
+        let q = trimmed.lowercased()
+        let names = saved.filter { q.isEmpty || $0.lowercased().contains(q) }
+        return Array(names.filter { $0.caseInsensitiveCompare(trimmed) != .orderedSame }.prefix(6))
     }
 
     var body: some View {
         Sheet {
-            VStack(alignment: .leading, spacing: AppMetric.l) {
-                HStack {
-                    Text("Rename speaker").uiLabel(11)
+            VStack(alignment: .leading, spacing: AppMetric.m) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Who is this?").cardTitle()
                     Spacer()
-                    Text(speakerKey).uiLabel(9, color: AppColor.ink2)
+                    Text("\(SpeakerLabel.display(initialName.isEmpty ? speakerKey : initialName, key: speakerKey)) · \(PersonPage.duration(seconds))")
+                        .uiLabel(9, color: AppColor.ink3)
                 }
-                Hairline()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Display name").uiLabel(9, color: AppColor.ink2)
-                    TextField("e.g. Sarah", text: $name)
-                        .textFieldStyle(.plain)
-                        .font(AppFont.text(15))
-                        .foregroundStyle(AppColor.ink)
-                        .tint(AppColor.accentOnLight)
-                    Hairline()
+                HStack(spacing: AppMetric.s) {
+                    TapButton { listen() } label: {
+                        LitButtonChrome(.secondary, compact: true) { Text("▶ Listen") }
+                    }
+                    .disabled(firstLine == nil)
+                    .help("Play this speaker's first line")
+                    if listening {
+                        ProgressView().controlSize(.small)
+                        Text("Comparing with saved voices…").font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Voice").uiLabel(9, color: AppColor.ink2)
-                    Text("Remember this speaker's voice under the name above. Later recordings then name them on their own.")
-                        .font(AppFont.text(12))
-                        .foregroundStyle(AppColor.ink2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: AppMetric.m) {
-                        TapButton { rememberVoice() } label: {
-                            LitButtonChrome(.secondary, compact: true) {
-                                Text(learning ? "Listening…" : "Remember this voice")
+                if !listening, soundsLike.isEmpty, !saved.isEmpty {
+                    Text("Doesn't sound like anyone saved yet. Name them to start learning their voice.")
+                        .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                }
+                if !soundsLike.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Sounds like").uiLabel(9, color: AppColor.ink2)
+                        HStack(spacing: AppMetric.s) {
+                            ForEach(soundsLike, id: \.name) { s in
+                                TapButton { name = s.name } label: {
+                                    LitButtonChrome(s.name == trimmed ? .primary : .secondary, compact: true) {
+                                        Text("\(s.name) · \(Int((s.score * 100).rounded()))%")
+                                    }
+                                }
                             }
                         }
-                        .disabled(learning)
-                        if learning { PulseDot(diameter: 6) }
-                    }
-                    if let voiceNote {
-                        Text(voiceNote)
-                            .font(AppFont.text(12))
-                            .foregroundStyle(voiceFailed ? AppColor.statusError : AppColor.ink2)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Spacer()
-                HStack {
-                    TapButton { onClose() } label: {
-                        LitButtonChrome(.ghost) { Text("Cancel") }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Name").uiLabel(9, color: AppColor.ink2)
+                    TextField("e.g. Sarah", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                        .font(AppFont.text(15))
+                        .onSubmit { save() }
+                    if !picks.isEmpty {
+                        HStack(spacing: 6) {
+                            ForEach(picks, id: \.self) { n in
+                                TapButton { name = n } label: {
+                                    LitButtonChrome(.ghost, compact: true) { Text(n) }
+                                }
+                            }
+                        }
+                    }
+                }
+                Toggle(isOn: $learnVoice) {
+                    Text(savedMatch != nil
+                         ? "Add this meeting to \(savedMatch!.name)'s voice"
+                         : "Remember their voice, so later recordings name them on their own")
+                        .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
+                }
+                .toggleStyle(.checkbox)
+                .disabled(speakerKey == TranscriptionRunner.micSpeakerKey)
+                if let note {
+                    Text(note).font(AppFont.text(12))
+                        .foregroundStyle(failed ? AppColor.statusError : AppColor.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                HairlineSoft()
+                HStack(spacing: AppMetric.s) {
+                    if !others.isEmpty {
+                        Menu {
+                            ForEach(others, id: \.key) { o in
+                                Button(o.display) { merge(into: o.key) }
+                            }
+                        } label: {
+                            Text("Same person as…").uiLabel(10, color: AppColor.ink2)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("The diarizer split one person in two: join this speaker to another.")
+                    }
+                    if let p = savedMatch {
+                        TapButton {
+                            onClose()
+                            container.requestPeoplePane(person: p.id)
+                        } label: {
+                            LitButtonChrome(.ghost, compact: true) { Text("Open \(p.name)'s page") }
+                        }
                     }
                     Spacer()
+                    TapButton { (onCancel ?? onClose)() } label: { LitButtonChrome(.ghost) { Text("Cancel") } }
                     TapButton { save() } label: {
-                        LitButtonChrome(.primary) { Text("Save") }
+                        LitButtonChrome(.primary) {
+                            Text(working ? "Learning…" : trimmed.isEmpty ? (hasNext ? "Skip" : "Close")
+                                 : hasNext ? "Save & next" : "Save")
+                        }
                     }
+                    .disabled(working)
                 }
             }
             .padding(AppMetric.l)
         }
-        .frame(minWidth: 400, minHeight: 320)
+        .frame(minWidth: 520, minHeight: 380)
+        .task { await compare() }
     }
 
-    /// Learns the voice from this recording and saves it under the typed
-    /// name (added to a saved person of that name), and names the speaker.
-    private func rememberVoice() {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            voiceFailed = true
-            voiceNote = "Type the person's name first."
+    /// Ranks saved people by how much this speaker sounds like them, on
+    /// the clip-level scale the matcher uses.
+    private func compare() async {
+        saved = PeopleStore.shared.load().map(\.name)
+        // Already learned from this meeting: saving again would add it twice.
+        if let p = savedMatch, (p.learnedFrom ?? []).contains(recording.id) { learnVoice = false }
+        defer { listening = false }
+        let people = PeopleStore.shared.load()
+        let me = TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))
+        let mine = VoiceprintStore.load()
+        guard !people.isEmpty || mine != nil, recording.modelContext != nil else { return }
+        let segs = recording.segments.sorted { $0.startSeconds < $1.startSeconds }
+        let src = PeopleVoice.source(for: speakerKey, in: recording, regions: PeopleVoice.regions(segs))
+        guard let samples = try? await AudioDecoder().decodeAll(file: URL(fileURLWithPath: src.path)),
+              let clusters = try? await PeopleVoice.clusterEmbeddings(samples: samples, regions: src.regions, only: [speakerKey]),
+              let clips = clusters[speakerKey], !clips.isEmpty else { return }
+        // The user's own voice is a candidate too: a speaker that is really
+        // them gets their name, not a new person.
+        let voices = people.map { ($0.name, $0.print.centroid) } + (mine.map { [(me, $0.centroid)] } ?? [])
+        soundsLike = voices.map { v in
+            (v.0, ClusterVoice.median(clips.map { VoiceActivity.cosine($0, v.1) }))
+        }
+        .filter { $0.1 >= VoiceActivity.offThreshold }
+        .sorted { $0.1 > $1.1 }
+        .prefix(3).map { ($0.0, $0.1) }
+        // The clearest match goes straight into an empty name field.
+        if trimmed.isEmpty, let best = soundsLike.first, best.score >= VoiceActivity.onThreshold { name = best.name }
+    }
+
+    private func listen() {
+        guard let t = firstLine else { return }
+        container.audioPlayer.seek(to: t)
+        container.audioPlayer.play()
+    }
+
+    private func merge(into other: String) {
+        try? container.repository.mergeSpeakers(speakerKey, into: other, in: recording)
+        try? TranscriptExporter.export(recording: recording)
+        onClose()
+    }
+
+    /// Names the speaker; with "remember" on, learns the voice from this
+    /// meeting too. A voice the sameness check refuses is not added, and
+    /// the speaker stays named: the user said who it is.
+    private func save() {
+        guard !working else { return }
+        // Skipping an unnamed speaker leaves them as they are.
+        if trimmed.isEmpty, SpeakerLabel.isPlaceholder(initialName) || initialName == speakerKey || initialName.isEmpty {
+            onClose()
             return
         }
-        guard !learning else { return }
-        learning = true
-        voiceNote = nil
-        Task { @MainActor in
-            defer { learning = false }
-            do {
-                let print = try await PeopleVoice.learn(speaker: speakerKey, in: recording)
-                let person = try PeopleStore.shared.remember(print, as: trimmed)
-                try container.repository.setSpeakerName(person.name, for: speakerKey, in: recording)
-                try? TranscriptExporter.export(recording: recording)
-                voiceFailed = false
-                voiceNote = person.sources == 1
-                    ? "Saved \(person.name)'s voice (\(Int(print.seconds)) s of speech)."
-                    : "Added to \(person.name)'s voice, now learned from \(person.sources) recordings."
-            } catch {
-                voiceFailed = true
-                voiceNote = error.localizedDescription
-            }
-        }
-    }
-
-    private func save() {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The user's own name: named, never learned as a "person".
+        let meName = TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))
+        if trimmed.caseInsensitiveCompare(meName) == .orderedSame { learnVoice = false }
         let value: String? = trimmed.isEmpty ? nil : trimmed
         try? container.repository.setSpeakerName(value, for: speakerKey, in: recording)
         try? TranscriptExporter.export(recording: recording)
-        onClose()
+        guard let value, learnVoice, speakerKey != TranscriptionRunner.micSpeakerKey else { onClose(); return }
+        working = true
+        note = nil
+        Task { @MainActor in
+            defer { working = false }
+            let id = recording.id
+            let before = PeopleVoice.signature(recording)
+            do {
+                let print = try await PeopleVoice.learn(speaker: speakerKey, in: recording)
+                guard recording.modelContext != nil, PeopleVoice.signature(recording) == before else {
+                    failed = true
+                    note = "The transcript changed while the voice was read. Named, but the voice was not added."
+                    return
+                }
+                try PeopleStore.shared.remember(print, as: value, from: id)
+                onClose()
+            } catch {
+                failed = true
+                note = "Named \(value). The voice was not added: \(error.localizedDescription)"
+            }
+        }
+    }
+}
+
+/// How a speaker key reads when no one has named it.
+enum SpeakerLabel {
+    /// "SPEAKER_01" reads as "Speaker 2"; "GUEST" as "Guest".
+    static func display(_ name: String?, key: String) -> String {
+        if let name, !name.isEmpty, name != key { return name }
+        if key.hasPrefix("SPEAKER_"), let n = Int(key.dropFirst("SPEAKER_".count)) { return "Speaker \(n + 1)" }
+        if key == "GUEST" { return "Guest" }
+        if key == TranscriptionRunner.micSpeakerKey { return "You" }
+        return key
+    }
+
+    static func isPlaceholder(_ name: String) -> Bool {
+        name.hasPrefix("SPEAKER_") || name == "GUEST" || name.hasPrefix(RecordingRepository.taggedKeyPrefix)
     }
 }
 
@@ -278,13 +425,15 @@ struct SplitRecordingSheet: View {
                     // background and then surprises the user with a
                     // delete-confirmation alert for an action they
                     // thought they'd called off.
-                    .allowsHitTesting(!isWorking)
+                    // .disabled, not hit-testing only: an accessibility
+                    // press went straight past .allowsHitTesting.
+                    .disabled(isWorking)
                     .opacity(isWorking ? 0.4 : 1)
                     Spacer()
                     TapButton { split() } label: {
                         LitButtonChrome(.primary) { Text(isWorking ? "Splitting…" : "Split") }
                     }
-                    .allowsHitTesting(!isWorking)
+                    .disabled(isWorking)
                 }
             }
             .padding(AppMetric.l)
@@ -293,6 +442,7 @@ struct SplitRecordingSheet: View {
     }
 
     private func split() {
+        guard !isWorking else { return }
         guard let secs = Self.parse(timeText) else {
             error = "Enter a time as mm:ss."
             return

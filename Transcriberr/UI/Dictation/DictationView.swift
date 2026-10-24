@@ -26,7 +26,7 @@ struct DictationView: View {
                     InkRule()
                     Spacer().frame(height: AppMetric.l)
 
-                    SectionIndex(3, "Dictate", summary: summary(controller))
+                    SectionIndex(4, "Dictate", summary: summary(controller))
                         .padding(.horizontal, AppMetric.sheetPadding)
 
                     Spacer().frame(height: AppMetric.l)

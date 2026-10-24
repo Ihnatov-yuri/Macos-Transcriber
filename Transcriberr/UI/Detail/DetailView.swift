@@ -5,6 +5,11 @@ import SwiftData
 struct DetailView: View {
     let recording: Recording
     var onClose: () -> Void = {}
+    /// Seconds to open the player at (from the person page).
+    var startAt: Double? = nil
+    /// A person whose lines are marked (opened from their page).
+    var focusName: String? = nil
+    @State private var focus: String?
     @Environment(AppContainer.self) private var container
     @Query(sort: \Folder.sortOrder) private var allFolders: [Folder]
 
@@ -21,11 +26,15 @@ struct DetailView: View {
     @State private var runExpanded = false
     @State private var editingSegment: Segment?
     @State private var renamingSpeaker: String?
+    /// Unnamed speakers still to go after the one being named ("Name them").
+    @State private var namingQueue: [String] = []
     @State private var showingSplit = false
     @State private var findingPeople = false
+    @State private var confirmingDelete = false
     /// Read on appear and on change, never per render: it is a file.
     @State private var hasPeople = false
     @State private var peopleNames: [String] = []
+    @State private var savedPeople: [(id: UUID, name: String)] = []
     @State private var peopleNote: String?
 
     /// Transcript, then one tab per post-processing preset in Settings
@@ -76,7 +85,27 @@ struct DetailView: View {
                 Sheet { ProgressView().padding() }
             }
         }
+        .confirmationDialog("Delete “\(recording.title)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                // Same reasoning as the library's Delete: a run still
+                // streaming into this recording must not outlive it.
+                container.jobManager.cancel(recording.id)
+                try? container.repository.delete(recording)
+                onClose()
+            }
+        } message: {
+            Text("The transcript, outputs and versions are removed from Transcriberr. The audio file stays on disk.")
+        }
         .task(id: recording.id) {
+            focus = focusName
+            // Recordings named before 5.0 may still show one person as two
+            // speakers of the same name.
+            if (try? container.repository.foldSameNamedSpeakers(in: recording)) ?? 0 > 0 {
+                try? TranscriptExporter.export(recording: recording)
+            }
+            // Another recording's Find people must not report here.
+            findingPeople = false
+            peopleNote = nil
             if model?.recording.id != recording.id {
                 model = DetailModel(container: container, recording: recording)
                 tab = .transcript
@@ -110,7 +139,7 @@ struct DetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
                 tabStrip()
-                PlayerBar(recording: recording)
+                PlayerBar(recording: recording, startAt: startAt)
                 if !fullscreen { HairlineSoft() }
                 tabContent(model)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -131,8 +160,17 @@ struct DetailView: View {
                     speakerKey: key,
                     initialName: currentSpeakerName(key),
                     recording: recording,
-                    container: container
-                ) { renamingSpeaker = nil }
+                    container: container,
+                    others: uniqueSpeakers().filter { $0.key != key },
+                    hasNext: !namingQueue.isEmpty,
+                    onCancel: { namingQueue = []; renamingSpeaker = nil }
+                ) {
+                    // Saved: on to the next unnamed speaker, if stepping through.
+                    if namingQueue.isEmpty { renamingSpeaker = nil } else { renamingSpeaker = namingQueue.removeFirst() }
+                }
+                // A fresh sheet per speaker, or the name typed for the
+                // previous one would carry over.
+                .id(key)
             }
         }
         .sheet(isPresented: $showingSplit) {
@@ -160,38 +198,85 @@ struct DetailView: View {
     private func speakerChipRow() -> some View {
         let speakers = uniqueSpeakers()
         if !speakers.isEmpty {
+            let words = wordsBySpeaker()
+            let total = max(1, words.values.reduce(0, +))
+            // Who still needs a name: anyone the diarizer found who says
+            // enough to matter, never the microphone (that is the user).
+            let unnamed = speakers.filter {
+                $0.key != TranscriptionRunner.micSpeakerKey && isUnnamed($0) && (words[$0.key] ?? 0) >= 40
+            }
             VStack(alignment: .leading, spacing: 0) {
-                FlowLayout(spacing: 10) {
+                if !unnamed.isEmpty, !(model?.isRunning ?? false) {
+                    HStack(spacing: AppMetric.s) {
+                        Rectangle().fill(AppColor.accent).frame(width: 3, height: 14)
+                        Text(unnamed.count == 1 ? "1 person in this meeting isn't named yet"
+                             : "\(unnamed.count) people in this meeting aren't named yet")
+                            .uiLabel(10)
+                        Spacer()
+                        TapButton {
+                            namingQueue = Array(unnamed.dropFirst().map(\.key))
+                            renamingSpeaker = unnamed.first?.key
+                        } label: {
+                            LitButtonChrome(.secondary, compact: true) { Text("Name them") }
+                        }
+                    }
+                    .padding(.horizontal, AppMetric.sheetPadding)
+                    .padding(.vertical, 6)
+                    .background(AppColor.accent.opacity(0.06))
+                    HairlineSoft()
+                }
+                FlowLayout(spacing: 8) {
                     ForEach(speakers, id: \.key) { entry in
-                        TapButton { renamingSpeaker = entry.key } label: {
+                        let named = !isUnnamed(entry)
+                        let recognised = savedPerson(named: entry.display) != nil
+                        let share = Int((100 * Double(words[entry.key] ?? 0) / Double(total)).rounded())
+                        TapButton { namingQueue = []; renamingSpeaker = entry.key } label: {
                             HStack(spacing: 6) {
                                 Rectangle()
                                     .fill(speakerColor(for: entry.key))
                                     .frame(width: 7, height: 7)
-                                Text(entry.display)
-                                    .uiLabel(9)
+                                Text(named ? entry.display : "\(SpeakerLabel.display(nil, key: entry.key)) · who?")
+                                    .uiLabel(10, color: named ? AppColor.ink : AppColor.accentOnLight)
+                                if recognised {
+                                    Text("✓").uiLabel(9, color: AppColor.statusSuccess)
+                                        .accessibilityLabel("voice saved")
+                                }
+                                Text("\(share)%").uiLabel(9, color: AppColor.ink3)
                             }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.white.opacity(0.6)))
                         }
+                        .help(recognised ? "\(entry.display): voice saved. Click to rename, listen, or open their page."
+                              : named ? "\(entry.display): named, voice not saved yet. Click to save it."
+                              : "Who is this? Click to listen and name them.")
                         .contextMenu {
+                            if let person = savedPerson(named: entry.display) {
+                                Button("Open \(person.name)'s page") {
+                                    container.requestPeoplePane(person: person.id)
+                                }
+                                Divider()
+                            }
                             // The last 10% of diarization errors are fixed by
                             // a human in two clicks, not by a better clusterer.
                             ForEach(speakers.filter { $0.key != entry.key }, id: \.key) { other in
-                                Button("Merge into \(other.display)") {
+                                Button("Same person as \(other.display)") {
                                     guard let repo = model?.container.repository else { return }
                                     try? repo.mergeSpeakers(
                                         entry.key, into: other.key, in: recording)
                                 }
                             }
                         }
-
                     }
-                    Text("Click a speaker to rename or remember their voice ↗").uiLabel(9, color: AppColor.ink3)
                     if hasPeople {
                         TapButton { findPeople() } label: {
-                            Text(findingPeople ? "Finding people…" : (peopleNote ?? "Find people ↗"))
+                            Text(findingPeople ? "Finding people…" : (peopleNote ?? "Find saved people ↗"))
                                 .uiLabel(9, color: findingPeople ? AppColor.ink3 : AppColor.accentOnLight)
                         }
-                        .help("Name this recording's speakers after the people saved in Settings.")
+                        // Not mid-run: the speakers it would name are about
+                        // to be replaced by the run's own.
+                        .disabled(model?.isRunning ?? false)
+                        .help("Name this recording's speakers after the people saved in People, by voice.")
                     }
                 }
                 .padding(.horizontal, AppMetric.sheetPadding)
@@ -225,7 +310,8 @@ struct DetailView: View {
     }
 
     private func loadPeople() {
-        peopleNames = PeopleStore.shared.load().map(\.name)
+        savedPeople = PeopleStore.shared.load().map { (id: $0.id, name: $0.name) }
+        peopleNames = savedPeople.map(\.name)
         hasPeople = !peopleNames.isEmpty
     }
 
@@ -265,13 +351,25 @@ struct DetailView: View {
     private func findPeople() {
         guard !findingPeople, let repo = model?.container.repository else { return }
         findingPeople = true
+        let id = recording.id
         Task { @MainActor in
-            let named = await PeopleNamer.apply(to: recording, repository: repo)
-            if named > 0 { try? TranscriptExporter.export(recording: recording) }
+            let rec = recording
+            let named = await PeopleNamer.apply(to: rec, repository: repo)
+            if named > 0, rec.modelContext != nil { try? TranscriptExporter.export(recording: rec) }
+            // The user may have moved to another recording meanwhile: the
+            // live model, not this view's captured `recording`, says which.
+            guard model?.recording.id == id else { return }
             peopleNote = named == 0 ? "No saved person found ↗"
                 : named == 1 ? "1 speaker named ↗" : "\(named) speakers named ↗"
             findingPeople = false
         }
+    }
+
+    /// The saved person a speaker is named after, if any.
+    /// From the list read on appear: the chip menus are built on every
+    /// render (once per chunk during a run), too often to read a file.
+    private func savedPerson(named name: String) -> (id: UUID, name: String)? {
+        savedPeople.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
     private func uniqueSpeakers() -> [(key: String, display: String)] {
@@ -280,11 +378,24 @@ struct DetailView: View {
         for s in recording.segments {
             guard let key = s.speaker else { continue }
             if seen[key] == nil {
-                seen[key] = s.speakerName ?? key
+                seen[key] = SpeakerLabel.display(s.speakerName, key: key)
                 order.append(key)
             }
         }
         return order.map { ($0, seen[$0] ?? $0) }
+    }
+
+    /// No name of its own: still "Speaker 2" or "Guest".
+    private func isUnnamed(_ entry: (key: String, display: String)) -> Bool {
+        let name = recording.segments.first { $0.speaker == entry.key }?.speakerName
+        return name == nil || name!.isEmpty || name == entry.key || SpeakerLabel.isPlaceholder(name!)
+    }
+
+    /// Words each speaker said: the talk share on their chip.
+    private func wordsBySpeaker() -> [String: Int] {
+        var out: [String: Int] = [:]
+        for s in recording.segments { if let k = s.speaker { out[k, default: 0] += s.text.split(separator: " ").count } }
+        return out
     }
 
     private func currentSpeakerName(_ key: String) -> String {
@@ -302,6 +413,9 @@ struct DetailView: View {
     // MARK: - Copy / Share / Rename
 
     private func copyTranscript() {
+        // Nothing to copy must not wipe the clipboard (an accessibility
+        // press reaches this even where the click was blocked).
+        guard hasTranscript else { return }
         let body = recording.segments
             .sorted { $0.startSeconds < $1.startSeconds }
             .map { seg -> String in
@@ -410,7 +524,7 @@ struct DetailView: View {
                         lineWidth: 1
                     ))
             }
-            .allowsHitTesting(hasTranscript)
+            .disabled(!hasTranscript)
 
             // Share menu — shows .txt / .srt / .json / audio targets and a
             // catch-all "Share via…" that opens NSSharingServicePicker.
@@ -472,13 +586,7 @@ struct DetailView: View {
                 Button("Rename recording…") {
                     renameRecordingPrompt()
                 }
-                Button("Delete recording", role: .destructive) {
-                    // Same reasoning as the library's Delete: a run still
-                    // streaming into this recording must not outlive it.
-                    container.jobManager.cancel(recording.id)
-                    try? container.repository.delete(recording)
-                    onClose()
-                }
+                Button("Delete recording…", role: .destructive) { confirmingDelete = true }
             } label: {
                 Text("More ⋯").uiLabel(11, color: AppColor.ink2)
             }
@@ -501,7 +609,6 @@ struct DetailView: View {
             Spacer().frame(height: AppMetric.l)
 
             HStack(spacing: 0) {
-                Text("03 / ").uiLabel(11, color: AppColor.accentOnLight)
                 Text("Session").uiLabel(11)
                 Spacer()
             }
@@ -552,7 +659,7 @@ struct DetailView: View {
         // streamed chunk — and it is the same data SwiftData is already
         // keeping up to date for the rest of the screen.
         Menu {
-            ForEach(allFolders.filter { $0.id != recording.folder?.id }, id: \.id) { folder in
+            ForEach(allFolders.filter { $0.id != recording.folder?.id && !$0.isDictation }, id: \.id) { folder in
                 Button(folder.name) {
                     try? container.repository.move(recording, to: folder)
                 }
@@ -586,8 +693,9 @@ struct DetailView: View {
                 out.append(lang)
             }
             let speakers = Set(recording.segments.compactMap { $0.speaker }).count
-            if speakers > 0 { out.append("\(speakers) speakers") }
-            out.append("\(recording.segments.count) turns")
+            if speakers > 0 { out.append(speakers == 1 ? "1 speaker" : "\(speakers) speakers") }
+            let turns = recording.segments.count
+            out.append(turns == 1 ? "1 turn" : "\(turns) turns")
             if let mc = MeetingContext.decode(recording.meetingContextJSON) {
                 var s = "Invite: \(mc.title)"
                 if !mc.attendees.isEmpty { s += " · \(mc.attendees.count) people" }
@@ -943,10 +1051,15 @@ struct DetailView: View {
                     // per row walked the SwiftData segments relationship
                     // hundreds of times mid-update and segfaulted SwiftData.
                     SpeakerPalette.colors[(order.firstIndex(of: key) ?? 0) % SpeakerPalette.colors.count]
-                }
+                },
+                focusName: focus,
+                onClearFocus: { focus = nil }
             )
         case .output(let presetId, _):
+            // Its own identity per preset and recording: History open on
+            // Summary must not carry over to Minutes or another recording.
             OutputPane(model: model, presetId: presetId)
+                .id("\(presetId)-\(recording.id)")
         case .versions:
             VersionsPane(model: model)
         }
@@ -999,8 +1112,8 @@ extension DetailView {
 
 private struct VersionsPane: View {
     let model: DetailModel
-    @Environment(\.modelContext) private var context
     @State private var expandedId: UUID?
+    @State private var deletingVersion: TranscriptVersion?
 
     private var versions: [TranscriptVersion] {
         model.recording.versions.sorted { $0.createdAtMillis > $1.createdAtMillis }
@@ -1020,6 +1133,17 @@ private struct VersionsPane: View {
                     }
                 }
             }
+        }
+        .confirmationDialog("Delete this version?",
+                            isPresented: Binding(get: { deletingVersion != nil }, set: { if !$0 { deletingVersion = nil } }),
+                            titleVisibility: .visible, presenting: deletingVersion) { v in
+            Button("Delete", role: .destructive) {
+                expandedId = nil
+                guard !model.recording.isDeleted else { return }
+                try? model.container.repository.deleteVersion(v, from: model.recording)
+            }
+        } message: { _ in
+            Text("This saved transcript is removed. The current transcript stays as it is.")
         }
     }
 
@@ -1079,12 +1203,11 @@ private struct VersionsPane: View {
                             .padding(.vertical, 4)
                             .overlay(Rectangle().stroke(AppColor.accent.opacity(0.6), lineWidth: 1))
                     }
-                    TapButton {
-                        expandedId = nil
-                        model.recording.versions.removeAll { $0.id == v.id }
-                        context.delete(v)
-                        try? context.save()
-                    } label: {
+                    // A run in flight writes into the current transcript: a
+                    // restore now would be mixed with it or overwritten.
+                    .disabled(model.isRunning)
+                    .help(model.isRunning ? "Wait for the run to finish, then restore." : "")
+                    TapButton { deletingVersion = v } label: {
                         Text("Delete")
                             .uiLabel(9, color: AppColor.ink2)
                             .padding(.horizontal, AppMetric.s)
@@ -1128,6 +1251,14 @@ struct TranscriptPane: View {
     /// reading (the Int is the dispute's index in `recording.disputesJSON`).
     var onPickAlternative: (Segment, Int) -> Void = { _, _ in }
     var speakerColor: (String) -> Color = { _ in SpeakerPalette.colors[0] }
+    /// A person whose lines are marked, with a bar to step through them.
+    var focusName: String? = nil
+    var onClearFocus: () -> Void = {}
+
+    private func isFocused(_ seg: Segment) -> Bool {
+        guard let focusName else { return false }
+        return seg.speakerName?.caseInsensitiveCompare(focusName) == .orderedSame
+    }
 
     /// Super's disputed words per segment, in playback order (a dispute
     /// shows in the first segment it matches), with the text they were found
@@ -1177,8 +1308,11 @@ struct TranscriptPane: View {
     }
 
     /// Last segment ID that contains the current playhead — used to auto-scroll.
+    /// The line playing now: the latest to start among those that contain
+    /// the playhead, so none is lit in a silence or after the last line.
     private func activeID(in segs: [Segment]) -> UUID? {
-        segs.last { player.currentTime >= $0.startSeconds }?.id
+        let t = player.currentTime
+        return segs.last { t >= $0.startSeconds && t <= $0.endSeconds + 0.25 }?.id
     }
 
     /// ID of the most recently transcribed segment — for live auto-scroll.
@@ -1246,12 +1380,20 @@ struct TranscriptPane: View {
                 HairlineSoft()
             }
             let segs = sortedSegments
+            if let focusName {
+                focusBar(focusName, starts: segs.filter(isFocused).map(\.startSeconds))
+                HairlineSoft()
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        // One playing line: the latest to start. Padded mic lines
+                        // overlap the call's, and "contains the playhead" lit
+                        // up to three rows at once.
+                        let playing = activeID(in: segs)
                         ForEach(segs, id: \.id) { seg in
                             HairlineSoft()
-                            segmentRow(seg, disputes: disputeRows[seg.id]).id(seg.id)
+                            segmentRow(seg, disputes: disputeRows[seg.id], active: seg.id == playing).id(seg.id)
                         }
                         HairlineSoft()
                         // Sentinel so we can scroll just past the last row.
@@ -1320,9 +1462,9 @@ struct TranscriptPane: View {
         return Text(attr)
     }
 
-    private func segmentRow(_ seg: Segment, disputes: DisputeRow? = nil) -> some View {
+    private func segmentRow(_ seg: Segment, disputes: DisputeRow? = nil, active: Bool) -> some View {
         let hits = disputes?.hits ?? []
-        let active = player.currentTime >= seg.startSeconds && player.currentTime <= seg.endSeconds
+        let focused = isFocused(seg)
         return HStack(alignment: .top, spacing: AppMetric.s) {
             VStack(alignment: .leading, spacing: 1) {
                 if showTimestamps {
@@ -1339,10 +1481,10 @@ struct TranscriptPane: View {
                 Menu {
                     tagMenu(seg)
                 } label: {
-                    if let name = seg.speakerName ?? seg.speaker {
+                    if seg.speakerName != nil || seg.speaker != nil {
                         HStack(spacing: 6) {
                             Rectangle().fill(speakerColor(seg.speaker ?? "")).frame(width: 5, height: 5)
-                            Text(name).uiLabel(9, color: AppColor.accentOnLight)
+                            Text(SpeakerLabel.display(seg.speakerName, key: seg.speaker ?? "")).uiLabel(9, color: AppColor.accentOnLight)
                         }
                     } else {
                         Text("Who said this?").uiLabel(9, color: AppColor.ink3)
@@ -1354,7 +1496,8 @@ struct TranscriptPane: View {
                 .help("Tag who said this line")
                 segmentText(seg, disputes: disputes)
                     .font(AppFont.text(15))
-                    .foregroundStyle(AppColor.ink)
+                    // Everyone else steps back while one person is marked.
+                    .foregroundStyle(focusName == nil || focused ? AppColor.ink : AppColor.ink3)
                     .tint(AppColor.ink)
                     // Not selectable: on macOS a selectable Text takes the
                     // mouse-down for itself, so a click on the words started
@@ -1373,8 +1516,11 @@ struct TranscriptPane: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 10)
-        .padding(.horizontal, 2)
-        .background(active ? AppColor.accent.opacity(0.16) : Color.clear)
+        .padding(.horizontal, focused ? 8 : 2)
+        .background(active ? AppColor.accent.opacity(0.16) : focused ? AppColor.accent.opacity(0.07) : Color.clear)
+        .overlay(alignment: .leading) {
+            if focused { Rectangle().fill(AppColor.accent).frame(width: 3) }
+        }
         .contentShape(Rectangle())
         .onTapGesture { player.seek(to: seg.startSeconds) }
         .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in onEditSegment(seg) })
@@ -1387,6 +1533,40 @@ struct TranscriptPane: View {
             }
             Button("Edit text…") { onEditSegment(seg) }
         }
+    }
+
+    /// "Lana's lines are marked": how many, and a way to step through them
+    /// (the transcript follows the playhead) or show everyone again.
+    private func focusBar(_ name: String, starts: [Double]) -> some View {
+        HStack(spacing: AppMetric.m) {
+            Rectangle().fill(AppColor.accent).frame(width: 3, height: 14)
+            Text("\(name)'s lines are marked").uiLabel(10)
+            Text(starts.count == 1 ? "1 line" : "\(starts.count) lines").uiLabel(9, color: AppColor.ink3)
+            Spacer()
+            TapButton { jump(in: starts, forward: false) } label: {
+                LitButtonChrome(.ghost, compact: true) { Text("Previous") }
+            }
+            .disabled(starts.isEmpty)
+            TapButton { jump(in: starts, forward: true) } label: {
+                LitButtonChrome(.ghost, compact: true) { Text("Next") }
+            }
+            .disabled(starts.isEmpty)
+            TapButton { onClearFocus() } label: {
+                LitButtonChrome(.secondary, compact: true) { Text("Show all") }
+            }
+            .help("Stop marking \(name)'s lines")
+        }
+        .padding(.horizontal, AppMetric.sheetPadding)
+        .padding(.vertical, 6)
+        .background(AppColor.base)
+    }
+
+    private func jump(in starts: [Double], forward: Bool) {
+        let now = player.currentTime
+        let target = forward
+            ? starts.first { $0 > now + 0.5 } ?? starts.first
+            : starts.last { $0 < now - 0.5 } ?? starts.last
+        if let target { player.seek(to: target) }
     }
 
     /// The speakers of this recording, then saved people who are not one of

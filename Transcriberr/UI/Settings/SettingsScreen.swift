@@ -20,7 +20,7 @@ struct SettingsScreen: View {
                     InkRule()
                     Spacer().frame(height: AppMetric.l)
 
-                    SectionIndex(4, "Settings",
+                    SectionIndex(5, "Settings",
                                  summary: "Per-recording overrides live in the Library detail Run sheet. Everything here is global defaults.")
                         .padding(.horizontal, AppMetric.sheetPadding)
 

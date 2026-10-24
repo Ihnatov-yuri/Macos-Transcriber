@@ -184,7 +184,7 @@ struct SpeakerRenameSheet: View {
     /// that here, and that cannot be split again from this sheet.
     private var mismatch: String? {
         guard !listening, let p = savedMatch, !scores.isEmpty,
-              (scores[p.name] ?? 0) < VoiceActivity.offThreshold else { return nil }
+              (scores[p.name] ?? 0) < PeopleMatch.offThreshold else { return nil }
         let alsoHere = recording.segments.contains {
             $0.speaker != speakerKey && $0.speakerName?.caseInsensitiveCompare(p.name) == .orderedSame
         }
@@ -217,11 +217,11 @@ struct SpeakerRenameSheet: View {
         }
         scores = Dictionary(all, uniquingKeysWith: { max($0, $1) })
         soundsLike = all
-        .filter { $0.1 >= VoiceActivity.offThreshold }
+        .filter { $0.1 >= PeopleMatch.offThreshold }
         .sorted { $0.1 > $1.1 }
         .prefix(3).map { ($0.0, $0.1) }
         // The clearest match goes straight into an empty name field.
-        if trimmed.isEmpty, let best = soundsLike.first, best.score >= VoiceActivity.onThreshold { name = best.name }
+        if trimmed.isEmpty, let best = soundsLike.first, best.score >= PeopleMatch.onThreshold { name = best.name }
     }
 
     private func listen() {

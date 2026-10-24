@@ -6,6 +6,7 @@ import SwiftData
 /// this Mac and leaves names already in recordings as they are.
 struct PeopleSection: View {
     @Environment(AppContainer.self) private var container
+    @AppStorage(PeopleMatch.keepLearningKey) private var keepLearning = true
     @State private var people = PeopleStore.shared.load()
     @State private var editing: UUID?
     @State private var draft = ""
@@ -24,6 +25,14 @@ struct PeopleSection: View {
                 .font(AppFont.text(11))
                 .foregroundStyle(AppColor.ink2)
                 .frame(maxWidth: 520, alignment: .leading)
+
+            Toggle(isOn: $keepLearning) {
+                Text("Keep learning from meetings: a clear match adds that meeting to the person's voice, so the people you meet often get easier to find.")
+                    .font(AppFont.text(11)).foregroundStyle(AppColor.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .toggleStyle(.checkbox)
+            .frame(maxWidth: 520, alignment: .leading)
 
             HStack(spacing: AppMetric.s) {
                 TapButton { adding = true } label: {

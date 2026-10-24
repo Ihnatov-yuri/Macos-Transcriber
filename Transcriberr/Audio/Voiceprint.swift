@@ -272,7 +272,15 @@ actor VoiceEmbedder {
         wp.update(repeating: 0, count: slots * modelSamples)
         mp.update(repeating: 0, count: slots * maskFrames)
         let part = modelSamples / slots
-        for (k, clip) in clips.enumerated() where !clip.isEmpty {
+        // Every third carries audio. An empty third left at zero changed
+        // the others' embeddings: a lone window beside two silent thirds
+        // scored -0.01-0.31 against its true embedding (benchmark,
+        // 2026-10-24), so a batch of 3n+1 or 3n+2 clips gave one or two
+        // garbage embeddings. The spare thirds repeat the batch's own clips
+        // and their outputs are dropped.
+        let voiced = clips.filter { !$0.isEmpty }
+        for k in 0..<slots where !voiced.isEmpty {
+            let clip = k < clips.count && !clips[k].isEmpty ? clips[k] : voiced[k % voiced.count]
             let row = wp.advanced(by: k * part)
             var filled = 0
             while filled < part {
@@ -280,6 +288,7 @@ actor VoiceEmbedder {
                 clip.withUnsafeBufferPointer { row.advanced(by: filled).update(from: $0.baseAddress!, count: n) }
                 filled += n
             }
+            guard k < clips.count, !clips[k].isEmpty else { continue }
             let lo = k * maskFrames / slots + maskMargin
             let hi = (k + 1) * maskFrames / slots - maskMargin
             mp.advanced(by: k * maskFrames + lo).update(repeating: 1, count: hi - lo)
@@ -450,11 +459,15 @@ enum ClusterVoice {
     /// 0.32; two clusters both near the threshold are one voice split in
     /// two or a voice like the user's, and neither is named.
     static let margin: Float = 0.10
+    /// The user's cluster on 3 s clips (2026-10-24): the user 0.53 at the
+    /// least, every other voice at most 0.36. The 1.5 s target-speaker gate
+    /// keeps VoiceActivity's 0.40.
+    static let userOnThreshold: Float = 0.45
 
     /// Sample ranges (16 kHz) to embed per cluster.
     static func clipRanges(_ regions: [DiarizationRunner.SpeakerSegment],
-                           sampleCount: Int) -> [String: [Range<Int>]] {
-        let rate = VoiceActivity.sampleRate, win = VoiceActivity.window
+                           sampleCount: Int, window: Double = VoiceActivity.window) -> [String: [Range<Int>]] {
+        let rate = VoiceActivity.sampleRate, win = window
         var byCluster: [String: [ClosedRange<Double>]] = [:]
         for r in regions where r.endSeconds > r.startSeconds {
             byCluster[r.speakerId, default: []].append(r.startSeconds...r.endSeconds)
@@ -488,7 +501,7 @@ enum ClusterVoice {
     static func compute(samples: [Float], regions: [DiarizationRunner.SpeakerSegment],
                         print: Voiceprint) async throws -> [String: Float] {
         let floor = VoiceActivity.speechFloor(samples)
-        let ranges = clipRanges(regions, sampleCount: samples.count)
+        let ranges = clipRanges(regions, sampleCount: samples.count, window: PeopleMatch.clipSeconds)
             .mapValues { $0.filter { VoiceActivity.rms(samples[$0]) >= floor } }
             .filter { $0.value.count >= minClips }
         let keys = ranges.keys.sorted()
@@ -505,11 +518,11 @@ enum ClusterVoice {
     }
 
     /// The cluster that is the user: the best median at or above
-    /// `VoiceActivity.onThreshold`, `margin` clear of the runner-up. Nil
+    /// `userOnThreshold`, `margin` clear of the runner-up. Nil
     /// when no cluster sounds like the user, or two do.
     static func user(in scores: [String: Float]) -> String? {
         let ranked = scores.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
-        guard let best = ranked.first, best.value >= VoiceActivity.onThreshold else { return nil }
+        guard let best = ranked.first, best.value >= userOnThreshold else { return nil }
         if ranked.count > 1, best.value - ranked[1].value < margin { return nil }
         return best.key
     }

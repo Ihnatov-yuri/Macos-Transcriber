@@ -129,9 +129,12 @@ enum VoiceSuggestions {
             .filter { $0.members.count >= minMeetings }
             .filter { g in
                 // A voice like a saved person's is theirs to confirm on
-                // their page; one like the user's is the user.
-                !people.contains { VoiceActivity.cosine($0.centroid, g.centroid) >= PeopleMatch.onThreshold }
-                    && (me.map { VoiceActivity.cosine($0, g.centroid) < PeopleMatch.onThreshold } ?? true)
+                // their page; one like the user's is the user. Centroid
+                // against centroid, so on the grouping scale: centroids
+                // score higher than a speaker's clips do (Lana and Iryna
+                // 0.57 here, 0.41 clip by clip).
+                !people.contains { VoiceActivity.cosine($0.centroid, g.centroid) >= sameVoice }
+                    && (me.map { VoiceActivity.cosine($0, g.centroid) < sameVoice } ?? true)
             }
             .sorted { ($0.members.count, $0.seconds) > ($1.members.count, $1.seconds) }
     }

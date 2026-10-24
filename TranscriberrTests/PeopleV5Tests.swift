@@ -220,7 +220,7 @@ final class PeopleV5Tests: XCTestCase {
     func testAYesIsNotAskedAgain() throws {
         let k = try store.remember(print([1, 0, 0, 0]), as: "Kate")
         let rec = UUID()
-        let near = PeopleMatch.Assessment(person: k, score: 0.35, runnerUp: nil, accepted: false)
+        let near = PeopleMatch.Assessment(person: k, score: 0.45, runnerUp: nil, accepted: false)
         try store.log(["S2": near], in: rec)
         let h = try XCTUnwrap(store.load().first?.candidates?.first)
         try store.resolve(h, for: k.id, wasThem: true)
@@ -374,5 +374,22 @@ final class PeopleV5Tests: XCTestCase {
         let split = try store.add(print([1, 0.02, 0, 0], seconds: 30), to: first.id, from: rec, speakers: "S5")
         XCTAssertEqual(split.allSamples.count, 2)
         XCTAssertEqual(split.print.seconds, 130, accuracy: 0.01)
+    }
+
+    // MARK: - Learning from meetings
+
+    func testOnlyClearMatchesFromEnoughSpeechAreLearnedFrom() throws {
+        let kate = try store.remember(print([1, 0, 0, 0], count: 8), as: "Kate")
+        let anna = try store.remember(print([0, 1, 0, 0], count: 8), as: "Anna")
+        let near = unit([1, 0.2, 0, 0])
+        let clusters: [String: [[Float]]] = [
+            "S1": Array(repeating: near, count: 6),               // clear, enough clips
+            "S2": Array(repeating: near, count: 3),               // clear, too few clips
+            "S3": Array(repeating: unit([0.6, 0.55, 0, 0]), count: 6), // between two people
+        ]
+        let found = PeopleMatch.assess(clusters, people: [kate, anna])
+        let learn = PeopleMatch.learnable(found, clips: clusters)
+        XCTAssertEqual(Set(learn.keys), ["S1"])
+        XCTAssertEqual(learn["S1"]?.person.id, kate.id)
     }
 }

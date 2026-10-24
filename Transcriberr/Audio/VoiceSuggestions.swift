@@ -80,7 +80,10 @@ enum VoiceSuggestions {
     /// Stricter than matching a saved person (0.40 on clip medians):
     /// centroids are smoother, and a wrong merge suggests a person who
     /// does not exist.
-    static let sameVoice: Float = 0.55
+    /// On 3 s clips (2026-10-24): two recordings of one person at least
+    /// 0.60, two different people up to 0.57 (Lana and Iryna; Jenny and
+    /// Gabrielle). 0.55 put each pair in one group.
+    static let sameVoice: Float = 0.62
     /// Heard in at least this many of the user's meetings…
     static let minMeetings = 3
     /// …within this many days.
@@ -123,8 +126,8 @@ enum VoiceSuggestions {
             .filter { g in
                 // A voice like a saved person's is theirs to confirm on
                 // their page; one like the user's is the user.
-                !people.contains { VoiceActivity.cosine($0.centroid, g.centroid) >= VoiceActivity.onThreshold }
-                    && (me.map { VoiceActivity.cosine($0, g.centroid) < VoiceActivity.onThreshold } ?? true)
+                !people.contains { VoiceActivity.cosine($0.centroid, g.centroid) >= PeopleMatch.onThreshold }
+                    && (me.map { VoiceActivity.cosine($0, g.centroid) < PeopleMatch.onThreshold } ?? true)
             }
             .sorted { ($0.members.count, $0.seconds) > ($1.members.count, $1.seconds) }
     }
@@ -164,16 +167,17 @@ enum VoiceSuggestions {
 }
 
 /// Whether a new sample is the same person as a saved voice, before it is
-/// added. Calibrated on the user's voices (2026-10-23): a sample scored
-/// 0.46-0.61 against the rest of its own person's voice, and at most 0.38
-/// against anyone else's (two Ukrainian women on the same calls; every
-/// other pair 0.11 or less). A sample is added only at `sameMin` or above
-/// and `margin` above every other saved voice, the user's included.
+/// added. Recalibrated 2026-10-24 on 381 clips of 23 people from the
+/// user's meetings, with the embedder's empty slots filled: a recording's
+/// sample scored at least 0.58 against the rest of its own person's voice
+/// (one weak Lana meeting aside), and at most 0.47 against anyone else's.
+/// A sample is added only at `sameMin` or above and `margin` above every
+/// other saved voice, the user's included.
 /// Rejecting a true sample costs a little training; accepting a wrong one
 /// spoils the voice, so the bar sits on the strict side.
 enum VoiceGate {
-    static let sameMin: Float = 0.45
-    static let margin: Float = 0.10
+    static let sameMin: Float = 0.55
+    static let margin: Float = 0.15
 
     struct Verdict: Equatable {
         var score: Float

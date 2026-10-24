@@ -147,7 +147,7 @@ final class DiarizationRunner: @unchecked Sendable {
         return diar.map { d in
             guard scraps.contains(d.speakerId) else { return d }
             let target: String?
-            if let user, let s = scores?[d.speakerId], s >= VoiceActivity.onThreshold {
+            if let user, let s = scores?[d.speakerId], s >= ClusterVoice.userOnThreshold {
                 target = user
             } else {
                 target = real.filter { $0.speakerId != user }.min(by: { gap($0, d) < gap($1, d) })?.speakerId

@@ -529,11 +529,39 @@ struct PeopleStore {
 /// Which saved person each speaker of a recording is. Pure: embeddings in,
 /// names out, so the rule is tested without audio.
 enum PeopleMatch {
+    /// Speakers are matched on 3 s clips, the length their voices are
+    /// learned from (`VoiceActivity.enrollWindow`). On 1.5 s clips the same
+    /// model told two people apart half as well (clip EER 12.5% against
+    /// 6.4%, benchmark 2026-10-24); the user's own target-speaker gate keeps
+    /// 1.5 s, where following a turn matters more.
+    static let clipSeconds = 3.0
     /// A speaker is a person when the median similarity of its clips to the
-    /// person's voice is at least `VoiceActivity.onThreshold` and
-    /// `ClusterVoice.margin` above the next person. The same calibration
-    /// as the user's own print: 0.49-0.70 for the right voice, at most 0.32
-    /// for others. Two people both close are left unnamed, never guessed.
+    /// person's voice is at least `onThreshold` and `margin` above the next
+    /// person. Two people both close are left unnamed, never guessed.
+    /// Calibrated on 3 s clips (2026-10-24, 381 clips of 23 people from
+    /// the user's meetings, empty embedder slots filled): the right person
+    /// scored at least 0.52, anyone else at most 0.47, Lana against Iryna
+    /// 0.41. On 1.5 s clips these were 0.40 / 0.30 / 0.10.
+    static let onThreshold: Float = 0.50
+    /// Under the bar but over this: asked about on their page.
+    static let offThreshold: Float = 0.40
+    static let margin: Float = 0.15
+    /// A match this much over the bar, from at least `learnMinClips` clips,
+    /// also adds the meeting to the person's voice (through VoiceGate): the
+    /// people met again and again keep getting easier to find.
+    static let learnBonus: Float = 0.05
+    static let learnMinClips = 5
+    /// Settings → People → Keep learning from meetings.
+    static let keepLearningKey = "people.keepLearning"
+    static var keepLearning: Bool { UserDefaults.standard.object(forKey: keepLearningKey) as? Bool ?? true }
+
+    /// The matches whose clips are worth adding to the person's voice.
+    static func learnable(_ found: [String: Assessment], clips: [String: [[Float]]]) -> [String: Assessment] {
+        found.filter { key, a in
+            a.accepted && a.score >= onThreshold + learnBonus && (clips[key]?.count ?? 0) >= learnMinClips
+        }
+    }
+
     static func assign(_ clusters: [String: [[Float]]], people: [Person]) -> [String: Person] {
         assess(clusters, people: people).compactMapValues { $0.accepted ? $0.person : nil }
     }
@@ -548,7 +576,7 @@ enum PeopleMatch {
         /// Close enough to ask the user, not close enough to decide: over
         /// the off threshold but under the bar, or over it next to someone
         /// just as close.
-        var isNearMiss: Bool { !accepted && score >= VoiceActivity.offThreshold }
+        var isNearMiss: Bool { !accepted && score >= PeopleMatch.offThreshold }
     }
 
     /// Every scored speaker's closest person, matched or not.
@@ -561,8 +589,8 @@ enum PeopleMatch {
             }.sorted { $0.1 > $1.1 }
             guard let best = ranked.first else { continue }
             let second = ranked.count > 1 ? ranked[1].1 : nil
-            let accepted = best.1 >= VoiceActivity.onThreshold
-                && (second.map { best.1 - $0 >= ClusterVoice.margin } ?? true)
+            let accepted = best.1 >= onThreshold
+                && (second.map { best.1 - $0 >= margin } ?? true)
             out[key] = Assessment(person: best.0, score: best.1, runnerUp: second, accepted: accepted)
         }
         return out
@@ -723,7 +751,7 @@ enum PeopleVoice {
     static func clusterEmbeddings(samples: [Float], regions: [DiarizationRunner.SpeakerSegment],
                                   only keys: Set<String>) async throws -> [String: [[Float]]] {
         let floor = VoiceActivity.speechFloor(samples)
-        let ranges = ClusterVoice.clipRanges(regions, sampleCount: samples.count)
+        let ranges = ClusterVoice.clipRanges(regions, sampleCount: samples.count, window: PeopleMatch.clipSeconds)
             .filter { keys.contains($0.key) }
             .mapValues { $0.filter { VoiceActivity.rms(samples[$0]) >= floor } }
             .filter { $0.value.count >= ClusterVoice.minClips }
@@ -814,7 +842,21 @@ enum PeopleNamer {
                 try repository.setSpeakerName(person.name, for: key, in: recording)
                 named += 1
             }
-            AppLog.info("people", "\(matches.count) of \(keys.count) speakers matched a saved person, \(named) renamed")
+            // Clear matches teach the voice too: the same clips, no second read.
+            var learned = 0
+            if PeopleMatch.keepLearning {
+                for (key, a) in PeopleMatch.learnable(found, clips: clusters) {
+                    guard let person = now[a.person.id], let clips = clusters[key] else { continue }
+                    let print = Voiceprint(seconds: Double(clips.count) * PeopleMatch.clipSeconds, embeddings: clips)
+                    do {
+                        try store.add(print, to: person.id, from: recording.id, speakers: Person.Sample.speakers([key]))
+                        learned += 1
+                    } catch {
+                        AppLog.info("people", "not learned from \(key): \(error.localizedDescription)")
+                    }
+                }
+            }
+            AppLog.info("people", "\(matches.count) of \(keys.count) speakers matched a saved person, \(named) renamed, \(learned) learned from")
             return named
         } catch {
             AppLog.warn("people", "matching skipped: \(error.localizedDescription)")

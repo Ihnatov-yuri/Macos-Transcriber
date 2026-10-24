@@ -109,7 +109,7 @@ final class PeopleTests: XCTestCase {
         let clips: (([Float]) -> [[Float]]) = { v in Array(repeating: self.unit(v), count: 5) }
         let out = PeopleMatch.assess([
             "S1": clips([0.95, 0.2, 0, 0]),   // Kate, clear
-            "S2": clips([0.35, 0, 0.94, 0]),  // 0.35 to Kate: near miss
+            "S2": clips([0.45, 0, 0.89, 0]),  // 0.45 to Kate: near miss
             "S3": clips([0, 0, 1, 0.2]),      // nobody
             "S4": clips([0.7, 0.7, 0, 0]),    // both close: near miss, never named
         ], people: [kate, anna])
@@ -125,7 +125,7 @@ final class PeopleTests: XCTestCase {
         let kate = try store.remember(print([1, 0, 0, 0]), as: "Kate")
         let rec = UUID()
         let hit = PeopleMatch.Assessment(person: kate, score: 0.6, runnerUp: nil, accepted: true)
-        let near = PeopleMatch.Assessment(person: kate, score: 0.35, runnerUp: nil, accepted: false)
+        let near = PeopleMatch.Assessment(person: kate, score: 0.45, runnerUp: nil, accepted: false)
         try store.log(["S1": hit, "S2": near], in: rec)
         try store.log(["S1": hit, "S2": near], in: rec)   // Find people again
         var p = try XCTUnwrap(store.load().first)

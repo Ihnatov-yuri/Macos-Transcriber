@@ -97,8 +97,8 @@ enum PeopleConfidence {
         let nearest = others
             .map { (name: $0.name, similarity: cross($0.centroid)) }
             .max { $0.similarity < $1.similarity }
-        let bar = Double(VoiceActivity.onThreshold)
-        let margin = Double(ClusterVoice.margin)
+        let bar = Double(PeopleMatch.onThreshold)
+        let margin = Double(PeopleMatch.margin)
         /// How far their clips stand above the closest other voice.
         let gap = nearest.map { selfScore - $0.similarity } ?? 1
         if let nearest {

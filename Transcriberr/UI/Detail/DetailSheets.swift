@@ -23,9 +23,13 @@ struct SpeakerRenameSheet: View {
     @State private var name: String
     @State private var learnVoice: Bool
     @State private var working = false
+    /// Named, but the voice was not added: the button only moves on.
+    @State private var named = false
     @State private var note: String?
     @State private var failed = false
     @State private var soundsLike: [(name: String, score: Float)] = []
+    /// Every saved voice's score for this speaker, for the warning below.
+    @State private var scores: [String: Float] = [:]
     @State private var listening = true
     @State private var saved: [String] = []
 
@@ -107,7 +111,7 @@ struct SpeakerRenameSheet: View {
                         .font(AppFont.text(15))
                         .onSubmit { save() }
                     if !picks.isEmpty {
-                        HStack(spacing: 6) {
+                        FlowLayout(spacing: 6) {
                             ForEach(picks, id: \.self) { n in
                                 TapButton { name = n } label: {
                                     LitButtonChrome(.ghost, compact: true) { Text(n) }
@@ -124,6 +128,10 @@ struct SpeakerRenameSheet: View {
                 }
                 .toggleStyle(.checkbox)
                 .disabled(speakerKey == TranscriptionRunner.micSpeakerKey)
+                if let mismatch {
+                    Text(mismatch).font(AppFont.text(12)).foregroundStyle(AppColor.statusWarning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let note {
                     Text(note).font(AppFont.text(12))
                         .foregroundStyle(failed ? AppColor.statusError : AppColor.ink2)
@@ -149,14 +157,16 @@ struct SpeakerRenameSheet: View {
                             onClose()
                             container.requestPeoplePane(person: p.id)
                         } label: {
-                            LitButtonChrome(.ghost, compact: true) { Text("Open \(p.name)'s page") }
+                            LitButtonChrome(.ghost, compact: true) { Text("Open their page").lineLimit(1) }
                         }
+                        .help("Open \(p.name)'s page")
                     }
                     Spacer()
                     TapButton { (onCancel ?? onClose)() } label: { LitButtonChrome(.ghost) { Text("Cancel") } }
                     TapButton { save() } label: {
                         LitButtonChrome(.primary) {
-                            Text(working ? "Learning…" : trimmed.isEmpty ? (hasNext ? "Skip" : "Close")
+                            Text(working ? "Learning…" : named ? (hasNext ? "Next" : "Done")
+                                 : trimmed.isEmpty ? (hasNext ? "Skip" : "Close")
                                  : hasNext ? "Save & next" : "Save")
                         }
                     }
@@ -167,6 +177,20 @@ struct SpeakerRenameSheet: View {
         }
         .frame(minWidth: 520, minHeight: 380)
         .task { await compare() }
+    }
+
+    /// A saved name typed or picked for a voice that is not theirs. Said
+    /// before Save: the name joins this speaker with anyone already called
+    /// that here, and that cannot be split again from this sheet.
+    private var mismatch: String? {
+        guard !listening, let p = savedMatch, !scores.isEmpty,
+              (scores[p.name] ?? 0) < VoiceActivity.offThreshold else { return nil }
+        let alsoHere = recording.segments.contains {
+            $0.speaker != speakerKey && $0.speakerName?.caseInsensitiveCompare(p.name) == .orderedSame
+        }
+        return alsoHere
+            ? "This speaker doesn't sound like \(p.name), who already speaks in this meeting. Saving joins the two into one. Listen first if you're not sure."
+            : "This speaker doesn't sound like \(p.name)'s saved voice. Listen first if you're not sure."
     }
 
     /// Ranks saved people by how much this speaker sounds like them, on
@@ -188,9 +212,11 @@ struct SpeakerRenameSheet: View {
         // The user's own voice is a candidate too: a speaker that is really
         // them gets their name, not a new person.
         let voices = people.map { ($0.name, $0.print.centroid) } + (mine.map { [(me, $0.centroid)] } ?? [])
-        soundsLike = voices.map { v in
+        let all = voices.map { v in
             (v.0, ClusterVoice.median(clips.map { VoiceActivity.cosine($0, v.1) }))
         }
+        scores = Dictionary(all, uniquingKeysWith: { max($0, $1) })
+        soundsLike = all
         .filter { $0.1 >= VoiceActivity.offThreshold }
         .sorted { $0.1 > $1.1 }
         .prefix(3).map { ($0.0, $0.1) }
@@ -215,6 +241,7 @@ struct SpeakerRenameSheet: View {
     /// the speaker stays named: the user said who it is.
     private func save() {
         guard !working else { return }
+        if named { onClose(); return }
         // Skipping an unnamed speaker leaves them as they are.
         if trimmed.isEmpty, SpeakerLabel.isPlaceholder(initialName) || initialName == speakerKey || initialName.isEmpty {
             onClose()
@@ -224,23 +251,34 @@ struct SpeakerRenameSheet: View {
         let meName = TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))
         if trimmed.caseInsensitiveCompare(meName) == .orderedSame { learnVoice = false }
         let value: String? = trimmed.isEmpty ? nil : trimmed
-        try? container.repository.setSpeakerName(value, for: speakerKey, in: recording)
-        try? TranscriptExporter.export(recording: recording)
-        guard let value, learnVoice, speakerKey != TranscriptionRunner.micSpeakerKey else { onClose(); return }
+        func name() {
+            try? container.repository.setSpeakerName(value, for: speakerKey, in: recording)
+            try? TranscriptExporter.export(recording: recording)
+        }
+        guard let value, learnVoice, speakerKey != TranscriptionRunner.micSpeakerKey else { name(); onClose(); return }
         working = true
         note = nil
         Task { @MainActor in
             defer { working = false }
             let id = recording.id
             let before = PeopleVoice.signature(recording)
+            // This speaker's voice is read before the name is set: naming
+            // joins them with anyone already called that here, and the
+            // joined speaker would mix two voices into the sample.
+            let learned: Result<Voiceprint, Error>
+            do { learned = .success(try await PeopleVoice.learn(speaker: speakerKey, in: recording)) }
+            catch { learned = .failure(error) }
+            guard recording.modelContext != nil else { onClose(); return }
+            guard PeopleVoice.signature(recording) == before else {
+                failed = true
+                note = "The transcript changed while the voice was read. Nothing was changed; try again."
+                return
+            }
+            name()
+            named = true
             do {
-                let print = try await PeopleVoice.learn(speaker: speakerKey, in: recording)
-                guard recording.modelContext != nil, PeopleVoice.signature(recording) == before else {
-                    failed = true
-                    note = "The transcript changed while the voice was read. Named, but the voice was not added."
-                    return
-                }
-                try PeopleStore.shared.remember(print, as: value, from: id)
+                let print = try learned.get()
+                try PeopleStore.shared.remember(print, as: value, from: id, speakers: Person.Sample.speakers([speakerKey]))
                 onClose()
             } catch {
                 failed = true

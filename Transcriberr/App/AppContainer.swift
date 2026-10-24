@@ -73,6 +73,9 @@ final class AppContainer: @unchecked Sendable {
     /// The recording open in Library, kept here so leaving for People (a
     /// speaker's page) and coming back reopens it.
     var librarySelection: UUID?
+    /// Bumped by File > Delete Recording… (⌘⌫): Library asks to delete
+    /// the recording open there.
+    private(set) var deleteRecordingRequested = 0
     var pendingNewRecording = false
 
     /// The unit-test host launches this same app. It must not act like a
@@ -285,6 +288,10 @@ final class AppContainer: @unchecked Sendable {
     func requestNewRecording() {
         pendingNewRecording = true
         newRecordingRequested &+= 1
+    }
+
+    func requestDeleteRecording() {
+        deleteRecordingRequested &+= 1
     }
 
     func requestDictatePane() {

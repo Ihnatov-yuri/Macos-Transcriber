@@ -157,8 +157,8 @@ struct PersonPage: View {
             Text("How sure Transcriberr is to recognise \(person.name) when they speak in a new recording. Above 75% is Strong; recordings then name them on their own.")
                 .font(AppFont.text(13)).foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
-            if let soundsLike = c.soundsLike {
-                Text("\(person.name) sounds close to \(soundsLike). While they are this close, recordings leave such a speaker unnamed rather than guess.")
+            if let held = c.heldBack {
+                Text(held)
                     .font(AppFont.text(12)).foregroundStyle(AppColor.statusWarning)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -689,7 +689,7 @@ struct PersonPage: View {
                 try PeopleStore.shared.resolve(h, for: id, wasThem: true)
                 do {
                     let print = try await PeopleVoice.learn(speaker: h.speaker, in: rec)
-                    try PeopleStore.shared.add(print, to: id, from: recId)
+                    try PeopleStore.shared.add(print, to: id, from: recId, speakers: Person.Sample.speakers([h.speaker]))
                     done("Named in “\(title)” and added \(Int(print.seconds)) s to \(name)'s voice.", for: id)
                 } catch {
                     done("Named in “\(title)”. Their voice was not added: \(error.localizedDescription)", for: id)
@@ -752,7 +752,7 @@ struct PersonPage: View {
                     } else {
                         let joined = Voiceprint(seconds: prints.map(\.seconds).reduce(0, +),
                                                 embeddings: prints.flatMap(\.embeddings))
-                        try PeopleStore.shared.add(joined, to: id, from: m.id)
+                        try PeopleStore.shared.add(joined, to: id, from: m.id, speakers: Person.Sample.speakers(m.keys))
                         seconds += joined.seconds
                         added += 1
                     }

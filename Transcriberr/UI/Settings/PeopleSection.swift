@@ -133,11 +133,13 @@ struct AddPersonSheet: View {
     var myVoice = false
     var onClose: () -> Void
 
-    enum Source: String, CaseIterable { case reading = "Record them now", recording = "From a recording" }
+    /// Their meetings first: most people are already in the user's
+    /// recordings, and a reading needs them at this Mac.
+    enum Source: String, CaseIterable { case recording = "From their recordings", reading = "Record a reading" }
     enum Phase: Equatable { case idle, recording, learning }
 
     @State private var name = ""
-    @State private var source: Source = .reading
+    @State private var source: Source = .recording
     @State private var phase: Phase = .idle
     @State private var capture: UtteranceCapture?
     @State private var ticker: Task<Void, Never>?
@@ -182,7 +184,8 @@ struct AddPersonSheet: View {
                     .disabled(phase != .idle)
                 }
 
-                switch source {
+                // A reading for a saved person or for the user has no picker.
+                switch personId != nil || myVoice ? .reading : source {
                 case .reading: readingPane
                 case .recording: recordingPane
                 }
@@ -403,7 +406,8 @@ struct AddPersonSheet: View {
                     phase = .idle
                     return
                 }
-                let person = try PeopleStore.shared.remember(print, as: trimmedName, from: id)
+                let person = try PeopleStore.shared.remember(print, as: trimmedName, from: id,
+                                                              speakers: speakerKey.map { Person.Sample.speakers([$0]) })
                 try container.repository.setSpeakerName(person.name, for: key, in: rec)
                 try? TranscriptExporter.export(recording: rec)
                 saved(person, seconds: print.seconds)

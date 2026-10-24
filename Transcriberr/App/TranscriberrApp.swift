@@ -46,6 +46,9 @@ struct TranscriberrApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Recording") { container.requestNewRecording() }
                     .keyboardShortcut("n")
+                Button("Delete Recording…") { container.requestDeleteRecording() }
+                    .keyboardShortcut(.delete, modifiers: .command)
+                    .disabled(container.librarySelection == nil)
             }
             CommandMenu("Dictation") {
                 Button(container.dictation.phase == .listening ? "Stop Dictation" : "Start Dictation") {

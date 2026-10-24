@@ -359,4 +359,20 @@ final class PeopleV5Tests: XCTestCase {
         XCTAssertTrue(SpeakerLabel.isPlaceholder(RecordingRepository.taggedKeyPrefix + "1"))
         XCTAssertFalse(SpeakerLabel.isPlaceholder("Sean"))
     }
+
+    // MARK: - The same meeting learned twice
+
+    func testLearningTheSameSpeakersAgainReplacesTheirSample() throws {
+        let rec = UUID()
+        let first = try store.remember(print([1, 0, 0, 0], seconds: 78), as: "Maria", from: rec, speakers: "S2")
+        let again = try store.add(print([1, 0.05, 0, 0], seconds: 100), to: first.id, from: rec, speakers: "S2")
+        XCTAssertEqual(again.allSamples.count, 1, "one meeting, one sample")
+        XCTAssertEqual(again.print.seconds, 100, accuracy: 0.01)
+        XCTAssertEqual(again.print.embeddings.count, 4)
+        XCTAssertEqual(again.sources, 1)
+        // Another speaker of the same recording is the same person split in two: kept beside it.
+        let split = try store.add(print([1, 0.02, 0, 0], seconds: 30), to: first.id, from: rec, speakers: "S5")
+        XCTAssertEqual(split.allSamples.count, 2)
+        XCTAssertEqual(split.print.seconds, 130, accuracy: 0.01)
+    }
 }

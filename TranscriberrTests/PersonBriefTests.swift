@@ -204,4 +204,15 @@ final class PersonBriefTests: XCTestCase {
         XCTAssertEqual(PersonBriefBuilder.task("Lana is going to call the bank", name: "Lana Smith"), "Call the bank")
         XCTAssertEqual(PersonBriefBuilder.task("Call the bank", name: nil), "Call the bank")
     }
+
+    func testDoneSurvivesTurningAPromiseIntoAToDo() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("brief-\(UUID().uuidString.prefix(6))")
+        let store = PersonBriefStore(url: dir.appendingPathComponent("b.json"))
+        let person = UUID(), rec = UUID()
+        let old = PersonBrief(commitments: [.init(text: "I will ask them to join as well.")])
+        let new = PersonBrief(commitments: [.init(text: "Ask them to join as well.")])
+        try store.setClosed(PersonBriefStore.itemKey(rec, "commitment", old.commitments[0].text), true, for: person)
+        store.carryClosed(from: old, to: new, recording: rec, for: person)
+        XCTAssertTrue(store.closed(for: person).contains(PersonBriefStore.itemKey(rec, "commitment", "Ask them to join as well.")))
+    }
 }

@@ -32,6 +32,14 @@
 - Deleting a recording or a saved version now asks first. Restore is off while a transcription runs, so a restore can no longer be mixed into a run.
 - Fixed a crash when a person page reloaded while their voice was being learned, and made Merge and Split safe if a recording is deleted while they work.
 - Clearing the Library search shows everything again at once. "Dictation" can no longer be used as a folder name, and recordings can no longer be filed into dictation history by mistake.
+- Refresh all, on the overview, reads everyone's meetings from the last month one person at a time. Open commitments there now covers the last month too.
+- A percentage that is high but held at a lower level now says why, for example while someone sounds close to another saved person.
+- Learning the same speaker of a recording again replaces what was learned from it, so one meeting can no longer count twice towards a voice.
+- Who is this? reads the speaker's own voice before naming them, warns when the name you picked is someone this speaker doesn't sound like, and moves on to the next speaker after a voice is refused instead of trying again.
+- Add person starts from their recordings; recording a reading is the second choice.
+- Record shows Starting… while the microphone gets ready, so a second press no longer stops the recording it just started.
+- Disabled buttons look disabled.
+- File > Delete Recording… (⌘⌫) deletes the recording open in Library, after the same confirmation.
 - Buttons across the app are now real buttons to VoiceOver and other accessibility tools; before, many could be read but not pressed. Pause and Stop on the Record screen included.
 
 ## 4.7.0

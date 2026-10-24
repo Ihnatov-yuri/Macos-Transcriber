@@ -243,12 +243,8 @@ final class AppContainer: @unchecked Sendable {
         // Spawned as its own task after the run: the recording (and its
         // segments, by cascade) can already be gone by the time this starts.
         guard !recording.isDeleted, recording.modelContext != nil else { return }
-        let sample = segments
-            .sorted { $0.startSeconds < $1.startSeconds }
-            .prefix(20)
-            .map(\.text)
-            .joined(separator: " ")
-        guard sample.count > 30 else { return }
+        guard let sample = AutoTitle.sample(segments.map { (start: $0.startSeconds, text: $0.text) })
+        else { return }
         // Captured before the (possibly model-loading) await: a title the
         // user types while Gemma thinks must win over the generated one.
         let titleBefore = recording.title
@@ -261,13 +257,10 @@ final class AppContainer: @unchecked Sendable {
                 try await backend.load(modelPath: nil)
             }
             let title = try await backend.generateText(
-                systemInstruction: "You name audio recordings. Output ONLY a 3–6 word title in title case. No quotes, no period.",
-                userMessage: "Title this transcript:\n\n\(String(sample.prefix(2000)))",
-                maxTokens: 32
+                systemInstruction: AutoTitle.systemPrompt,
+                userMessage: AutoTitle.userMessage(excerpts: sample),
+                maxTokens: AutoTitle.maxOutputTokens
             )
-            let trimmed = title
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'.“”"))
             // The recording may have been deleted while the engine loaded
             // and generated — writing into a deleted model is a SwiftData
             // crash (same guard as JobManager's), and so is the backup
@@ -277,7 +270,7 @@ final class AppContainer: @unchecked Sendable {
                 AppLog.info("app", "auto-title skipped — the title changed while it was generated")
                 return
             }
-            if trimmed.count >= 3 && trimmed.count < 90 {
+            if let trimmed = AutoTitle.clean(title) {
                 recording.title = trimmed
                 try? recording.modelContext?.save()
                 // The run's own backup fired before the title landed —

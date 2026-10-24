@@ -58,6 +58,11 @@ struct Person: Codable, Identifiable, Equatable {
         var count: Int
         /// Learned before samples were kept apart: source unknown.
         var earlier: Bool? = nil
+        /// The recording's speaker keys it was learned from, sorted and
+        /// joined; nil for readings and older samples.
+        var speakers: String? = nil
+
+        static func speakers(_ keys: some Sequence<String>) -> String { keys.sorted().joined(separator: ",") }
     }
 
     /// The samples, with an older file's embeddings as one earlier sample.
@@ -76,15 +81,45 @@ struct Person: Codable, Identifiable, Equatable {
     }
 
     /// Adds a learning's embeddings as a new sample, then trims to the cap.
-    mutating func add(_ learned: Voiceprint, from recording: UUID?, now: Date, earlier: Bool? = nil) {
+    /// The same speakers of a recording learned again replace their earlier
+    /// sample, or the same speech would count twice (seen 2026-10-24: Add
+    /// person pressed twice kept one meeting as 78 s + 100 s). Another
+    /// speaker of that recording (one person split in two) is kept beside
+    /// it. True when a sample was replaced.
+    @discardableResult
+    mutating func add(_ learned: Voiceprint, from recording: UUID?, speakers: String? = nil,
+                      now: Date, earlier: Bool? = nil) -> Bool {
         if samples == nil, learnedFrom == nil, legacyCutoff == nil { legacyCutoff = updated }
         var list = allSamples
+        var replaced = false
+        if let recording, let speakers {
+            var embeddings = print.embeddings, seconds = print.seconds, start = 0
+            var keep: [Sample] = [], kept: [[Float]] = []
+            for s in list {
+                let end = min(embeddings.count, start + s.count)
+                if s.recordingId == recording, s.speakers == speakers {
+                    seconds -= s.seconds
+                    replaced = true
+                } else {
+                    keep.append(s)
+                    kept += embeddings[start..<end]
+                }
+                start = end
+            }
+            if replaced {
+                embeddings = kept
+                list = keep
+                print = Voiceprint(model: print.model, created: print.created, seconds: max(0, seconds), embeddings: embeddings)
+            }
+        }
         list.append(Sample(id: UUID(), recordingId: recording, date: now,
-                           seconds: learned.seconds, count: learned.embeddings.count, earlier: earlier))
+                           seconds: learned.seconds, count: learned.embeddings.count, earlier: earlier,
+                           speakers: speakers))
         print = Voiceprint(model: print.model, created: print.created, seconds: print.seconds + learned.seconds,
                            embeddings: print.embeddings + learned.embeddings)
         samples = list
         trim()
+        return replaced
     }
 
     /// Keeps at most `maxEmbeddings`, taken from every sample in proportion
@@ -263,7 +298,7 @@ struct PeopleStore {
     /// Mac; that recording's suggestions for the person are settled by it.
     @discardableResult
     func remember(_ print: Voiceprint, as name: String, from recording: UUID? = nil,
-                  now: Date = Date()) throws -> Person {
+                  speakers: String? = nil, now: Date = Date()) throws -> Person {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw PeopleError.emptyName }
         var people = try read()
@@ -274,13 +309,13 @@ struct PeopleStore {
         if let i {
             p = people[i]
             try gate(print, onto: p, among: people)
-            p.add(print, from: recording, now: now)
+            if !p.add(print, from: recording, speakers: speakers, now: now) { p.sources += 1 }
             p.updated = now
-            p.sources += 1
         } else {
             p = Person(id: UUID(), name: trimmed, created: now, updated: now, print: print, sources: 1)
             p.samples = [Person.Sample(id: UUID(), recordingId: recording, date: now,
-                                       seconds: print.seconds, count: print.embeddings.count)]
+                                       seconds: print.seconds, count: print.embeddings.count,
+                                       speakers: speakers)]
             p.trim()
         }
         if let recording {
@@ -314,14 +349,14 @@ struct PeopleStore {
     /// the person before a long learn must not recreate them after a delete
     /// or file the voice under a name that has since changed.
     @discardableResult
-    func add(_ print: Voiceprint, to id: UUID, from recording: UUID?, now: Date = Date()) throws -> Person {
+    func add(_ print: Voiceprint, to id: UUID, from recording: UUID?, speakers: String? = nil,
+             now: Date = Date()) throws -> Person {
         var people = try read()
         guard let i = people.firstIndex(where: { $0.id == id }) else { throw PeopleError.missing }
         var p = people[i]
         try gate(print, onto: p, among: people)
-        p.add(print, from: recording, now: now)
+        if !p.add(print, from: recording, speakers: speakers, now: now) { p.sources += 1 }
         p.updated = now
-        p.sources += 1
         if let recording {
             p.learnedFrom = (p.learnedFrom ?? []).filter { $0 != recording } + [recording]
             p.candidates = p.candidates?.filter { $0.recordingId != recording }
@@ -450,6 +485,8 @@ struct PeopleStore {
             let end = min(s.print.embeddings.count, start + sample.count)
             let part = Voiceprint(model: s.print.model, created: sample.date, seconds: sample.seconds,
                                   embeddings: Array(s.print.embeddings[start..<end]))
+            // No speakers given: both may have been learned from one
+            // meeting, and each keeps its own sample.
             t.add(part, from: sample.recordingId, now: sample.date, earlier: sample.earlier)
             start = end
         }

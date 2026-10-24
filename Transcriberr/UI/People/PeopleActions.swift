@@ -152,9 +152,9 @@ final class PeopleSuggestionRunner {
                 guard kept.contains(item.id) else { refused += 1; continue }
                 do {
                     if let id = (existing ?? store.load().first { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.id {
-                        try store.add(item.print, to: id, from: item.id)
+                        try store.add(item.print, to: id, from: item.id, speakers: Person.Sample.speakers(item.keys))
                     } else {
-                        try store.remember(item.print, as: name, from: item.id)
+                        try store.remember(item.print, as: name, from: item.id, speakers: Person.Sample.speakers(item.keys))
                     }
                     learned += 1
                     seconds += item.print.seconds

@@ -205,6 +205,8 @@ final class PeopleTests: XCTestCase {
         let twin = PeopleConfidence.assess(kate, others: [(name: "Anna", centroid: unit([0.95, 0.3, 0, 0]))])
         XCTAssertEqual(twin.soundsLike, "Anna")
         XCTAssertEqual(twin.level, .learning, "two voices that close are left unnamed, so never Strong")
+        XCTAssertEqual(twin.heldBack?.contains("Anna"), true, "the page says why the level is lower than the number")
+        XCTAssertNil(trained.heldBack)
     }
 
     // MARK: Learning

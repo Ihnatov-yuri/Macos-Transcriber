@@ -60,6 +60,10 @@ struct LibraryView: View {
             }
         }
         .onChange(of: selection?.id) { _, id in container.librarySelection = id }
+        // ⌘⌫ from the menu bar: the same confirmation as the row's Delete….
+        .onChange(of: container.deleteRecordingRequested) {
+            if let rec = selection, rec.modelContext != nil, !mergingIDs.contains(rec.id) { deleting = rec }
+        }
         .task(id: query) {
             let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
             // Clearing applies at once: waiting here showed the old filtered

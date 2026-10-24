@@ -65,6 +65,8 @@ final class PersonBriefRunner {
     static let shared = PersonBriefRunner()
 
     private(set) var running: UUID?
+    /// People in the current read: more than one for Refresh all.
+    private(set) var batch = 0
     private(set) var progress: String?
     /// Per person: one person's failed read is not shown on another's page.
     private(set) var errors: [UUID: String] = [:]
@@ -79,77 +81,98 @@ final class PersonBriefRunner {
     }
 
     func build(person: Person, meetings: [PersonMeeting], container: AppContainer) {
-        guard running == nil else { return }
-        running = person.id
-        errors[person.id] = nil
-        let recent = Self.toRead(meetings)
-        let id = person.id, name = person.name
+        buildAll([(person, meetings)], container: container)
+    }
+
+    /// Reads several people in turn, one at a time like a single read:
+    /// Refresh all on the overview.
+    func buildAll(_ list: [(person: Person, meetings: [PersonMeeting])], container: AppContainer) {
+        guard running == nil, let first = list.first else { return }
+        running = first.person.id
+        batch = list.count
+        for l in list { errors[l.person.id] = nil }
         task = Task { @MainActor in
-            defer { running = nil; progress = nil; task = nil }
-            let store = PersonBriefStore.shared
-            // Text read from meetings that were deleted since goes too.
-            store.keep(only: Set(meetings.map(\.id)), for: id)
-            let cached = Dictionary(store.entries(for: id).map { ($0.recordingId, $0.key) },
-                                    uniquingKeysWith: { $1 })
-            var read = 0
-            for (i, meeting) in recent.enumerated() {
+            defer { running = nil; progress = nil; task = nil; batch = 0 }
+            for (n, l) in list.enumerated() {
                 if Task.isCancelled { return }
-                guard let rec = try? container.repository.get(id: meeting.id), !rec.isDeleted else { continue }
-                let lines = rec.segments.sorted { $0.startSeconds < $1.startSeconds }.compactMap { s -> PersonBriefBuilder.Line? in
-                    let text = s.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else { return nil }
-                    let who = s.speakerName.flatMap { $0.isEmpty ? nil : $0 } ?? s.speaker ?? "Someone"
-                    return .init(start: s.startSeconds, speaker: who, text: text)
-                }
-                let transcript = PersonBriefBuilder.transcript(lines, name: name)
-                guard !transcript.isEmpty else { continue }
-                let key = PersonBriefBuilder.key(transcript: transcript, name: name)
-                if cached[meeting.id] == key { continue }
-                progress = "Reading meeting \(i + 1) of \(recent.count): \(meeting.title)"
-                let starts = lines.filter { $0.speaker.caseInsensitiveCompare(name) == .orderedSame }.map(\.start)
-                // Fetched per meeting: housekeeping may release the shared
-                // engine between two reads, and a held instance would then
-                // load a second copy outside the factory.
-                let backend = container.backendFactory.backend(for: Self.engine(container))
-                do {
-                    if !(await backend.isReady) {
-                        try await PersonBriefBuilder.bounded(seconds: 180) { try await backend.load(modelPath: nil) }
-                    }
-                    let result = try await PersonBriefBuilder.build(
-                        transcript: transcript, name: name, lineStarts: starts
-                    ) { system, user, maxTokens in
-                        try await PersonBriefBuilder.bounded(seconds: PersonBriefBuilder.timeoutSeconds) {
-                            try await backend.generateText(systemInstruction: system, userMessage: user, maxTokens: maxTokens)
-                        }
-                    }
-                    try Task.checkCancellation()
-                    // Deleted while the engine read: nothing of theirs is written back.
-                    guard PeopleStore.shared.load().contains(where: { $0.id == id }) else { return }
-                    // A brief missing a section is kept under no key, so a
-                    // refresh reads the meeting again.
-                    let previous = store.entries(for: id).first { $0.recordingId == meeting.id }?.brief
-                    try store.save(.init(recordingId: meeting.id, key: result.complete ? key : "",
-                                         built: Date(), brief: result.brief), for: id)
-                    if let previous { store.carryClosed(from: previous, to: result.brief, recording: meeting.id, for: id) }
-                    if !result.complete { errors[id] = "Part of “\(meeting.title)” could not be read. Refresh tries it again." }
-                    read += 1
-                    revision &+= 1
-                } catch is CancellationError {
-                    return
-                } catch {
-                    errors[id] = "“\(meeting.title)” could not be read: \(error.localizedDescription)"
-                    AppLog.warn("person-brief", "\(meeting.id) failed: \(error.localizedDescription)")
-                    // A timed-out read leaves LiteRT wedged; more reads would
-                    // only queue behind it.
-                    if case ASRError.chunkTimeout = error {
-                        if let litert = backend as? GemmaLiteRTBackend { try? await litert.recoverWedge(modelPath: nil) }
-                        break
-                    }
-                }
+                running = l.person.id
+                await read(id: l.person.id, name: l.person.name, meetings: l.meetings, container: container,
+                           prefix: list.count > 1 ? "\(l.person.name), \(n + 1) of \(list.count). " : "")
             }
-            AppLog.info("person-brief", "read \(read) of \(recent.count) meetings")
         }
     }
+
+    private func read(id: UUID, name: String, meetings: [PersonMeeting], container: AppContainer,
+                      prefix: String) async {
+        // Deleted since Refresh all started: nothing to read for them.
+        guard PeopleStore.shared.load().contains(where: { $0.id == id }) else { return }
+        let recent = Self.toRead(meetings)
+        let store = PersonBriefStore.shared
+        // Text read from meetings that were deleted since goes too.
+        store.keep(only: Set(meetings.map(\.id)), for: id)
+        let cached = Dictionary(store.entries(for: id).map { ($0.recordingId, $0.key) },
+                                uniquingKeysWith: { $1 })
+        var read = 0
+        for (i, meeting) in recent.enumerated() {
+            if Task.isCancelled { return }
+            guard let rec = try? container.repository.get(id: meeting.id), !rec.isDeleted else { continue }
+            let lines = rec.segments.sorted { $0.startSeconds < $1.startSeconds }.compactMap { s -> PersonBriefBuilder.Line? in
+                let text = s.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return nil }
+                // "Speaker 2", never a raw key the model would copy ("Speaker_01").
+                let who = s.speaker.map { SpeakerLabel.display(s.speakerName, key: $0) }
+                    ?? s.speakerName.flatMap { $0.isEmpty ? nil : $0 } ?? "Someone"
+                return .init(start: s.startSeconds, speaker: who, text: text)
+            }
+            let transcript = PersonBriefBuilder.transcript(lines, name: name)
+            guard !transcript.isEmpty else { continue }
+            let key = PersonBriefBuilder.key(transcript: transcript, name: name)
+            if cached[meeting.id] == key { continue }
+            progress = prefix + "Reading meeting \(i + 1) of \(recent.count): \(meeting.title)"
+            let starts = lines.filter { $0.speaker.caseInsensitiveCompare(name) == .orderedSame }.map(\.start)
+            // Fetched per meeting: housekeeping may release the shared
+            // engine between two reads, and a held instance would then
+            // load a second copy outside the factory.
+            let backend = container.backendFactory.backend(for: Self.engine(container))
+            do {
+                if !(await backend.isReady) {
+                    try await PersonBriefBuilder.bounded(seconds: 180) { try await backend.load(modelPath: nil) }
+                }
+                let result = try await PersonBriefBuilder.build(
+                    transcript: transcript, name: name, lineStarts: starts
+                ) { system, user, maxTokens in
+                    try await PersonBriefBuilder.bounded(seconds: PersonBriefBuilder.timeoutSeconds) {
+                        try await backend.generateText(systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+                    }
+                }
+                try Task.checkCancellation()
+                // Deleted while the engine read: nothing of theirs is written back.
+                guard PeopleStore.shared.load().contains(where: { $0.id == id }) else { return }
+                // A brief missing a section is kept under no key, so a
+                // refresh reads the meeting again.
+                let previous = store.entries(for: id).first { $0.recordingId == meeting.id }?.brief
+                try store.save(.init(recordingId: meeting.id, key: result.complete ? key : "",
+                                     built: Date(), brief: result.brief), for: id)
+                if let previous { store.carryClosed(from: previous, to: result.brief, recording: meeting.id, for: id) }
+                if !result.complete { errors[id] = "Part of “\(meeting.title)” could not be read. Refresh tries it again." }
+                read += 1
+                revision &+= 1
+            } catch is CancellationError {
+                return
+            } catch {
+                errors[id] = "“\(meeting.title)” could not be read: \(error.localizedDescription)"
+                AppLog.warn("person-brief", "\(meeting.id) failed: \(error.localizedDescription)")
+                // A timed-out read leaves LiteRT wedged; more reads would
+                // only queue behind it.
+                if case ASRError.chunkTimeout = error {
+                    if let litert = backend as? GemmaLiteRTBackend { try? await litert.recoverWedge(modelPath: nil) }
+                    break
+                }
+            }
+        }
+        AppLog.info("person-brief", "read \(read) of \(recent.count) meetings")
+    }
+
 
     /// What a read covers: the last month's meetings, and always the
     /// newest one, however old.
@@ -165,7 +188,9 @@ final class PersonBriefRunner {
 
     /// A person is being deleted: their read stops before it writes again.
     func cancel(person: UUID) {
-        if running == person { task?.cancel() }
+        // In Refresh all the others go on; nothing of theirs is written
+        // once they are gone (see `read`).
+        if running == person, batch <= 1 { task?.cancel() }
         errors[person] = nil
     }
 }
@@ -251,7 +276,7 @@ struct PersonBriefView: Equatable {
         out.meetings = meetings(all, in: period, now: now)
         var seenTopics = Set<String>()
         var seenItems: [Row.Kind: [Set<String>]] = [:]
-        func words(_ s: String) -> Set<String> { Set(SpeechLexicon.words(s).filter { $0.count > 2 }) }
+        func words(_ s: String) -> Set<String> { PersonBriefStore.meaningWords(s) }
         /// Said before in a newer meeting already shown.
         func repeated(_ kind: Row.Kind, _ text: String) -> Bool {
             let w = words(text)

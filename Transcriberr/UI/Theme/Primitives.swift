@@ -33,8 +33,11 @@ struct TapButton<Label: View>: View {
     var body: some View {
         label()
             .opacity(pressed ? 0.6 : 1.0)
+            // A disabled button must look it: a primary pill read as
+            // pressable while its action was off (found 2026-10-24).
+            .opacity(isEnabled ? 1 : 0.4)
             .contentShape(Rectangle())
-            .onTapGesture(perform: action)
+            .onTapGesture { if isEnabled { action() } }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in if !pressed { pressed = true } }

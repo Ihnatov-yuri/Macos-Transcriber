@@ -34,6 +34,9 @@ struct VoiceConfidence: Equatable {
     let advice: String?
     /// The closest other saved voice when it is near enough to confuse.
     let soundsLike: String?
+    /// Why the level is lower than the percentage alone would make it,
+    /// in a sentence; nil when it is not held back.
+    var heldBack: String? = nil
 
     var percent: Int { Int((score * 100).rounded()) }
 }
@@ -134,17 +137,27 @@ enum PeopleConfidence {
             (gap < margin * 1.5 || $0.similarity >= bar) && !unmatched.contains($0.name) ? $0.name : nil
         }
         var level: VoiceConfidence.Level = score < 0.45 ? .learning : score < 0.75 ? .good : .strong
+        var heldBack: String?
         // A clean but short print scores well on everything it can be
         // judged on; too little evidence is still too little.
-        if (factors.first { $0.kind == .speech }?.value ?? 0) < 0.4 { level = .learning }
-        if !ownVoice, recent.isEmpty, sources < 2, level == .strong { level = .good }
+        if (factors.first { $0.kind == .speech }?.value ?? 0) < 0.4, level != .learning {
+            level = .learning
+            heldBack = "Kept at Learning until more of their speech is learned."
+        }
+        if !ownVoice, recent.isEmpty, sources < 2, level == .strong {
+            level = .good
+            heldBack = "Kept at Good until they are recognised in a new recording or learned from a second one."
+        }
         // Two voices that close are left unnamed whatever else is true.
-        if confusable != nil { level = .learning }
+        if let confusable {
+            level = .learning
+            heldBack = "Kept at Learning while they sound close to \(confusable): recordings leave such a speaker unnamed rather than guess."
+        }
 
         let weakest = judged.filter { $0.grade != .good }.min { ($0.value ?? 0) < ($1.value ?? 0) }
         return VoiceConfidence(score: score, level: level, factors: factors,
                                advice: weakest.map { advice(for: $0.kind, soundsLike: nearest?.name) },
-                               soundsLike: confusable)
+                               soundsLike: confusable, heldBack: heldBack)
     }
 
     static func advice(for kind: VoiceConfidence.Factor.Kind, soundsLike: String?) -> String {

@@ -26,7 +26,7 @@ struct PersonBrief: Codable, Equatable, Sendable {
 
 enum PersonBriefBuilder {
     /// Bumped when the prompt changes, so cached reads are redone.
-    static let promptVersion = 4
+    static let promptVersion = 5
     /// Meetings read per brief: everything in the last `recentDays`, and
     /// always the newest one, newest first up to `maxMeetings`. Older ones
     /// say little about what is open now, and each costs a read on a local
@@ -54,6 +54,7 @@ enum PersonBriefBuilder {
         - Only \(name)'s own words count, never what others said.
         - Rewrite speech as clean written sentences: no fillers, false starts or quotes.
         - A COMMIT is something \(name) will do. Waiting for others, hopes and wishes are not.
+        - Leave out greetings, small talk, jokes and banter.
         - Write in the language of the transcript.
         - Exactly 1 GIST line, first. At most 5 COMMIT, 5 QUESTION and 6 TOPIC lines. Leave out any kind there is nothing of. Never invent.
         """
@@ -136,13 +137,16 @@ enum PersonBriefBuilder {
                 }
                 Task.detached(priority: .utility) {
                     try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    work.value?.cancel()
+                    // Claimed before the work is cancelled: the cancelled
+                    // work would otherwise report a CancellationError first,
+                    // and a wedged engine would pass for Stop.
                     claim.resume(Result<T, Error>.failure(ASRError.chunkTimeout))
+                    work.value?.cancel()
                 }
             }
         } onCancel: {
-            work.value?.cancel()
             claim.resume(Result<T, Error>.failure(CancellationError()))
+            work.value?.cancel()
         }
     }
 
@@ -306,7 +310,7 @@ struct PersonBriefStore {
     func carryClosed(from old: PersonBrief, to new: PersonBrief, recording: UUID, for person: UUID) {
         let closed = self.closed(for: person)
         guard !closed.isEmpty else { return }
-        func words(_ s: String) -> Set<String> { Set(SpeechLexicon.words(s).filter { $0.count > 2 }) }
+        func words(_ s: String) -> Set<String> { Self.meaningWords(s) }
         let kinds: [(String, [PersonBrief.Item], [PersonBrief.Item])] = [
             ("commitment", old.commitments, new.commitments), ("question", old.questions, new.questions),
         ]
@@ -319,6 +323,14 @@ struct PersonBriefStore {
                 try? setClosed(Self.itemKey(recording, kind, best.text), true, for: person)
             }
         }
+    }
+
+    /// The words that carry an item's meaning: "I will send the plan" and
+    /// "Send the plan" are the same item, so the wording of a promise
+    /// ("will", "I'll", "going") does not count.
+    static func meaningWords(_ s: String) -> Set<String> {
+        let wording: Set<String> = ["will", "i'll", "i’ll", "we'll", "going", "shall", "the", "and", "for", "with", "that", "this"]
+        return Set(SpeechLexicon.words(s).filter { $0.count > 2 && !wording.contains($0) })
     }
 
     static func overlap(_ a: Set<String>, _ b: Set<String>) -> Double {

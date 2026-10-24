@@ -247,6 +247,7 @@ struct PeopleOverview: View {
     @State private var drafts: [String: String] = [:]
     @State private var scanned = false
     private var suggest: PeopleSuggestionRunner { PeopleSuggestionRunner.shared }
+    private var briefs: PersonBriefRunner { PersonBriefRunner.shared }
 
     static let recentDays = 30.0
 
@@ -261,7 +262,7 @@ struct PeopleOverview: View {
                     scanCard
                     suggestionsCard
                     if !rows.isEmpty { togetherCard }
-                    if !commitments.isEmpty { commitmentsCard }
+                    if !commitments.isEmpty || rows.contains(where: { !$0.meetings.isEmpty }) { commitmentsCard }
                     let waiting = people.filter { ($0.candidates?.count ?? 0) > 0 }
                     if !waiting.isEmpty { waitingCard(waiting) }
                 }
@@ -273,6 +274,7 @@ struct PeopleOverview: View {
         .task(id: people.map(\.updated)) { reload() }
         .onChange(of: scan.isRunning) { if !scan.isRunning { reload() } }
         .onChange(of: suggest.busy) { if suggest.busy == nil { reload() } }
+        .onChange(of: briefs.revision) { reload() }
     }
 
     private var summary: String {
@@ -415,8 +417,29 @@ struct PeopleOverview: View {
 
     private var commitmentsCard: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("Open commitments").cardTitle()
-            Text("From the meetings read on each person's page, newest first.")
+            HStack(alignment: .firstTextBaseline) {
+                Text("Open commitments").cardTitle()
+                Spacer()
+                if briefs.batch > 1 {
+                    TapButton { briefs.cancel() } label: { LitButtonChrome(.ghost, compact: true) { Text("Stop") } }
+                } else {
+                    TapButton {
+                        briefs.buildAll(rows.filter { !$0.meetings.isEmpty }.map { ($0.person, $0.meetings) },
+                                        container: container)
+                    } label: { LitButtonChrome(.secondary, compact: true) { Text("Refresh all") } }
+                    .disabled(briefs.running != nil)
+                    .help("Read everyone's meetings from the last month, one person at a time. Meetings read before are skipped.")
+                }
+            }
+            if briefs.batch > 1, let progress = briefs.progress {
+                HStack(spacing: AppMetric.s) {
+                    ProgressView().controlSize(.small)
+                    Text(progress).font(AppFont.text(12)).foregroundStyle(AppColor.ink2).lineLimit(1)
+                }
+            }
+            Text(commitments.isEmpty
+                 ? "Nothing open from the last month. Refresh all reads everyone's meetings to find what they committed to."
+                 : "What people committed to in the last month, newest first. Mark items done on their pages.")
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             ForEach(commitments.prefix(10), id: \.id) { c in
                 TapButton { openMeeting(c.row.meeting, at: c.row.item.seconds ?? c.row.meeting.firstLine) } label: {
@@ -481,7 +504,7 @@ struct PeopleOverview: View {
         let all = PersonBriefStore.shared.all()
         commitments = rows.flatMap { r in
             PersonBriefView.combine(all.entries[r.person.id] ?? [], meetings: r.meetings,
-                                    closed: Set(all.closed[r.person.id] ?? []))
+                                    closed: Set(all.closed[r.person.id] ?? []), period: .month)
                 .commitments.map { (person: r.person, row: $0, id: r.person.id.uuidString + $0.id) }
         }
         .sorted { $0.row.meeting.date > $1.row.meeting.date }

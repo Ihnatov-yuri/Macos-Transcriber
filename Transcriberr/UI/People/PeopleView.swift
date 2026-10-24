@@ -13,7 +13,7 @@ struct PeopleView: View {
     /// A meeting opened from a page, at one of the person's lines.
     @State private var opened: (recording: Recording, at: Double)?
     /// The user's own print, read once: every row compares against it.
-    @State private var mine = VoiceprintStore.load()
+    @State private var mine = PeopleEmbedder.myVoice()
 
     enum Selection: Hashable { case overview, you, person(UUID) }
     enum Sort: String, CaseIterable { case name = "Name", confidence = "Confidence", toConfirm = "To confirm" }
@@ -54,7 +54,7 @@ struct PeopleView: View {
             people = PeopleStore.shared.load()
         }
         .onReceive(NotificationCenter.default.publisher(for: VoiceprintStore.didChange)) { _ in
-            mine = VoiceprintStore.load()
+            mine = PeopleEmbedder.myVoice()
         }
         .onAppear {
             people = PeopleStore.shared.load()
@@ -497,7 +497,7 @@ struct PeopleOverview: View {
         let unknown = UnknownVoiceStore.shared.load()
         scanned = !unknown.entries.isEmpty
         groups = VoiceSuggestions.groups(unknown, people: people.map { (name: $0.name, centroid: $0.print.centroid) },
-                                         me: VoiceprintStore.load()?.centroid)
+                                         me: PeopleEmbedder.myVoice()?.centroid)
         titles = Dictionary(groups.flatMap(\.members).compactMap { m in
             (try? container.repository.get(id: m.recordingId)).map { (m.recordingId, $0.title) }
         }, uniquingKeysWith: { a, _ in a })

@@ -40,6 +40,10 @@
 - Record shows Starting… while the microphone gets ready, so a second press no longer stops the recording it just started.
 - Disabled buttons look disabled.
 - File > Delete Recording… (⌘⌫) deletes the recording open in Library, after the same confirmation.
+- People are matched on 3 s of their speech instead of 1.5 s: the length their voices are learned from, and about twice as reliable. Every threshold was measured again on 381 clips of 23 people from real meetings.
+- Fixed voice measurements that came out wrong whenever the voice model was given one or two pieces of audio instead of three: most matches had one or two such misreadings mixed in.
+- People you meet often keep getting easier to find: a clear match adds that meeting to their voice, through the same sameness check. Turn it off in Settings › People with Keep learning from meetings.
+- Settings › People › Voice model: High accuracy uses SimAM-ResNet100, trained on VoxBlink2, a 100 MB download. On the same clips it told people apart about twice as well. Switching rebuilds every voice from the meetings it was learned from, and switching back is instant. The model is licensed CC BY-NC-SA 4.0, for personal, non-commercial use.
 - Buttons across the app are now real buttons to VoiceOver and other accessibility tools; before, many could be read but not pressed. Pause and Stop on the Record screen included.
 
 ## 4.7.0

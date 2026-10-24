@@ -157,7 +157,13 @@ struct PersonPage: View {
             Text("How sure Transcriberr is to recognise \(person.name) when they speak in a new recording. Above 75% is Strong; recordings then name them on their own.")
                 .font(AppFont.text(13)).foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
-            if let held = c.heldBack {
+            if !person.hasVoice {
+                Text(VoiceModelSwitcher.shared.busy != nil
+                     ? "Their voice is being rebuilt for the \(VoiceModel.current.title.lowercased()) voice model."
+                     : "No voice in the \(VoiceModel.current.title.lowercased()) voice model yet. Improve from my recordings learns it from the meetings they are named in.")
+                    .font(AppFont.text(12)).foregroundStyle(AppColor.statusWarning)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let held = c.heldBack {
                 Text(held)
                     .font(AppFont.text(12)).foregroundStyle(AppColor.statusWarning)
                     .fixedSize(horizontal: false, vertical: true)
@@ -750,7 +756,7 @@ struct PersonPage: View {
                             lastFailure = failure.localizedDescription
                         }
                     } else {
-                        let joined = Voiceprint(seconds: prints.map(\.seconds).reduce(0, +),
+                        let joined = Voiceprint(model: prints[0].model, seconds: prints.map(\.seconds).reduce(0, +),
                                                 embeddings: prints.flatMap(\.embeddings))
                         try PeopleStore.shared.add(joined, to: id, from: m.id, speakers: Person.Sample.speakers(m.keys))
                         seconds += joined.seconds

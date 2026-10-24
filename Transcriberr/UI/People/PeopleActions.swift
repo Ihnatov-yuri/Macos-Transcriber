@@ -134,7 +134,7 @@ final class PeopleSuggestionRunner {
                 // Deleted or re-run while its voices were read: nothing from
                 // it is used, since its keys may be other people now.
                 guard rec.modelContext != nil, PeopleVoice.signature(rec) == before, !prints.isEmpty else { continue }
-                learnedPrints.append((step.0, keys, Voiceprint(seconds: prints.map(\.seconds).reduce(0, +),
+                learnedPrints.append((step.0, keys, Voiceprint(model: prints[0].model, seconds: prints.map(\.seconds).reduce(0, +),
                                                                 embeddings: prints.flatMap(\.embeddings)), before))
             }
             let store = PeopleStore.shared
@@ -240,7 +240,8 @@ enum VoiceImprover {
         let freshIDs = Set(fresh.compactMap(\.recordingId))
         for s in person.allSamples {
             let end = min(person.print.embeddings.count, start + s.count)
-            let part = Voiceprint(seconds: s.seconds, embeddings: Array(person.print.embeddings[start..<end]))
+            let part = Voiceprint(model: person.print.model, seconds: s.seconds,
+                                  embeddings: Array(person.print.embeddings[start..<end]))
             start = end
             if s.recordingId == nil, s.earlier != true {
                 kept.append((nil, nil, s.date, part))                     // a reading
@@ -290,5 +291,102 @@ enum VoiceImprover {
         let left = leftOut == 0 ? "" : " \(leftOut) \(leftOut == 1 ? "sample did" : "samples did") not agree with the rest and \(leftOut == 1 ? "was" : "were") left out."
         return Outcome(before: before, after: after, applied: true, used: chosen.count, leftOut: leftOut,
                        message: "Improved from \(before.percent)% to \(after.percent)%, rebuilt from \(chosen.count) \(chosen.count == 1 ? "sample" : "samples").\(left)")
+    }
+}
+
+/// Settings → People → Voice model. Switching downloads the model if
+/// needed, re-embeds the user's kept reading, parks every person's voice in
+/// the model left (switching back is instant) and rebuilds each voice in the
+/// new one from the recordings it was learned from. App-wide, so leaving
+/// Settings does not stop it.
+@MainActor
+@Observable
+final class VoiceModelSwitcher {
+    static let shared = VoiceModelSwitcher()
+
+    private(set) var busy: String?
+    private(set) var progress: Double?
+    private(set) var note: String?
+    private(set) var failed = false
+    @ObservationIgnored private var task: Task<Void, Never>?
+
+    func switchTo(_ model: VoiceModel, container: AppContainer) {
+        guard busy == nil else { return }
+        failed = false
+        note = nil
+        busy = model == .simam && !SimAMModel.isInstalled()
+            ? "Downloading the model (\(SimAMModel.totalBytes / 1_000_000) MB)…" : "Switching…"
+        task = Task { @MainActor in
+            defer { busy = nil; progress = nil; task = nil }
+            do {
+                if model == .simam {
+                    try await SimAMModel.ensureDownloaded { p in Task { @MainActor in VoiceModelSwitcher.shared.progress = p } }
+                    progress = nil
+                }
+                busy = "Learning your voice in the new model…"
+                do { try await PeopleEmbedder.buildMyVoice(model) } catch {
+                    AppLog.warn("voice", "own voice not rebuilt for \(model.rawValue): \(error.localizedDescription)")
+                }
+                try Task.checkCancellation()
+                // The setting first: the store's change notice makes every
+                // view reload, and they must read the new model by then.
+                let previous = UserDefaults.standard.string(forKey: VoiceModel.key)
+                UserDefaults.standard.set(model.rawValue, forKey: VoiceModel.key)
+                let pending: [Person]
+                do { pending = try PeopleStore.shared.switchVoices(to: model) } catch {
+                    UserDefaults.standard.set(previous, forKey: VoiceModel.key)
+                    throw error
+                }
+                NotificationCenter.default.post(name: PeopleStore.didChange, object: nil)
+                if model == .standard { await SimAMEmbedder.shared.unload() }
+                var without: [String] = []
+                for (i, p) in pending.enumerated() {
+                    try Task.checkCancellation()
+                    busy = "Rebuilding \(p.name)'s voice (\(i + 1) of \(pending.count))…"
+                    let parts = await Self.rebuild(p, model: model, container: container)
+                    guard VoiceModel.current == model else { return }
+                    if parts.isEmpty { without.append(p.name); continue }
+                    try PeopleStore.shared.setRebuilt(p.id, parts: parts)
+                }
+                note = "Now using \(model.title.lowercased())."
+                    + (pending.isEmpty ? "" : " Rebuilt \(pending.count - without.count) of \(pending.count) voices from their recordings.")
+                    + (without.isEmpty ? "" : " No recording to rebuild \(without.joined(separator: ", ")) from: add them again on their page.")
+                AppLog.info("voice", "people now on \(model.rawValue); \(pending.count) rebuilt, \(without.count) without a source")
+            } catch is CancellationError {
+                note = "Stopped. Voices not rebuilt yet are rebuilt the next time you switch."
+            } catch {
+                failed = true
+                note = error.localizedDescription
+            }
+        }
+    }
+
+    func cancel() { task?.cancel() }
+
+    /// One person's voice in `model`, from each recording it was learned
+    /// from: the same speakers, or the ones carrying their name.
+    static func rebuild(_ p: Person, model: VoiceModel,
+                        container: AppContainer) async -> [(recording: UUID, speakers: String?, print: Voiceprint)] {
+        var parts: [(recording: UUID, speakers: String?, print: Voiceprint)] = []
+        for src in PeopleStore.rebuildSources(p) {
+            guard let rec = try? container.repository.get(id: src.recording), rec.modelContext != nil else { continue }
+            let present = Set(rec.segments.compactMap(\.speaker))
+            let keys: [String] = (src.speakers.map { $0.split(separator: ",").map(String.init) }
+                ?? Set(rec.segments.filter { $0.speakerName?.caseInsensitiveCompare(p.name) == .orderedSame }
+                    .compactMap(\.speaker)).sorted())
+                .filter(present.contains)
+            var prints: [Voiceprint] = []
+            for key in keys {
+                guard rec.modelContext != nil else { break }
+                if let print = try? await PeopleVoice.learn(speaker: key, in: rec), print.model == model.rawValue {
+                    prints.append(print)
+                }
+            }
+            guard !prints.isEmpty else { continue }
+            parts.append((rec.id, Person.Sample.speakers(keys),
+                          Voiceprint(model: model.rawValue, seconds: prints.map(\.seconds).reduce(0, +),
+                                     embeddings: prints.flatMap(\.embeddings))))
+        }
+        return parts
     }
 }

@@ -210,9 +210,13 @@ struct YouDashboard: View {
     private var voiceCard: some View {
         VStack(alignment: .leading, spacing: AppMetric.m) {
             if let voice {
+                // Compared in People's voice model: the same reading
+                // re-embedded when another model is picked.
+                let mine = PeopleEmbedder.myVoice()
                 let me = Person(id: UUID(), name: "You", created: voice.created, updated: voice.created,
-                                print: voice, sources: 1)
-                let c = PeopleConfidence.assess(me, others: others, ownVoice: true)
+                                print: mine ?? voice, sources: 1)
+                let c = PeopleConfidence.assess(me, others: mine == nil && VoiceModel.current != .standard ? [] : others,
+                                                ownVoice: true)
                 HStack(alignment: .firstTextBaseline, spacing: AppMetric.m) {
                     Text("Your voice").cardTitle()
                     LevelMark(level: c.level)

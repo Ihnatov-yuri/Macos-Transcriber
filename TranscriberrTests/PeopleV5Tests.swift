@@ -392,4 +392,42 @@ final class PeopleV5Tests: XCTestCase {
         XCTAssertEqual(Set(learn.keys), ["S1"])
         XCTAssertEqual(learn["S1"]?.person.id, kate.id)
     }
+
+    // MARK: - Switching the voice model
+
+    func testSwitchingParksVoicesAndSwitchingBackRestoresThem() throws {
+        let rec = UUID()
+        let kate = try store.remember(print([1, 0, 0, 0], count: 6), as: "Kate", from: rec, speakers: "S1")
+        let pending = try store.switchVoices(to: .simam)
+        XCTAssertEqual(pending.map(\.id), [kate.id], "no SimAM voice yet: to be rebuilt")
+        // The test host always runs on the built-in model, so read the file.
+        XCTAssertTrue(store.load().isEmpty, "Kate is on the other model now")
+        XCTAssertEqual(try store.switchVoices(to: .standard).count, 0, "switching back is instant")
+        let back = try XCTUnwrap(store.load().first)
+        XCTAssertEqual(back.id, kate.id)
+        XCTAssertEqual(back.print.embeddings.count, 6)
+        XCTAssertEqual(back.allSamples.first?.speakers, "S1")
+        XCTAssertNotNil(back.parked?[VoiceModel.simam.rawValue], "the empty SimAM voice is kept for later")
+    }
+
+    func testRebuildSourcesComeFromEverySampleOnce() throws {
+        let a = UUID(), b = UUID(), legacy = UUID()
+        var kate = try store.remember(print([1, 0, 0, 0]), as: "Kate", from: a, speakers: "S1")
+        kate = try store.add(print([1, 0.05, 0, 0]), to: kate.id, from: b, speakers: "S2,S4")
+        kate = try store.add(print([1, 0.02, 0, 0]), to: kate.id, from: nil)   // a reading: nothing to rebuild from
+        kate.learnedFrom = (kate.learnedFrom ?? []) + [legacy]
+        let sources = PeopleStore.rebuildSources(kate)
+        XCTAssertEqual(sources.map(\.recording), [a, b, legacy])
+        XCTAssertEqual(sources.map(\.speakers), ["S1", "S2,S4", nil])
+    }
+
+    func testSetRebuiltRefusesAnotherModelsVoice() throws {
+        let kate = try store.remember(print([1, 0, 0, 0]), as: "Kate")
+        let simam = Voiceprint(model: VoiceModel.simam.rawValue, seconds: 9, embeddings: [unit([1, 0, 0, 0])])
+        XCTAssertThrowsError(try store.setRebuilt(kate.id, parts: [(UUID(), "S1", simam)]))
+        XCTAssertThrowsError(try store.add(simam, to: kate.id, from: UUID()), "voices of two models never mix")
+        let rebuilt = try store.setRebuilt(kate.id, parts: [(UUID(), "S1", print([0.9, 0.1, 0, 0], count: 5))])
+        XCTAssertEqual(rebuilt.print.embeddings.count, 5)
+        XCTAssertEqual(rebuilt.sources, 1)
+    }
 }

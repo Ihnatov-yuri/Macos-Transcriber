@@ -202,7 +202,7 @@ struct SpeakerRenameSheet: View {
         defer { listening = false }
         let people = PeopleStore.shared.load()
         let me = TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))
-        let mine = VoiceprintStore.load()
+        let mine = PeopleEmbedder.myVoice()
         guard !people.isEmpty || mine != nil, recording.modelContext != nil else { return }
         let segs = recording.segments.sorted { $0.startSeconds < $1.startSeconds }
         let src = PeopleVoice.source(for: speakerKey, in: recording, regions: PeopleVoice.regions(segs))

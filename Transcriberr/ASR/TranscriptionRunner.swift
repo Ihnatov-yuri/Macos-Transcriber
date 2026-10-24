@@ -701,11 +701,12 @@ final class TranscriptionRunner: @unchecked Sendable {
                 if let terms = params.meetingContext?.allTerms, !terms.isEmpty {
                     vocabulary += (vocabulary.isEmpty ? "" : ", ") + terms.joined(separator: ", ")
                 }
+                let words = vocabulary
                 do {
                     let brief = try await withChunkTimeout(
                         seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass)
                     ) {
-                        try await ens.prepareBrief(transcript: firstPass, vocabulary: vocabulary)
+                        try await ens.prepareBrief(transcript: firstPass, vocabulary: words)
                     }
                     spellingFixes = brief?.fixes ?? []
                 } catch {

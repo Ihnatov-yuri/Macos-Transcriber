@@ -40,8 +40,21 @@ struct Person: Codable, Identifiable, Equatable {
     /// recordings up to it are taken as learned (their source was not kept).
     var legacyCutoff: Date? = nil
 
-    /// Made by the embedding model in use: only then can it be matched.
-    var isComparable: Bool { print.model == Voiceprint.currentModel }
+    /// Made by the voice model in use (Settings → People → Voice model):
+    /// only then can it be matched. A person whose voice is being rebuilt
+    /// for a newly picked model belongs to it already, with no voice yet.
+    var isComparable: Bool { print.model == VoiceModel.current.rawValue }
+    /// Has a voice to compare against (false while it is being rebuilt).
+    var hasVoice: Bool { !print.embeddings.isEmpty }
+    /// Their voice in the models not in use, kept when the setting changes
+    /// so switching back is instant (5.0.0).
+    var parked: [String: Parked]? = nil
+
+    struct Parked: Codable, Equatable {
+        var print: Voiceprint
+        var samples: [Sample]?
+        var sources: Int
+    }
     /// Where each run of `print.embeddings` came from, in order (5.0.0), so
     /// one bad sample can be forgotten without deleting the person. Nil in
     /// older files: their embeddings are one "earlier" sample.
@@ -226,7 +239,7 @@ struct PeopleStore {
     let url: URL
     /// The user's own voice, compared against like any saved person's so a
     /// sample of the user is never filed under someone else.
-    var myVoice: @Sendable () -> [Float]? = { VoiceprintStore.load()?.centroid }
+    var myVoice: @Sendable () -> [Float]? = { PeopleEmbedder.myVoice()?.centroid }
 
     /// What their meetings said, kept beside the voices and deleted with them.
     var briefs: PersonBriefStore {
@@ -242,7 +255,7 @@ struct PeopleStore {
     static let didChange = Notification.Name("PeopleStore.didChange")
 
     enum PeopleError: LocalizedError {
-        case emptyName, missing, unreadable, lastSample
+        case emptyName, missing, unreadable, lastSample, otherModel
         case nameTaken(String)
         case notSamePerson(name: String, score: Float, closer: String?)
         var errorDescription: String? {
@@ -255,6 +268,7 @@ struct PeopleStore {
                 return closer.map { String(format: "This voice sounds more like %@ than like %@ (%.2f), so it was not added to %@.", $0, name, score, name) }
                     ?? String(format: "This voice does not sound like %@'s saved voice (%.2f, at least %.2f needed), so it was not added.", name, score, VoiceGate.sameMin)
             case .unreadable: return "The saved people file cannot be read. It was left as it is."
+            case .otherModel: return "The voice model was changed while this voice was read. Nothing was saved; try again."
             }
         }
     }
@@ -327,11 +341,93 @@ struct PeopleStore {
         return p
     }
 
+    // MARK: Voice model switch
+
+    /// Moves everyone to `model`: each person's voice in the model left is
+    /// parked on them, and the one kept for `model` comes back. Returns the
+    /// people with no voice in `model` yet, to be rebuilt from their
+    /// recordings (`rebuild`). Ids, names, history and briefs stay.
+    @discardableResult
+    func switchVoices(to model: VoiceModel) throws -> [Person] {
+        var people = try read()
+        // Already on `model` with no voice: a rebuild that was stopped.
+        var pending = people.filter { $0.print.model == model.rawValue && !$0.hasVoice }
+        for i in people.indices where people[i].print.model != model.rawValue {
+            var p = people[i]
+            var parked = p.parked ?? [:]
+            if p.hasVoice || p.samples != nil {
+                parked[p.print.model] = Person.Parked(print: p.print, samples: p.samples, sources: p.sources)
+            }
+            if let back = parked.removeValue(forKey: model.rawValue) {
+                p.print = back.print
+                p.samples = back.samples
+                p.sources = back.sources
+            } else {
+                p.print = Voiceprint(model: model.rawValue, seconds: 0, embeddings: [])
+                p.samples = []
+                p.sources = 0
+                pending.append(p)
+            }
+            p.parked = parked
+            people[i] = p
+        }
+        try write(people)
+        return pending
+    }
+
+    /// Where a person's voice was learned, in any model: the recordings and
+    /// speakers to rebuild it from. Readings (no recording) cannot be.
+    static func rebuildSources(_ p: Person) -> [(recording: UUID, speakers: String?)] {
+        var seen = Set<String>()
+        var out: [(UUID, String?)] = []
+        let all = (p.samples ?? []) + (p.parked ?? [:]).values.flatMap { $0.samples ?? [] }
+        for s in all {
+            guard let rec = s.recordingId, seen.insert("\(rec)|\(s.speakers ?? "")").inserted else { continue }
+            out.append((rec, s.speakers))
+        }
+        // Older people: the recordings they were learned from, speakers found by name.
+        for rec in p.learnedFrom ?? [] where !out.contains(where: { $0.0 == rec }) { out.append((rec, nil)) }
+        return out
+    }
+
+    /// Sets a person's voice in the current model from rebuilt samples,
+    /// one per recording, unchecked against each other: each was accepted
+    /// by the gate when it was first learned.
+    @discardableResult
+    func setRebuilt(_ id: UUID, parts: [(recording: UUID, speakers: String?, print: Voiceprint)],
+                    now: Date = Date()) throws -> Person {
+        var people = try read()
+        guard let i = people.firstIndex(where: { $0.id == id }) else { throw PeopleError.missing }
+        var p = people[i]
+        guard let model = parts.first?.print.model, parts.allSatisfy({ $0.print.model == model }),
+              model == p.print.model else { throw PeopleError.otherModel }
+        p.print = Voiceprint(model: model, seconds: 0, embeddings: [])
+        p.samples = []
+        p.sources = 0
+        for part in parts {
+            p.add(part.print, from: part.recording, speakers: part.speakers, now: now)
+            p.sources += 1
+        }
+        p.updated = now
+        people[i] = p
+        try write(people)
+        return p
+    }
+
     /// Throws unless `print` is clearly the same voice as `person`: see
     /// VoiceGate. Every path that adds to a saved voice comes through here.
     func gate(_ print: Voiceprint, onto person: Person, among people: [Person]) throws {
-        let others = people.filter { $0.id != person.id && $0.isComparable }.map { ($0.name, $0.print.centroid) }
+        guard print.model == person.print.model else { throw PeopleError.otherModel }
+        let others = people.filter { $0.id != person.id && $0.isComparable && $0.hasVoice }.map { ($0.name, $0.print.centroid) }
             + (myVoice().map { [("you", $0)] } ?? [])
+        // A voice still being rebuilt for a new model has nothing to agree
+        // with yet; the sample must still not be anyone else's.
+        guard person.hasVoice else {
+            if let closer = others.first(where: { VoiceGate.score(print, $0.1) >= VoiceGate.sameMin }) {
+                throw PeopleError.notSamePerson(name: person.name, score: 0, closer: closer.0)
+            }
+            return
+        }
         let v = VoiceGate.check(print, against: person.print, others: others)
         guard v.accepted else {
             throw PeopleError.notSamePerson(name: person.name, score: v.score, closer: v.closer?.name)
@@ -542,10 +638,10 @@ enum PeopleMatch {
     /// the user's meetings, empty embedder slots filled): the right person
     /// scored at least 0.52, anyone else at most 0.47, Lana against Iryna
     /// 0.41. On 1.5 s clips these were 0.40 / 0.30 / 0.10.
-    static let onThreshold: Float = 0.50
+    static var onThreshold: Float { VoiceModel.current.scale.on }
     /// Under the bar but over this: asked about on their page.
-    static let offThreshold: Float = 0.40
-    static let margin: Float = 0.15
+    static var offThreshold: Float { VoiceModel.current.scale.off }
+    static var margin: Float { VoiceModel.current.scale.margin }
     /// A match this much over the bar, from at least `learnMinClips` clips,
     /// also adds the meeting to the person's voice (through VoiceGate): the
     /// people met again and again keep getting easier to find.
@@ -581,6 +677,7 @@ enum PeopleMatch {
 
     /// Every scored speaker's closest person, matched or not.
     static func assess(_ clusters: [String: [[Float]]], people: [Person]) -> [String: Assessment] {
+        let people = people.filter(\.hasVoice)
         guard !people.isEmpty else { return [:] }
         var out: [String: Assessment] = [:]
         for (key, clips) in clusters where clips.count >= ClusterVoice.minClips {
@@ -723,7 +820,7 @@ enum PeopleVoice {
         let speech = cleanSpeech(of: key, regions: regions, samples: samples)
         let seconds = Double(speech.count) / VoiceActivity.sampleRate
         guard seconds >= minLearnSeconds else { throw LearnError.tooLittleSpeech(seconds: seconds) }
-        let print = try await VoiceEmbedder.shared.enroll(speech)
+        let print = try await PeopleEmbedder.enroll(speech)
         guard print.selfSimilarity >= VoiceprintStore.minSelfSimilarity else {
             throw VoiceprintStore.MixedReading(similarity: print.selfSimilarity)
         }
@@ -733,7 +830,7 @@ enum PeopleVoice {
     /// A voice print from a reading recorded at this Mac (Settings → People
     /// → Add person → Record them now), held to the same bar as the user's.
     static func learn(reading samples: [Float]) async throws -> Voiceprint {
-        let print = try await VoiceEmbedder.shared.enroll(samples)
+        let print = try await PeopleEmbedder.enroll(samples)
         guard print.selfSimilarity >= VoiceprintStore.minSelfSimilarity else {
             throw VoiceprintStore.MixedReading(similarity: print.selfSimilarity)
         }
@@ -749,14 +846,14 @@ enum PeopleVoice {
 
     /// Each speaker's clip embeddings, as ClusterVoice takes them.
     static func clusterEmbeddings(samples: [Float], regions: [DiarizationRunner.SpeakerSegment],
-                                  only keys: Set<String>) async throws -> [String: [[Float]]] {
+                                  only keys: Set<String>, model: VoiceModel = .current) async throws -> [String: [[Float]]] {
         let floor = VoiceActivity.speechFloor(samples)
         let ranges = ClusterVoice.clipRanges(regions, sampleCount: samples.count, window: PeopleMatch.clipSeconds)
             .filter { keys.contains($0.key) }
             .mapValues { $0.filter { VoiceActivity.rms(samples[$0]) >= floor } }
             .filter { $0.value.count >= ClusterVoice.minClips }
         let order = ranges.keys.sorted()
-        let embeddings = try await VoiceEmbedder.shared.embed(order.flatMap { ranges[$0]!.map { samples[$0] } })
+        let embeddings = try await PeopleEmbedder.embed(order.flatMap { ranges[$0]!.map { samples[$0] } }, model: model)
         var out: [String: [[Float]]] = [:]
         var i = 0
         for key in order {
@@ -805,9 +902,13 @@ enum PeopleNamer {
         }
         let time = PeopleVoice.speakingTime(segments)
         let signature = segments.map { "\($0.speaker ?? "")@\($0.startSeconds)" }.joined(separator: ",")
+        let model = VoiceModel.current
         do {
             let samples = try await AudioDecoder().decodeAll(file: URL(fileURLWithPath: path))
-            let clusters = try await PeopleVoice.clusterEmbeddings(samples: samples, regions: regions, only: keys)
+            let clusters = try await PeopleVoice.clusterEmbeddings(samples: samples, regions: regions, only: keys, model: model)
+            // The voice model was switched while the audio was read: these
+            // embeddings are not comparable with the voices now saved.
+            guard VoiceModel.current == model else { return 0 }
             // A speaker already carrying the person's name is not asked about.
             let found = PeopleMatch.assess(clusters, people: people).filter { key, a in
                 a.accepted || (names[key] ?? nil)?.caseInsensitiveCompare(a.person.name) != .orderedSame
@@ -827,7 +928,7 @@ enum PeopleNamer {
                 guard (names[key] ?? nil)?.isEmpty ?? true, found[key]?.accepted != true,
                       clips.count >= ClusterVoice.minClips else { return nil }
                 return .init(recordingId: recording.id, speaker: key, centroid: VoiceActivity.normalizedMean(clips),
-                             seconds: time[key] ?? 0, date: date, withMe: withMe)
+                             seconds: time[key] ?? 0, date: date, withMe: withMe, model: model.rawValue)
             }, for: recording.id)
             // People may have been renamed, merged or deleted while the audio
             // was read: name speakers after who they are now, by id.
@@ -847,7 +948,8 @@ enum PeopleNamer {
             if PeopleMatch.keepLearning {
                 for (key, a) in PeopleMatch.learnable(found, clips: clusters) {
                     guard let person = now[a.person.id], let clips = clusters[key] else { continue }
-                    let print = Voiceprint(seconds: Double(clips.count) * PeopleMatch.clipSeconds, embeddings: clips)
+                    let print = Voiceprint(model: model.rawValue, seconds: Double(clips.count) * PeopleMatch.clipSeconds,
+                                           embeddings: clips)
                     do {
                         try store.add(print, to: person.id, from: recording.id, speakers: Person.Sample.speakers([key]))
                         learned += 1

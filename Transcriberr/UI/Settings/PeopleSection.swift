@@ -7,6 +7,9 @@ import SwiftData
 struct PeopleSection: View {
     @Environment(AppContainer.self) private var container
     @AppStorage(PeopleMatch.keepLearningKey) private var keepLearning = true
+    @AppStorage(VoiceModel.key) private var voiceModelRaw = VoiceModel.standard.rawValue
+    private var switcher: VoiceModelSwitcher { VoiceModelSwitcher.shared }
+    @State private var downloadRemoved = 0
     @State private var people = PeopleStore.shared.load()
     @State private var editing: UUID?
     @State private var draft = ""
@@ -14,6 +17,56 @@ struct PeopleSection: View {
     @State private var confirmDeleteAll = false
     @State private var error: String?
     @State private var adding = false
+
+    /// Which model People's voices are in. Picking one switches at once:
+    /// download, then each voice rebuilt from its recordings.
+    private var voiceModelPicker: some View {
+        let active = VoiceModel.current
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Voice model").font(AppFont.text(12, weight: .bold))
+            ForEach(VoiceModel.allCases) { m in
+                TapButton { switcher.switchTo(m, container: container) } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: AppMetric.s) {
+                        Image(systemName: m == active ? "largecircle.fill.circle" : "circle")
+                            .foregroundStyle(m == active ? AppColor.ink : AppColor.ink3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(m.title).font(AppFont.text(12, weight: .bold)).foregroundStyle(AppColor.ink)
+                            Text(m.detail).font(AppFont.text(11)).foregroundStyle(AppColor.ink2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .disabled(switcher.busy != nil || (m == active && voiceModelRaw == m.rawValue
+                                                     && !PeopleStore.shared.load().contains { !$0.hasVoice }))
+                .accessibilityAddTraits(m == active ? .isSelected : [])
+            }
+            if let busy = switcher.busy {
+                HStack(spacing: AppMetric.s) {
+                    if let p = switcher.progress {
+                        ProgressView(value: p).frame(width: 140)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(busy).font(AppFont.text(11)).foregroundStyle(AppColor.ink2).lineLimit(1)
+                    TapButton { switcher.cancel() } label: { LitButtonChrome(.ghost, compact: true) { Text("Stop") } }
+                }
+            } else if let note = switcher.note {
+                Text(note).font(AppFont.text(11))
+                    .foregroundStyle(switcher.failed ? AppColor.statusError : AppColor.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if active == .standard, SimAMModel.isInstalled(), switcher.busy == nil {
+                TapButton { SimAMModel.delete(); downloadRemoved += 1 } label: {
+                    Text("Remove the high-accuracy download (\(SimAMModel.totalBytes / 1_000_000) MB)")
+                        .font(AppFont.text(11)).foregroundStyle(AppColor.accentOnLight)
+                }
+                .help("Voices made with it stay saved for when you switch back.")
+            }
+        }
+        .frame(maxWidth: 520, alignment: .leading)
+        .id(downloadRemoved)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
@@ -33,6 +86,8 @@ struct PeopleSection: View {
             }
             .toggleStyle(.checkbox)
             .frame(maxWidth: 520, alignment: .leading)
+
+            voiceModelPicker
 
             HStack(spacing: AppMetric.s) {
                 TapButton { adding = true } label: {

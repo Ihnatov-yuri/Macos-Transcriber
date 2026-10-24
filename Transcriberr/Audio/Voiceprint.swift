@@ -310,9 +310,8 @@ actor VoiceEmbedder {
         }
     }
 
-    /// Builds a print from enrollment audio: one embedding per voiced
-    /// `enrollWindow` (half-overlapping), silence skipped.
-    func enroll(_ samples: [Float]) async throws -> Voiceprint {
+    /// The voiced `enrollWindow`s of continuous speech, half overlapping.
+    static func enrollClips(_ samples: [Float]) -> [ArraySlice<Float>] {
         let win = Int(VoiceActivity.enrollWindow * VoiceActivity.sampleRate)
         let floor = VoiceActivity.speechFloor(samples)
         var clips: [ArraySlice<Float>] = []
@@ -322,6 +321,13 @@ actor VoiceEmbedder {
             if VoiceActivity.rms(slice) >= floor { clips.append(slice) }
             start += win / 2
         }
+        return clips
+    }
+
+    /// Builds a print from enrollment audio: one embedding per voiced
+    /// `enrollWindow` (half-overlapping), silence skipped.
+    func enroll(_ samples: [Float]) async throws -> Voiceprint {
+        let clips = Self.enrollClips(samples)
         guard clips.count >= 3 else { throw VoiceprintError.tooLittleSpeech }
         let embeddings = try await embed(clips)
         // Half-overlapping windows: each voiced second is counted twice.
@@ -418,7 +424,7 @@ struct VoiceTimeline: Equatable {
                         onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> VoiceTimeline {
         let total = Double(mic.count + sys.count)
         let micShare = total > 0 ? Double(mic.count) / total : 0.5
-        let m = try await VoiceEmbedder.shared.scores(mic, against: print) { onProgress?($0 * micShare) }
+        let m = try await VoiceEmbedder.shared.scores(mic, against: print, onProgress: { onProgress?($0 * micShare) })
         let fit = fits(m)
         guard fit.0 else { throw Mismatch(strong: fit.strong, ambiguous: fit.ambiguous) }
         // The call audio is the others nearly always, and scoring all of it

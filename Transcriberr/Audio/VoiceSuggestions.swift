@@ -24,6 +24,9 @@ struct UnknownVoiceStore {
         var date: Date
         /// The user spoke in the same recording.
         var withMe: Bool
+        /// The voice model the centroid is in; nil before 5.0 (the built-in).
+        var model: String? = nil
+        var modelId: String { model ?? VoiceModel.standard.rawValue }
         var key: String { Person.Hearing.key(recordingId, speaker) }
     }
 
@@ -83,7 +86,7 @@ enum VoiceSuggestions {
     /// On 3 s clips (2026-10-24): two recordings of one person at least
     /// 0.60, two different people up to 0.57 (Lana and Iryna; Jenny and
     /// Gabrielle). 0.55 put each pair in one group.
-    static let sameVoice: Float = 0.62
+    static var sameVoice: Float { VoiceModel.current.scale.sameVoice }
     /// Heard in at least this many of the user's meetings…
     static let minMeetings = 3
     /// …within this many days.
@@ -105,8 +108,9 @@ enum VoiceSuggestions {
                        me: [Float]?, now: Date = Date()) -> [Group] {
         let dismissed = Set(file.dismissed)
         let since = now.addingTimeInterval(-recentDays * 86_400)
+        let model = VoiceModel.current.rawValue
         let entries = file.entries
-            .filter { $0.withMe && $0.date >= since && !dismissed.contains($0.key) }
+            .filter { $0.withMe && $0.date >= since && !dismissed.contains($0.key) && $0.modelId == model }
             .sorted { $0.seconds > $1.seconds }
         var groups: [Group] = []
         for e in entries {
@@ -176,8 +180,8 @@ enum VoiceSuggestions {
 /// Rejecting a true sample costs a little training; accepting a wrong one
 /// spoils the voice, so the bar sits on the strict side.
 enum VoiceGate {
-    static let sameMin: Float = 0.55
-    static let margin: Float = 0.15
+    static var sameMin: Float { VoiceModel.current.scale.gateMin }
+    static var margin: Float { VoiceModel.current.scale.gateMargin }
 
     struct Verdict: Equatable {
         var score: Float

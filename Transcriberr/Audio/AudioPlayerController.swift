@@ -23,7 +23,9 @@ final class AudioPlayerController: @unchecked Sendable {
     /// per click running to the end, each result then thrown away.
     @ObservationIgnored private var waveformTask: Task<Void, Never>?
 
-    func load(url: URL) {
+    /// `startAt` puts the playhead on a line once the file is open (the
+    /// person page opens a meeting where they speak).
+    func load(url: URL, startAt: Double? = nil) {
         teardown()
         waveform = []
         // Fresh item, fresh state. Without this, switching recordings kept
@@ -59,6 +61,7 @@ final class AudioPlayerController: @unchecked Sendable {
         }
         player = p
         let loaded = ObjectIdentifier(p)
+        let generationAtLoad = seekGeneration
         Task { @MainActor in
             let asset = item.asset
             let dur = try? await asset.load(.duration)
@@ -66,6 +69,17 @@ final class AudioPlayerController: @unchecked Sendable {
             guard self.player.map(ObjectIdentifier.init) == loaded else { return }
             if let dur, dur.isValid, dur.seconds.isFinite {
                 self.duration = dur.seconds
+            }
+            if let startAt {
+                // AVPlayer can drop a seek on an item that is not ready yet,
+                // leaving Play to start from 0:00 under a highlight that says
+                // otherwise: wait for ready (briefly) before seeking.
+                for _ in 0..<60 where item.status == .unknown {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                guard self.player.map(ObjectIdentifier.init) == loaded else { return }
+                // Unless the user already played or clicked a line meanwhile.
+                if self.seekGeneration == generationAtLoad, !self.isPlaying { self.seek(to: startAt) }
             }
         }
         // Background waveform extraction. The array updates SwiftUI once the

@@ -99,6 +99,45 @@ enum VoiceprintStore {
         NotificationCenter.default.post(name: didChange, object: nil)
     }
 
+    /// How alike a new reading must be to the saved voice to be added to it.
+    static let minAddSimilarity: Float = 0.5
+
+    struct NotYourVoice: LocalizedError {
+        let similarity: Float
+        var errorDescription: String? {
+            String(format: "This reading does not sound like your saved voice (%.2f, at least 0.50 needed). Was someone else reading? To start over, use Record again in Settings → Audio input.", similarity)
+        }
+    }
+
+    struct UnreadablePrint: LocalizedError {
+        var errorDescription: String? {
+            "Your saved voice cannot be read (damaged, or made by an older model). Record it again in Settings → Audio input; nothing was changed."
+        }
+    }
+
+    /// Adds a reading to the saved voice instead of replacing it: more of
+    /// the user's speech, from another day or microphone, without losing
+    /// the first enrollment. The raw audio is appended to the enrollment
+    /// so a future model re-embeds all of it.
+    static func add(_ print: Voiceprint, audio: [Float]) throws {
+        // A print that exists but cannot be read is never replaced from
+        // here: its enrollment audio is what a future model re-embeds.
+        if isUnreadable { throw UnreadablePrint() }
+        guard let old = load() else { try save(print, audio: audio); return }
+        guard print.selfSimilarity >= minSelfSimilarity else { throw MixedReading(similarity: print.selfSimilarity) }
+        let alike = VoiceActivity.cosine(old.centroid, print.centroid)
+        guard alike >= minAddSimilarity else { throw NotYourVoice(similarity: alike) }
+        let merged = Voiceprint(model: old.model, created: old.created, seconds: old.seconds + print.seconds,
+                                embeddings: Array((old.embeddings + print.embeddings).suffix(maxEmbeddings)))
+        try JSONEncoder().encode(merged).write(to: printURL, options: .atomic)
+        let previous = (try? Data(contentsOf: audioURL)) ?? Data()
+        try (previous + audio.withUnsafeBufferPointer { Data(buffer: $0) }).write(to: audioURL, options: .atomic)
+        NotificationCenter.default.post(name: didChange, object: nil)
+    }
+
+    /// Embeddings kept in the user's print, the newest.
+    static let maxEmbeddings = 200
+
     static func delete() {
         try? FileManager.default.removeItem(at: printURL)
         try? FileManager.default.removeItem(at: audioURL)

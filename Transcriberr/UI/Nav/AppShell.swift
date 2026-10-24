@@ -7,12 +7,13 @@ import SwiftUI
 /// non-resizable and ensures every section button is reliably hittable.
 struct AppShell: View {
     enum Section: String, CaseIterable, Identifiable, Hashable {
-        case record, library, dictate, settings
+        case record, library, people, dictate, settings
         var id: String { rawValue }
         var label: String {
             switch self {
             case .record:   return "Record"
             case .library:  return "Library"
+            case .people:   return "People"
             case .dictate:  return "Dictate"
             case .settings: return "Settings"
             }
@@ -21,8 +22,9 @@ struct AppShell: View {
             switch self {
             case .record:   return 2
             case .library:  return 1
-            case .dictate:  return 3
-            case .settings: return 4
+            case .people:   return 3
+            case .dictate:  return 4
+            case .settings: return 5
             }
         }
     }
@@ -39,6 +41,7 @@ struct AppShell: View {
     var body: some View {
         shell
             .onChange(of: container.dictatePaneRequested) { _, _ in section = .dictate }
+            .onChange(of: container.peoplePaneRequested) { _, _ in section = .people }
             .task {
                 // A beat after the window settles, once, until answered.
                 guard container.updates.needsConsent else { return }
@@ -70,6 +73,7 @@ struct AppShell: View {
                         Sheet { ProgressView().padding() }
                     }
                 case .library:  LibraryView()
+                case .people:   PeopleView()
                 case .dictate:  DictationView()
                 case .settings: SettingsScreen()
                 }
@@ -145,7 +149,7 @@ struct AppShell: View {
                 Spacer()
                 if !phase.isWorking {
                     TapButton { container.updates.skippedVersion = release.version } label: {
-                        Text("×").uiLabel(12, color: AppColor.ink3)
+                        Text("×").uiLabel(12, color: AppColor.ink3).accessibilityLabel("Hide this update")
                     }
                     .help("Hide until the next version")
                 }
@@ -198,6 +202,7 @@ struct AppShell: View {
             .background(section == s ? AppColor.base : Color.clear)
             .contentShape(Rectangle())
         }
+        .accessibilityLabel(s.label)
 
     }
 }

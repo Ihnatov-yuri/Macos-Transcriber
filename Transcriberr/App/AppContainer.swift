@@ -65,6 +65,14 @@ final class AppContainer: @unchecked Sendable {
     private(set) var newRecordingRequested = 0
     /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
     private(set) var dictatePaneRequested = 0
+    /// Bumped to bring People forward; `pendingPerson` is whose page to
+    /// open (nil for the overview), consumed by PeopleView like
+    /// `pendingNewRecording` above.
+    private(set) var peoplePaneRequested = 0
+    var pendingPerson: UUID?
+    /// The recording open in Library, kept here so leaving for People (a
+    /// speaker's page) and coming back reopens it.
+    var librarySelection: UUID?
     var pendingNewRecording = false
 
     /// The unit-test host launches this same app. It must not act like a
@@ -288,6 +296,11 @@ final class AppContainer: @unchecked Sendable {
 
     func requestDictatePane() {
         dictatePaneRequested &+= 1
+    }
+
+    func requestPeoplePane(person: UUID? = nil) {
+        pendingPerson = person
+        peoplePaneRequested &+= 1
     }
 
     // MARK: - Updates

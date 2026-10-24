@@ -170,6 +170,8 @@ final class RecordingRepository: @unchecked Sendable {
         // Taken before the swap: the folder of the recording the merge was
         // initiated from must win, not the earlier one's.
         let initiatorFolder = a.folder ?? b.folder
+        // Its id now, before any await: the folder could be deleted meanwhile.
+        let folderID = initiatorFolder?.id
         var a = a, b = b
         if b.createdAtMillis < a.createdAtMillis { swap(&a, &b) }
         // A just-stopped recording is saved and mergeable before its
@@ -180,9 +182,31 @@ final class RecordingRepository: @unchecked Sendable {
         await postProcessTracker.waitUntilSettled(a.id)
         await postProcessTracker.waitUntilSettled(b.id)
         try Task.checkCancellation()
+        // Either may have been deleted while the wait ran (tens of seconds
+        // after a stop): reading a deleted model crashes SwiftData.
+        guard !a.isDeleted, a.modelContext != nil, !b.isDeleted, b.modelContext != nil else {
+            throw NSError(domain: "Merge", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "One of the recordings was deleted while the merge waited."])
+        }
+        let pathA = a.audioPath, pathB = b.audioPath
         let decoder = AudioDecoder()
-        let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: a.audioPath))
-        let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: b.audioPath))
+        let sa = try await decoder.decodeAll(file: URL(fileURLWithPath: pathA))
+        let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: pathB))
+        guard !a.isDeleted, a.modelContext != nil, !b.isDeleted, b.modelContext != nil else {
+            throw NSError(domain: "Merge", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "One of the recordings was deleted while the merge read it."])
+        }
+        // Everything still needed from the sources, as values, now: the
+        // awaits below take seconds and the Library stays usable, so a
+        // source (or its folder) can be deleted under the merge.
+        struct SegValue { var start, end: Double; var text: String; var speaker, speakerName: String? }
+        func values(_ r: Recording) -> [SegValue] {
+            r.segments.sorted { $0.startSeconds < $1.startSeconds }
+                .map { SegValue(start: $0.startSeconds, end: $0.endSeconds, text: $0.text,
+                                speaker: $0.speaker, speakerName: $0.speakerName) }
+        }
+        let segsA = values(a), segsB = values(b)
+        let titleA = a.title, titleB = b.title
         let offsetSeconds = Double(sa.count) / AudioDecoder.sampleRate
 
         guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,
@@ -221,8 +245,8 @@ final class RecordingRepository: @unchecked Sendable {
         for kind in AudioCompressor.sidecarKinds {
             // AudioCompressor may have already transcoded either source's
             // sidecar to .m4a — check that before the pre-migration .wav.
-            guard let ua = AudioCompressor.sidecarURL(for: URL(fileURLWithPath: a.audioPath), kind: kind),
-                  let ub = AudioCompressor.sidecarURL(for: URL(fileURLWithPath: b.audioPath), kind: kind)
+            guard let ua = AudioCompressor.sidecarURL(for: URL(fileURLWithPath: pathA), kind: kind),
+                  let ub = AudioCompressor.sidecarURL(for: URL(fileURLWithPath: pathB), kind: kind)
             else { continue }
             do {
                 let ta = aligned(try await decoder.decodeAll(file: ua), to: sa.count)
@@ -244,11 +268,11 @@ final class RecordingRepository: @unchecked Sendable {
         }
         // Me-timeline: union of whatever sides have one, b's shifted.
         var meAll: [[Double]] = []
-        if let d = try? Data(contentsOf: sidecarPath(a.audioPath, "me.json")),
+        if let d = try? Data(contentsOf: sidecarPath(pathA, "me.json")),
            let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
             meAll += iv.filter { $0.count == 2 }
         }
-        if let d = try? Data(contentsOf: sidecarPath(b.audioPath, "me.json")),
+        if let d = try? Data(contentsOf: sidecarPath(pathB, "me.json")),
            let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
             meAll += iv.filter { $0.count == 2 }.map { [$0[0] + offsetSeconds, $0[1] + offsetSeconds] }
         }
@@ -261,14 +285,16 @@ final class RecordingRepository: @unchecked Sendable {
         // disk" and "the DB knows about it" from a few statements to a
         // real, multi-second async transcode.
         let merged = Recording(
-            title: "\(a.title) + \(b.title)",
+            title: "\(titleA) + \(titleB)",
             audioPath: url.path,
             durationSeconds: Double(sa.count + sb.count) / AudioDecoder.sampleRate
         )
         // Stay where the sources live: merging inside a folder must not eject
         // the result to the unfiled root (the recording the merge was
         // initiated from wins when the two disagree).
-        merged.folder = initiatorFolder
+        merged.folder = folderID.flatMap { id in
+            try? context.fetch(FetchDescriptor<Folder>(predicate: #Predicate { $0.id == id })).first
+        }
         do {
             try save(merged)
         } catch {
@@ -291,14 +317,14 @@ final class RecordingRepository: @unchecked Sendable {
 
         // Remap b's SPEAKER_NN keys past a's highest index.
         var maxIdx = -1
-        for seg in a.segments {
+        for seg in segsA {
             if let key = seg.speaker, key.hasPrefix("SPEAKER_"),
                let n = Int(key.dropFirst("SPEAKER_".count)) {
                 maxIdx = max(maxIdx, n)
             }
         }
         var bMaxIdx = -1
-        for seg in b.segments {
+        for seg in segsB {
             if let key = seg.speaker, key.hasPrefix("SPEAKER_"),
                let n = Int(key.dropFirst("SPEAKER_".count)) {
                 bMaxIdx = max(bMaxIdx, n)
@@ -319,13 +345,13 @@ final class RecordingRepository: @unchecked Sendable {
         }
 
         var copies: [Segment] = []
-        for seg in a.segments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
-            copies.append(Segment(startSeconds: seg.startSeconds, endSeconds: seg.endSeconds,
+        for seg in segsA {
+            copies.append(Segment(startSeconds: seg.start, endSeconds: seg.end,
                                   text: seg.text, speaker: seg.speaker, speakerName: seg.speakerName))
         }
-        for seg in b.segments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
-            copies.append(Segment(startSeconds: seg.startSeconds + offsetSeconds,
-                                  endSeconds: seg.endSeconds + offsetSeconds,
+        for seg in segsB {
+            copies.append(Segment(startSeconds: seg.start + offsetSeconds,
+                                  endSeconds: seg.end + offsetSeconds,
                                   text: seg.text, speaker: remap(seg.speaker),
                                   speakerName: seg.speakerName))
         }
@@ -354,7 +380,7 @@ final class RecordingRepository: @unchecked Sendable {
             // restore as an empty transcript.
             BackupService.backupRecording(merged)
         }
-        AppLog.info("repo", "merged '\(a.title)' + '\(b.title)' → \(finalURL.lastPathComponent) (\(copies.count) segments)")
+        AppLog.info("repo", "merged '\(titleA)' + '\(titleB)' → \(finalURL.lastPathComponent) (\(copies.count) segments)")
         return merged
     }
 
@@ -400,6 +426,10 @@ final class RecordingRepository: @unchecked Sendable {
         let sourceSegmentCount = recording.segments.count
         let decoder = AudioDecoder()
         let samples = try await decoder.decodeAll(file: URL(fileURLWithPath: recording.audioPath))
+        guard recording.modelContext != nil, !recording.isDeleted else {
+            throw NSError(domain: "Split", code: -3, userInfo: [
+                NSLocalizedDescriptionKey: "The recording was deleted while it was being split."])
+        }
         let totalSeconds = Double(samples.count) / AudioDecoder.sampleRate
         // Keep both halves non-trivial — also rules out a point outside the
         // recording entirely.
@@ -481,6 +511,10 @@ final class RecordingRepository: @unchecked Sendable {
         // ME-timeline: partition at the cut, clipping any interval that
         // straddles it. Unlike a transcript segment, this is acoustic data
         // with no text to lose — an exact clip is lossless.
+        guard recording.modelContext != nil, !recording.isDeleted else {
+            throw NSError(domain: "Split", code: -3, userInfo: [
+                NSLocalizedDescriptionKey: "The recording was deleted while it was being split."])
+        }
         if let d = try? Data(contentsOf: sidecarPath(recording.audioPath, "me.json")),
            let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
             var meA: [[Double]] = []
@@ -525,8 +559,10 @@ final class RecordingRepository: @unchecked Sendable {
         for half in [first, second] {
             // Stay where the source lives, and keep its tags/run settings —
             // both halves are still the same underlying material.
-            half.folder = recording.folder
-            half.tags = recording.tags
+            // Only a folder and tags still alive: one deleted mid-split would
+            // be saved as a dangling relationship.
+            half.folder = recording.folder.flatMap { $0.modelContext == nil ? nil : $0 }
+            half.tags = recording.tags.filter { $0.modelContext != nil }
             half.runBackend = recording.runBackend
             half.runLanguages = recording.runLanguages
             half.runDiarize = recording.runDiarize
@@ -555,6 +591,10 @@ final class RecordingRepository: @unchecked Sendable {
             if finalA != urlA { try? updateAudioPath(finalA, for: first) }
             if finalB != urlB { try? updateAudioPath(finalB, for: second) }
 
+            guard recording.modelContext != nil, !recording.isDeleted else {
+                throw NSError(domain: "Split", code: -3, userInfo: [
+                    NSLocalizedDescriptionKey: "The recording was deleted while it was being split."])
+            }
             guard recording.segments.count == sourceSegmentCount else {
                 throw NSError(domain: "Split", code: -2, userInfo: [
                     NSLocalizedDescriptionKey: "The recording changed while splitting (a transcription may still be running) — try again."
@@ -621,13 +661,17 @@ final class RecordingRepository: @unchecked Sendable {
             // anything already committed — first/second already have a
             // fully valid, correct (just potentially lossier) audio file
             // either way.
-            if URL(fileURLWithPath: recording.audioPath).pathExtension.lowercased() == "m4a" {
+            // Paths read here, not inside the `async let`s: those run as
+            // child tasks off this thread, and a SwiftData model must not be
+            // read there (the strict-concurrency audit flagged it).
+            let sourcePath = recording.audioPath, firstPath = first.audioPath, secondPath = second.audioPath
+            if URL(fileURLWithPath: sourcePath).pathExtension.lowercased() == "m4a" {
                 async let upgradedA = losslessTrim(
-                    source: URL(fileURLWithPath: recording.audioPath),
-                    startSeconds: 0, endSeconds: cutSeconds, replacing: first.audioPath)
+                    source: URL(fileURLWithPath: sourcePath),
+                    startSeconds: 0, endSeconds: cutSeconds, replacing: firstPath)
                 async let upgradedB = losslessTrim(
-                    source: URL(fileURLWithPath: recording.audioPath),
-                    startSeconds: cutSeconds, endSeconds: totalSeconds, replacing: second.audioPath)
+                    source: URL(fileURLWithPath: sourcePath),
+                    startSeconds: cutSeconds, endSeconds: totalSeconds, replacing: secondPath)
                 let (didA, didB) = await (upgradedA, upgradedB)
                 if didA || didB {
                     AppLog.info("repo", "split: lossless trim upgraded main audio (first=\(didA), second=\(didB))")
@@ -1246,6 +1290,87 @@ final class RecordingRepository: @unchecked Sendable {
         AppLog.info("repo", "merged speaker \(from) → \(target) in '\(recording.title)'")
     }
 
+    /// Every line said by `name`, across the library: the person page's
+    /// meetings. One fetch instead of walking each recording's segments.
+    /// Recordings with at least one diarized line, by id: a fetch of lines,
+    /// not a walk through every recording's segments.
+    func recordingIdsWithSpeakers() throws -> [UUID] {
+        let lines = try context.fetch(FetchDescriptor<Segment>(predicate: #Predicate { $0.speaker != nil }))
+        var seen = Set<UUID>(), out: [UUID] = []
+        for s in lines { if let r = s.recording, !r.isDeleted, seen.insert(r.id).inserted { out.append(r.id) } }
+        return out
+    }
+
+    /// Every named line, grouped by name in lower case: the People overview
+    /// in one fetch instead of one per person.
+    func segmentsByNamedSpeaker() throws -> [String: [Segment]] {
+        let lines = try context.fetch(FetchDescriptor<Segment>(predicate: #Predicate { $0.speakerName != nil }))
+        return Dictionary(grouping: lines) { $0.speakerName?.lowercased() ?? "" }
+    }
+
+    /// Every line under one diarized speaker key, across the library.
+    func segments(speakerKey key: String) throws -> [Segment] {
+        try context.fetch(FetchDescriptor<Segment>(predicate: #Predicate { $0.speaker == key }))
+    }
+
+    /// Any case: "kate" typed by hand is Kate.
+    func segments(spokenBy name: String) throws -> [Segment] {
+        let descriptor = FetchDescriptor<Segment>(predicate: #Predicate {
+            $0.speakerName.flatMap { $0.localizedStandardContains(name) } == true
+        })
+        return try context.fetch(descriptor).filter {
+            $0.speakerName?.caseInsensitiveCompare(name) == .orderedSame
+        }
+    }
+
+    /// A saved person was renamed or merged: every line and stored name
+    /// that says `old` says `new` from now on. Returns the recordings
+    /// touched, for their transcript files to be rewritten.
+    @discardableResult
+    func renameSpeakerEverywhere(_ old: String, to new: String) throws -> [Recording] {
+        guard old != new else { return [] }
+        var touched: [UUID: Recording] = [:]
+        for seg in try segments(spokenBy: old) {
+            guard let r = seg.recording, !r.isDeleted else { continue }
+            seg.speakerName = new
+            touched[r.id] = r
+        }
+        for r in touched.values {
+            var map = storedSpeakerNames(r)
+            for (k, v) in map where v.caseInsensitiveCompare(old) == .orderedSame { map[k] = new }
+            if let data = try? JSONEncoder().encode(map) {
+                r.speakerNamesJSON = String(decoding: data, as: UTF8.self)
+            }
+            // Saved versions too: restoring one must not bring the old name back.
+            for v in r.versions {
+                guard var segs = try? JSONDecoder().decode([VersionSegment].self, from: Data(v.segmentsJSON.utf8)),
+                      segs.contains(where: { $0.speakerName?.caseInsensitiveCompare(old) == .orderedSame }) else { continue }
+                for i in segs.indices where segs[i].speakerName?.caseInsensitiveCompare(old) == .orderedSame {
+                    segs[i].speakerName = new
+                }
+                if let data = try? JSONEncoder().encode(segs) { v.segmentsJSON = String(decoding: data, as: UTF8.self) }
+            }
+        }
+        // Saved versions of recordings whose current lines no longer carry
+        // the name (a re-run since) still may: restoring one must not bring
+        // the old name back either.
+        let others = (try? context.fetch(FetchDescriptor<TranscriptVersion>())) ?? []
+        for v in others where v.recording.map({ touched[$0.id] == nil }) ?? false
+            && v.segmentsJSON.range(of: old, options: .caseInsensitive) != nil {
+            guard var segs = try? JSONDecoder().decode([VersionSegment].self, from: Data(v.segmentsJSON.utf8)) else { continue }
+            var changed = false
+            for i in segs.indices where segs[i].speakerName?.caseInsensitiveCompare(old) == .orderedSame {
+                segs[i].speakerName = new
+                changed = true
+            }
+            if changed, let data = try? JSONEncoder().encode(segs) { v.segmentsJSON = String(decoding: data, as: UTF8.self) }
+        }
+        try context.save()
+        for r in touched.values { BackupService.backupRecording(r) }
+        AppLog.info("repo", "renamed speaker '\(old)' → '\(new)' in \(touched.count) recordings")
+        return Array(touched.values)
+    }
+
     func setSpeakerName(_ name: String?, for speakerKey: String, in recording: Recording) throws {
         var map = storedSpeakerNames(recording)
         map[speakerKey] = name
@@ -1253,6 +1378,32 @@ final class RecordingRepository: @unchecked Sendable {
             recording.speakerNamesJSON = String(decoding: data, as: UTF8.self)
         }
         try setSpeakerNameLegacy(name, for: speakerKey, in: recording)
+        if name != nil { try foldSameNamedSpeakers(in: recording) }
+    }
+
+    /// Speakers of one recording that carry the same name are one person:
+    /// the diarizer splitting a voice, or lines tagged with a name before a
+    /// speaker got it, showed as two "Alex" chips whose voice could not be
+    /// learned as one. They are merged, into the microphone's own key first,
+    /// then a diarized speaker, then a tagged one.
+    @discardableResult
+    func foldSameNamedSpeakers(in recording: Recording) throws -> Int {
+        var byName: [String: [String]] = [:]
+        for s in recording.segments.sorted(by: { $0.startSeconds < $1.startSeconds }) {
+            guard let key = s.speaker, let name = s.speakerName?.lowercased(), !name.isEmpty else { continue }
+            if !(byName[name]?.contains(key) ?? false) { byName[name, default: []].append(key) }
+        }
+        var folded = 0
+        for keys in byName.values where keys.count > 1 {
+            let target = keys.first { $0 == "ME" }
+                ?? keys.first { !$0.hasPrefix(Self.taggedKeyPrefix) } ?? keys[0]
+            for key in keys where key != target {
+                try mergeSpeakers(key, into: target, in: recording)
+                folded += 1
+            }
+        }
+        if folded > 0 { AppLog.info("repo", "folded \(folded) same-named speakers in '\(recording.title)'") }
+        return folded
     }
 
     private func setSpeakerNameLegacy(_ name: String?, for speakerKey: String, in recording: Recording) throws {
@@ -1285,11 +1436,16 @@ final class RecordingRepository: @unchecked Sendable {
     }
 
     @discardableResult
-    func createFolder(named name: String) throws -> Folder {
+    /// `allowReserved` is for dictation alone, which owns the "Dictation"
+    /// folder and creates it on its first save.
+    func createFolder(named name: String, allowReserved: Bool = false) throws -> Folder {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw OrganizeError.emptyName }
         let existing = try folders()
-        if existing.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+        // "Dictation" is recognised by name: a user folder called that
+        // would turn into dictation history and hide its recordings.
+        if existing.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame })
+            || (!allowReserved && trimmed.caseInsensitiveCompare(Folder.dictationName) == .orderedSame) {
             throw OrganizeError.duplicateName(trimmed)
         }
         let folder = Folder(name: trimmed,
@@ -1304,7 +1460,7 @@ final class RecordingRepository: @unchecked Sendable {
         guard !trimmed.isEmpty else { throw OrganizeError.emptyName }
         if try folders().contains(where: {
             $0.id != folder.id && $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
-        }) {
+        }) || (!folder.isDictation && trimmed.caseInsensitiveCompare(Folder.dictationName) == .orderedSame) {
             throw OrganizeError.duplicateName(trimmed)
         }
         folder.name = trimmed
@@ -1357,7 +1513,8 @@ final class RecordingRepository: @unchecked Sendable {
     /// stays tidy.
     func removeTag(_ tag: Tag, from recording: Recording) throws {
         recording.tags.removeAll { $0.id == tag.id }
-        if tag.recordings.isEmpty {
+        // The inverse may not have caught up yet: this recording counts as gone.
+        if tag.recordings.allSatisfy({ $0.id == recording.id }) {
             context.delete(tag)
         }
         try context.save()

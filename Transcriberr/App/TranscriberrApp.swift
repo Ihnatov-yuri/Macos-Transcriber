@@ -76,6 +76,9 @@ struct TranscriberrApp: App {
         Settings {
             SettingsView()
                 .environment(container)
+                // People → Add person lists recordings with @Query: without
+                // the store here that sheet had no container to read.
+                .modelContainer(container.modelContainer)
                 .frame(minWidth: 560, minHeight: 480)
         }
     }

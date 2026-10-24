@@ -11,6 +11,7 @@ final class PeopleTests: XCTestCase {
     override func setUp() {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("people-\(UUID().uuidString.prefix(6))")
         store = PeopleStore(url: dir.appendingPathComponent("people.json"))
+        store.myVoice = { nil }   // never the real user's voice in a test
     }
 
     override func tearDown() { try? FileManager.default.removeItem(at: dir) }
@@ -42,9 +43,9 @@ final class PeopleTests: XCTestCase {
 
     func testEmbeddingsAreCapped() throws {
         try store.remember(print([1, 0, 0, 0], count: 100), as: "Kate")
-        let p = try store.remember(print([0, 1, 0, 0], count: 100), as: "Kate")
+        let p = try store.remember(print([1, 0.2, 0, 0], count: 100), as: "Kate")
         XCTAssertEqual(p.print.embeddings.count, Person.maxEmbeddings)
-        XCTAssertEqual(p.print.embeddings.last, unit([0, 1, 0, 0]), "the newest are kept")
+        XCTAssertEqual(p.print.embeddings.last, unit([1, 0.2, 0, 0]), "the newest are kept")
     }
 
     func testRenameDeleteAndDeleteAll() throws {
@@ -101,6 +102,111 @@ final class PeopleTests: XCTestCase {
         XCTAssertEqual(keys, ["S1", "S2", "S3"])
     }
 
+    // MARK: Track record and candidates (5.0.0)
+
+    func testAssessKeepsNearMissesTheRuleDoesNotName() {
+        let kate = person("Kate", [1, 0, 0, 0]), anna = person("Anna", [0, 1, 0, 0])
+        let clips: (([Float]) -> [[Float]]) = { v in Array(repeating: self.unit(v), count: 5) }
+        let out = PeopleMatch.assess([
+            "S1": clips([0.95, 0.2, 0, 0]),   // Kate, clear
+            "S2": clips([0.35, 0, 0.94, 0]),  // 0.35 to Kate: near miss
+            "S3": clips([0, 0, 1, 0.2]),      // nobody
+            "S4": clips([0.7, 0.7, 0, 0]),    // both close: near miss, never named
+        ], people: [kate, anna])
+        XCTAssertEqual(out["S1"]?.accepted, true)
+        XCTAssertEqual(out["S2"]?.person.name, "Kate")
+        XCTAssertEqual(out["S2"]?.isNearMiss, true)
+        XCTAssertEqual(out["S3"]?.isNearMiss, false)
+        XCTAssertEqual(out["S4"]?.accepted, false)
+        XCTAssertEqual(out["S4"]?.isNearMiss, true)
+    }
+
+    func testLogReplacesARecordingsEarlierEntries() throws {
+        let kate = try store.remember(print([1, 0, 0, 0]), as: "Kate")
+        let rec = UUID()
+        let hit = PeopleMatch.Assessment(person: kate, score: 0.6, runnerUp: nil, accepted: true)
+        let near = PeopleMatch.Assessment(person: kate, score: 0.35, runnerUp: nil, accepted: false)
+        try store.log(["S1": hit, "S2": near], in: rec)
+        try store.log(["S1": hit, "S2": near], in: rec)   // Find people again
+        var p = try XCTUnwrap(store.load().first)
+        XCTAssertEqual(p.matches?.count, 1, "a second pass over one recording does not count twice")
+        XCTAssertEqual(p.candidates?.map(\.speaker), ["S2"])
+
+        try store.resolve(try XCTUnwrap(p.candidates?.first), for: p.id, wasThem: false)
+        try store.log(["S2": near], in: rec)
+        p = try XCTUnwrap(store.load().first)
+        XCTAssertEqual(p.candidates ?? [], [], "a speaker said to be someone else is not offered again")
+        XCTAssertEqual(p.matches ?? [], [], "the re-run found no match this time")
+    }
+
+    func testLearningFromARecordingSettlesItsCandidates() throws {
+        let kate = try store.remember(print([1, 0, 0, 0]), as: "Kate")
+        let rec = UUID()
+        try store.log(["S2": .init(person: kate, score: 0.35, runnerUp: nil, accepted: false)], in: rec)
+        let p = try store.remember(print([1, 0, 0, 0]), as: "Kate", from: rec)
+        XCTAssertEqual(p.learnedFrom, [rec])
+        XCTAssertEqual(p.candidates ?? [], [])
+        try store.log(["S2": .init(person: kate, score: 0.35, runnerUp: nil, accepted: false)], in: rec)
+        XCTAssertEqual(store.load().first?.candidates ?? [], [], "a recording learned from is not asked about")
+    }
+
+    func testFilesWithoutTheNewFieldsStillLoad() throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let old = Person(id: UUID(), name: "Kate", created: Date(), updated: Date(), print: print([1, 0, 0, 0]), sources: 1)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as! [String: Any]
+        for k in ["learnedFrom", "matches", "candidates", "dismissed"] { json.removeValue(forKey: k) }
+        let file: [String: Any] = ["version": 1, "people": [json]]
+        try JSONSerialization.data(withJSONObject: file).write(to: store.url)
+        XCTAssertEqual(store.load().map(\.name), ["Kate"])
+    }
+
+    func testDeletingAPersonDeletesTheirBrief() throws {
+        let kate = try store.remember(print([1, 0, 0, 0]), as: "Kate")
+        let entry = PersonBriefStore.Entry(recordingId: UUID(), key: "k", built: Date(),
+                                           brief: PersonBrief(commitments: [.init(text: "Send the deck")]))
+        try store.briefs.save(entry, for: kate.id)
+        XCTAssertEqual(store.briefs.entries(for: kate.id).count, 1)
+        try store.delete(kate.id)
+        XCTAssertTrue(store.briefs.entries(for: kate.id).isEmpty)
+    }
+
+    // MARK: Confidence
+
+    func testTwoPeopleWhoseAveragesLookCloseAreStillToldApart() {
+        // Lana and Iryna, 2026-10-23: centroids 0.54 alike, but each clip of
+        // Lana's scored ~0.71 against her own voice and ~0.37 against Iryna's.
+        var lana = person("Lana", [1, 0, 0, 0])
+        lana.print = Voiceprint(seconds: 150, embeddings: Array(repeating: unit([1, 1, 0, 0]), count: 20)
+                                + Array(repeating: unit([1, -1, 0, 0]), count: 20))
+        lana.sources = 3
+        let iryna = unit([0.8, 0, 1, 1])
+        XCTAssertGreaterThan(VoiceActivity.cosine(lana.print.centroid, iryna), 0.45, "the averages look close")
+        let c = PeopleConfidence.assess(lana, others: [(name: "Iryna", centroid: iryna)])
+        XCTAssertNil(c.soundsLike, "their clips stand well apart, as the matcher sees them")
+        XCTAssertEqual(c.factors.first { $0.kind == .distinct }?.grade, .good)
+    }
+
+    func testConfidenceGrowsWithTrainingAndWarnsOfACloseVoice() {
+        var kate = person("Kate", [1, 0, 0, 0])
+        kate.print = print([1, 0, 0, 0], count: 4, seconds: 15)
+        let fresh = PeopleConfidence.assess(kate, others: [(name: "Anna", centroid: unit([0, 1, 0, 0]))])
+        XCTAssertEqual(fresh.level, .learning)
+        XCTAssertNil(fresh.factors.first { $0.kind == .matches }?.value, "no matches yet is not judged")
+        XCTAssertNotNil(fresh.advice)
+
+        kate.print = print([1, 0, 0, 0], count: 40, seconds: 150)
+        kate.sources = 3
+        kate.matches = (0..<5).map { _ in .init(recordingId: UUID(), speaker: "S1", score: 0.65, date: Date()) }
+        let trained = PeopleConfidence.assess(kate, others: [(name: "Anna", centroid: unit([0, 1, 0, 0]))])
+        XCTAssertEqual(trained.level, .strong)
+        XCTAssertGreaterThan(trained.score, fresh.score)
+        XCTAssertNil(trained.soundsLike)
+
+        let twin = PeopleConfidence.assess(kate, others: [(name: "Anna", centroid: unit([0.95, 0.3, 0, 0]))])
+        XCTAssertEqual(twin.soundsLike, "Anna")
+        XCTAssertEqual(twin.level, .learning, "two voices that close are left unnamed, so never Strong")
+    }
+
     // MARK: Learning
 
     func testCleanSpeechSkipsOverlapAndTrimsEdges() {
@@ -114,6 +220,22 @@ final class PeopleTests: XCTestCase {
         let speech = PeopleVoice.cleanSpeech(of: "A", regions: regions, samples: samples)
         XCTAssertEqual(speech.count, Int(3.5 * Double(rate)), "only 8.25-11.75 s")
         XCTAssertEqual(speech.first, Float(Int(8.25 * Double(rate))))
+    }
+
+    func testCleanSpeechTakesTheLongestStretchesFirst() {
+        let rate = Int(VoiceActivity.sampleRate)
+        let samples = [Float](repeating: 0, count: rate * 200)
+        // Many 3 s turns, then one 50 s monologue near the end.
+        var regions: [DiarizationRunner.SpeakerSegment] = (0..<30).map {
+            .init(startSeconds: Double($0) * 4, endSeconds: Double($0) * 4 + 3, speakerId: "A")
+        }
+        regions.append(.init(startSeconds: 140, endSeconds: 190, speakerId: "A"))
+        let speech = PeopleVoice.cleanSpeech(of: "A", regions: regions, samples: samples)
+        let seconds = Double(speech.count) / Double(rate)
+        XCTAssertEqual(seconds, PeopleVoice.maxLearnSeconds, accuracy: 3)
+        // 49.5 s from the monologue, the rest from the short turns: before,
+        // the first 60 s of short turns were taken and the monologue never.
+        XCTAssertGreaterThan(seconds, 49.5)
     }
 
     func testSpeakingTimePerSpeaker() {

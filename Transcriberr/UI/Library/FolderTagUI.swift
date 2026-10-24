@@ -149,7 +149,7 @@ struct TagEditorRow: View {
                     TapButton {
                         try? container.repository.removeTag(tag, from: recording)
                     } label: {
-                        Text("✕").uiLabel(9, color: AppColor.ink3)
+                        Text("✕").uiLabel(9, color: AppColor.ink3).accessibilityLabel("Remove tag")
                     }
                 }
                 .padding(.horizontal, 7)

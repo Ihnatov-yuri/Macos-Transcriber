@@ -250,6 +250,11 @@ struct RecordView: View {
                     .onTapGesture {
                         triggerPauseToggle(m)
                     }
+                    // A bare tap gesture is invisible to VoiceOver: someone
+                    // could start a recording but not pause or stop it.
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { triggerPauseToggle(m) }
 
                 VStack(spacing: 2) {
                     Text("Stop & transcribe")
@@ -263,6 +268,9 @@ struct RecordView: View {
                 .padding(.vertical, AppMetric.sheetVerticalPadding)
                 .contentShape(Rectangle())
                 .onTapGesture { triggerToggleRecord(m) }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { triggerToggleRecord(m) }
 
                 Rectangle().fill(AppColor.ink).frame(width: 12, height: 12)
                     .padding(.horizontal, AppMetric.l)
@@ -272,6 +280,10 @@ struct RecordView: View {
                     .onTapGesture {
                         triggerToggleRecord(m)
                     }
+                    .accessibilityElement()
+                    .accessibilityLabel("Stop recording")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { triggerToggleRecord(m) }
             }
             .fixedSize(horizontal: false, vertical: true)
             .background(AppColor.night, in: Rectangle())

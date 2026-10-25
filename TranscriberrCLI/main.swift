@@ -26,7 +26,9 @@ func usage() {
       transcriberrcli record [seconds]     capture seconds (default 5) from the mic
       transcriberrcli decode <file>        decode to 16k mono Float32 and chunk it
       transcriberrcli noisesup <file>      run the offline noise-suppression pass
-      transcriberrcli transcribe <file>    Parakeet v3 ASR on any audio file (downloads models on first run)
+      transcriberrcli transcribe <file> [--json] [--language Dutch]
+                                           Parakeet v3 ASR on any audio file (downloads models on first run);
+                                           --json prints only JSON with word-level start/end times
       transcriberrcli context <when|file> [minutes]  the calendar invite a recording at that time would use
       transcriberrcli bench [score <backend> [engA engB]] [--dir <dir>]  the user's checked references; score an engine on them
       transcriberrcli vocab <file.txt> [Language]
@@ -152,37 +154,52 @@ func cmdNoiseSup(path: String) async -> Int32 {
 }
 
 @MainActor
-func cmdTranscribe(path: String) async -> Int32 {
+func cmdTranscribe(path: String, json: Bool = false, language: String? = nil) async -> Int32 {
+    // With --json, stdout carries only the JSON document; progress goes to stderr.
+    func say(_ line: String) {
+        if json { FileHandle.standardError.write((line + "\n").data(using: .utf8)!) } else { print(line) }
+    }
     let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
-    print("[asr] decoding \(url.lastPathComponent)…")
+    say("[asr] decoding \(url.lastPathComponent)…")
     let decoder = AudioDecoder()
     let samples: [Float]
     do {
         samples = try await decoder.decodeAll(file: url)
     } catch {
-        print("[asr] ❌ decode failed: \(error.localizedDescription)")
+        say("[asr] ❌ decode failed: \(error.localizedDescription)")
         return 1
     }
-    print("[asr] \(samples.count) samples (\(String(format: "%.1f", Double(samples.count) / 16_000))s). Loading Parakeet v3 (first run downloads ~1 GB)…")
+    let seconds = Double(samples.count) / 16_000
+    say("[asr] \(samples.count) samples (\(String(format: "%.1f", seconds))s). Loading Parakeet v3 (first run downloads ~1 GB)…")
+    let hint = language.flatMap { ParakeetBackend.languageHint(from: [$0]) }
+    if let language, hint == nil { say("[asr] unknown --language '\(language)', using auto-detect") }
 
     do {
         let models = try await AsrModels.downloadAndLoad(version: .v3) { p in
-            FileHandle.standardOutput.write("\r  download/load \(Int(p.fractionCompleted * 100))%".data(using: .utf8)!)
+            if !json {
+                FileHandle.standardOutput.write("\r  download/load \(Int(p.fractionCompleted * 100))%".data(using: .utf8)!)
+            }
         }
-        print("")
+        if !json { print("") }
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         var state = try TdtDecoderState()
         let t0 = Date()
-        let result = try await manager.transcribe(samples, decoderState: &state, language: nil)
+        let result = try await manager.transcribe(samples, decoderState: &state, language: hint)
         let dt = Date().timeIntervalSince(t0)
-        print("[asr] ✓ \(String(format: "%.2f", dt))s compute, confidence \(String(format: "%.2f", result.confidence))")
-        print("──────────────────────────────────────────")
-        print(result.text)
-        print("──────────────────────────────────────────")
+        say("[asr] ✓ \(String(format: "%.2f", dt))s compute, confidence \(String(format: "%.2f", result.confidence))")
+        if json {
+            let doc = TranscriptJSON(text: result.text, confidence: result.confidence, durationS: seconds,
+                                     language: hint?.rawValue, timings: result.tokenTimings ?? [])
+            print(try doc.encoded())
+        } else {
+            print("──────────────────────────────────────────")
+            print(result.text)
+            print("──────────────────────────────────────────")
+        }
         return result.text.isEmpty ? 2 : 0
     } catch {
-        print("[asr] ❌ \(error)")
+        say("[asr] ❌ \(error)")
         return 1
     }
 }
@@ -856,7 +873,19 @@ func main() async -> Int32 {
         return await cmdNoiseSup(path: args[2])
     case "transcribe":
         guard args.count > 2 else { usage(); return 64 }
-        return await cmdTranscribe(path: args[2])
+        let rest = Array(args.dropFirst(2))
+        var path: String?, json = false, language: String?
+        var i = 0
+        while i < rest.count {
+            switch rest[i] {
+            case "--json": json = true
+            case "--language" where i + 1 < rest.count: i += 1; language = rest[i]
+            default: if path == nil { path = rest[i] } else { usage(); return 64 }
+            }
+            i += 1
+        }
+        guard let path else { usage(); return 64 }
+        return await cmdTranscribe(path: path, json: json, language: language)
     case "superdiar":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdSuperDiar(path: args[2])

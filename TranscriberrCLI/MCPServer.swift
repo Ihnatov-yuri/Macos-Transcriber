@@ -139,7 +139,8 @@ final class MCPServer {
         case "ping":
             reply(id, result: [:])
         case "tools/list":
-            reply(id, result: ["tools": Self.toolDefinitions])
+            // Switched off in Settings: nothing is offered at all.
+            reply(id, result: ["tools": AssistantAccess.isAllowed ? Self.toolDefinitions : []])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
@@ -149,7 +150,15 @@ final class MCPServer {
                       "error": ["code": -32602, "message": "Unknown tool: \(name)"]])
                 return
             }
-            reply(id, result: callTool(name, arguments))
+            // Read again on every call: switching access off in Settings
+            // stops an assistant that connected while it was on.
+            guard AssistantAccess.isAllowed else {
+                reply(id, result: toolError(AssistantAccess.refusal))
+                return
+            }
+            let result = callTool(name, arguments)
+            if result["isError"] as? Bool != true { AssistantAccess.noteRead() }
+            reply(id, result: result)
         default:
             send(["jsonrpc": "2.0", "id": id ?? NSNull(),
                   "error": ["code": -32601, "message": "Method not found: \(method)"]])

@@ -46,6 +46,7 @@
 - Settings › People › Voice model: High accuracy uses SimAM-ResNet100, trained on VoxBlink2, a 100 MB download. On the same clips it told people apart about twice as well. Switching rebuilds every voice from the meetings it was learned from, and switching back is instant. The model is licensed CC BY-NC-SA 4.0, for personal, non-commercial use.
 - Recording titles describe what a meeting was about. They used to come from the first few lines, usually the greetings ("Happy Friday Work Updates"); now the text engine reads slices from across the whole recording and is told to name the subject. This applies to recordings transcribed from now on.
 - Settings › AI assistants: switch off Let AI assistants read my library, and Claude and other assistants connected to Transcriberr see no tools and cannot read anything. One already connected is refused at its next request. The section also shows when an assistant last read the library.
+- Settings sections fold away: click a section's title, and the app remembers which ones you keep open. Style & vocabulary starts folded. Learned names and your word choices are now small chips instead of one row each, with Show all for the rest.
 - Buttons across the app are now real buttons to VoiceOver and other accessibility tools; before, many could be read but not pressed. Pause and Stop on the Record screen included.
 
 ## 4.7.0

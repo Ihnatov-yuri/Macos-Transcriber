@@ -83,6 +83,10 @@ struct SettingsScreen: View {
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 200)
                     }
+
+                    sectionBlock("K", "AI assistants") {
+                        AssistantsSettingsSection()
+                    }
                 }
                 .padding(.bottom, AppMetric.xl)
             }

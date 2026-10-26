@@ -32,6 +32,7 @@ struct PersonPage: View {
     @State private var draftName = ""
     @State private var confirmDelete = false
     @State private var merging: Person?
+    @State private var forgetting: Person.Sample?
     @State private var pageError: String?
     @State private var showDetail = false
 
@@ -98,6 +99,13 @@ struct PersonPage: View {
             Button("Merge") { merge(into: target) }
         } message: { target in
             Text("One person from two: \(person.name)'s voice samples and history join \(target.name)'s, and recordings naming \(person.name) name \(target.name).")
+        }
+        .confirmationDialog("Forget this sample of \(person.name)'s voice?",
+                            isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
+                            titleVisibility: .visible, presenting: forgetting) { s in
+            Button("Forget", role: .destructive) { forget(s) }
+        } message: { s in
+            Text("\(Int(s.seconds)) s of their voice from “\(sampleTitle(s))” is removed, and that recording is not offered for learning again.")
         }
     }
 
@@ -277,8 +285,8 @@ struct PersonPage: View {
                             LitButtonChrome(.ghost, compact: true) { Text("Open") }
                         }
                     }
-                    TapButton { forget(s) } label: {
-                        LitButtonChrome(.ghost, compact: true) { Text("Forget") }
+                    TapButton { forgetting = s } label: {
+                        LitButtonChrome(.ghost, compact: true) { Text("Forget…") }
                     }
                     .disabled(samples.count < 2 || busy != nil)
                     .help(samples.count < 2 ? "The only sample: delete the person instead." : "Remove this sample from their voice.")
@@ -720,6 +728,7 @@ struct PersonPage: View {
                 training.busy[id] = "Listening to \(i + 1) of \(todo.count)…"
                 guard let rec = try? container.repository.get(id: m.id), !rec.isDeleted else { continue }
                 let keys = m.keys.filter { !$0.hasPrefix(RecordingRepository.taggedKeyPrefix) }.sorted()
+                let before = PeopleVoice.signature(rec)
                 var prints: [Voiceprint] = []
                 var unlearnable = false, failure: Error?, refusedHere = 0
                 for key in keys {
@@ -742,6 +751,10 @@ struct PersonPage: View {
                         else { failure = error }
                     }
                 }
+                // Deleted or transcribed again while its voices were read:
+                // its keys may be other people now, so nothing from it is
+                // used and it stays offered.
+                guard !rec.isDeleted, rec.modelContext != nil, PeopleVoice.signature(rec) == before else { continue }
                 do {
                     if prints.isEmpty {
                         if refusedHere > 0, failure == nil {

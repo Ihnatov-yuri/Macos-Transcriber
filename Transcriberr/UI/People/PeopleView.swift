@@ -52,6 +52,11 @@ struct PeopleView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: PeopleStore.didChange)) { _ in
             people = PeopleStore.shared.load()
+            // Deleted (or merged away): back to the overview, which the
+            // detail already falls back to, so the list marks it too.
+            if case .person(let id) = selection, !people.contains(where: { $0.id == id }) {
+                selection = .overview
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: VoiceprintStore.didChange)) { _ in
             mine = PeopleEmbedder.myVoice()

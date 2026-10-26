@@ -59,11 +59,24 @@ struct SpeakerRenameSheet: View {
     private var savedMatch: Person? {
         PeopleStore.shared.load().first { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }
     }
+    /// People on the meeting's calendar invite who are not yet a speaker of
+    /// this recording, under their saved name when they have one.
+    private var invitees: [String] {
+        guard let attendees = MeetingContext.decode(recording.meetingContextJSON)?.attendees, !attendees.isEmpty
+        else { return [] }
+        let taken = recording.segments.filter { $0.speaker != speakerKey }.compactMap(\.speakerName)
+        let q = trimmed.lowercased()
+        return MeetingContext.dedup(attendees.compactMap { a in
+            guard !taken.contains(where: { MeetingContext.sameName($0, a) }) else { return nil }
+            let shown = saved.first { MeetingContext.sameName($0, a) } ?? a
+            return q.isEmpty || shown.lowercased().contains(q) ? shown : nil
+        }).filter { $0.caseInsensitiveCompare(trimmed) != .orderedSame }
+    }
     /// Saved people to pick from, filtered by what is typed.
     private var picks: [String] {
         let q = trimmed.lowercased()
         let names = saved.filter { q.isEmpty || $0.lowercased().contains(q) }
-        return Array(names.filter { $0.caseInsensitiveCompare(trimmed) != .orderedSame }.prefix(6))
+        return Array(names.filter { $0.caseInsensitiveCompare(trimmed) != .orderedSame && !invitees.contains($0) }.prefix(6))
     }
 
     var body: some View {
@@ -110,6 +123,16 @@ struct SpeakerRenameSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .font(AppFont.text(15))
                         .onSubmit { save() }
+                    if !invitees.isEmpty {
+                        Text("On the invite").uiLabel(9, color: AppColor.ink3)
+                        FlowLayout(spacing: 6) {
+                            ForEach(invitees, id: \.self) { n in
+                                TapButton { name = n } label: {
+                                    LitButtonChrome(.secondary, compact: true) { Text(n) }
+                                }
+                            }
+                        }
+                    }
                     if !picks.isEmpty {
                         FlowLayout(spacing: 6) {
                             ForEach(picks, id: \.self) { n in

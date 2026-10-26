@@ -89,6 +89,20 @@ struct MeetingContext: Codable, Sendable, Equatable {
             .filter { $0.count >= 3 && !isOrdinaryWord($0) })
     }
 
+    /// An invite name and a person's name are the same person: equal full
+    /// names, or one is a single name equal to the other's first name
+    /// ("Sean" and "Sean Benson"). Case, accents and punctuation are ignored.
+    static func sameName(_ a: String, _ b: String) -> Bool {
+        func words(_ s: String) -> [String] {
+            s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+                .split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        }
+        let x = words(a), y = words(b)
+        guard let fx = x.first, let fy = y.first else { return false }
+        if x == y { return true }
+        return (x.count == 1 || y.count == 1) && fx == fy
+    }
+
     static func dedup(_ terms: [String]) -> [String] {
         var seen = Set<String>()
         return terms.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }

@@ -431,3 +431,34 @@ final class PeopleV5Tests: XCTestCase {
         XCTAssertEqual(rebuilt.sources, 1)
     }
 }
+
+final class InviteNamesTests: XCTestCase {
+    func testInviteNamesMatchSavedNames() {
+        XCTAssertTrue(MeetingContext.sameName("Sean Benson", "Sean"))
+        XCTAssertTrue(MeetingContext.sameName("sean benson", "Sean Benson"))
+        XCTAssertTrue(MeetingContext.sameName("Iryna Turchak", "Iryna"))
+        XCTAssertTrue(MeetingContext.sameName("José Pérez", "Jose Perez"))
+        XCTAssertFalse(MeetingContext.sameName("Sean Benson", "Sean Connery"))
+        XCTAssertFalse(MeetingContext.sameName("Maria Velasco", "Mario"))
+        XCTAssertFalse(MeetingContext.sameName("", "Sean"))
+    }
+
+    /// An invited person is named a little under the bar; an uninvited one
+    /// at the same score is not.
+    func testInvitedPersonGetsAHeadStart() {
+        let dims = 8
+        func unit(_ i: Int) -> [Float] { (0..<dims).map { $0 == i ? 1 : 0 } }
+        let a = Person(id: UUID(), name: "Sean", created: Date(), updated: Date(),
+                       print: Voiceprint(seconds: 30, embeddings: [unit(0)]), sources: 1)
+        let b = Person(id: UUID(), name: "Lana", created: Date(), updated: Date(),
+                       print: Voiceprint(seconds: 30, embeddings: [unit(1)]), sources: 1)
+        // A speaker whose clips score just under the bar against Sean.
+        let s = PeopleMatch.onThreshold - PeopleMatch.inviteBonus / 2
+        let clip = (0..<dims).map { $0 == 0 ? s : ($0 == 2 ? (1 - s * s).squareRoot() : 0) }
+        let clusters = ["SPEAKER_01": Array(repeating: clip, count: ClusterVoice.minClips)]
+        XCTAssertNil(PeopleMatch.assign(clusters, people: [a, b])["SPEAKER_01"])
+        let invited = PeopleMatch.invited(["Sean Benson", "Someone Else"], people: [a, b])
+        XCTAssertEqual(invited, [a.id])
+        XCTAssertEqual(PeopleMatch.assign(clusters, people: [a, b], invited: invited)["SPEAKER_01"]?.name, "Sean")
+    }
+}

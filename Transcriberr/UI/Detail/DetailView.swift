@@ -217,8 +217,11 @@ struct DetailView: View {
                             namingQueue = Array(unnamed.dropFirst().map(\.key))
                             renamingSpeaker = unnamed.first?.key
                         } label: {
-                            LitButtonChrome(.secondary, compact: true) { Text("Name them") }
+                            LitButtonChrome(.secondary, compact: true) {
+                                Text(unnamed.count == 1 ? "Name them" : "Name all \(unnamed.count), one by one")
+                            }
                         }
+                        .help("Opens Who is this? for each unnamed speaker in turn: listen, pick a name (people on the invite come first) or type one, or skip.")
                     }
                     .padding(.horizontal, AppMetric.sheetPadding)
                     .padding(.vertical, 6)

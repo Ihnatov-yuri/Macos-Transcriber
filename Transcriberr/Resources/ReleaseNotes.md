@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.0.2
+- The meeting's calendar invite now helps name people. A saved person who is on the invite is recognised a little more readily than someone who is not.
+- In a call with up to three other people, when voices account for everyone but one speaker and one person on the invite, that speaker gets that person's name.
+- Who is this? lists the people on the invite who are not named yet, so naming a speaker is one click.
+- Name them says what it does: Name all 5, one by one. It opens Who is this? for each unnamed speaker in turn.
+
 ## 5.0.1
 - Naming missed recordings at launch now only touches recordings that still have the name Transcriberr gave them ("Meeting" or "Recording" and a date). In 5.0.0 it also renamed last week's recordings that already had a name, and would have done so at every launch.
 

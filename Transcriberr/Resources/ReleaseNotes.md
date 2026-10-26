@@ -6,6 +6,19 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.0.4
+- Switching the voice model back after a stopped rebuild no longer leaves people with an empty voice. They are rebuilt from their recordings.
+- Your own voice only learns from readings made with the built-in voice model, and the High accuracy model works through one batch at a time.
+- Add person: closing the sheet or pressing Cancel while the microphone starts now stops it, and a double click starts it once.
+- Improve from my recordings keeps the samples it learned while it ran and skips recordings that were transcribed again during the run.
+- Forget on a voice sample asks first. A deleted person's page falls back to the overview.
+- Person pages and the overview reload only when something they show changes, and briefs no longer show the same commitment or question twice. Talk share counts everyone who spoke.
+- Naming missed recordings at launch skips dictation, checks each recording again just before naming it, and tries each one only once.
+- The speaker sheet no longer repeats a Sounds like row, Open their page ends a step-through, and Same person as... updates the exported transcript file.
+- Merging speakers with the same name waits for a running transcription to finish.
+- When the text engine runs on the CPU, a slow answer gets four minutes before it is treated as stuck, and a stuck check never loads a second copy of the model next to it.
+- A Parakeet UK update that was withdrawn on Hugging Face is never installed.
+
 ## 5.0.3
 - Transcriberr gives back the memory its text engine used three minutes after the last use, whatever used it: people briefs, the speech coach, presets, titles or dictation polish. Before, it stayed loaded until the next transcription, often several gigabytes for hours.
 - When the GPU is busy and the text engine falls back to the CPU, it now stays on the CPU for ten minutes instead of reloading the model for every request. Reading a person's meetings while the GPU was taken could load it a dozen times and use tens of gigabytes.

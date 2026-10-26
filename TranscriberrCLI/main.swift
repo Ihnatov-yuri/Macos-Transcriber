@@ -27,6 +27,9 @@ func usage() {
       transcriberrcli decode <file>        decode to 16k mono Float32 and chunk it
       transcriberrcli noisesup <file>      run the offline noise-suppression pass
       transcriberrcli transcribe <file>    Parakeet v3 ASR on any audio file (downloads models on first run)
+      transcriberrcli diarize <list.tsv> <outdir> [speakers]
+                                            the app's diarizer (diar.engine, fallback, foldScraps) on
+                                            "<id>\t<audio>" lines; writes <id>.rttm + timing.tsv
       transcriberrcli context <when|file> [minutes]  the calendar invite a recording at that time would use
       transcriberrcli bench [score <backend> [engA engB]] [--dir <dir>]  the user's checked references; score an engine on them
       transcriberrcli vocab <file.txt> [Language]
@@ -183,6 +186,40 @@ func cmdTranscribe(path: String) async -> Int32 {
         return result.text.isEmpty ? 2 : 0
     } catch {
         print("[asr] ❌ \(error)")
+        return 1
+    }
+}
+
+/// Benchmark entry: DiarizationRunner exactly as the runner's pre-pass calls
+/// it (no voice print, so foldScraps without scores), one RTTM per line.
+@MainActor
+func cmdDiarize(list: String, outDir: String, speakers: Int) async -> Int32 {
+    let out = URL(fileURLWithPath: NSString(string: outDir).expandingTildeInPath)
+    let runner = DiarizationRunner()
+    let decoder = AudioDecoder()
+    do {
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        var timing = ""
+        for line in try String(contentsOfFile: list, encoding: .utf8).split(separator: "\n") {
+            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let samples = try await decoder.decodeAll(file: URL(fileURLWithPath: parts[1]))
+            let seconds = Double(samples.count) / 16_000
+            let t0 = Date()
+            let diar = DiarizationRunner.foldScraps(try await runner.run(samples: samples, numClusters: speakers))
+            let elapsed = Date().timeIntervalSince(t0)
+            let rttm = diar.map {
+                String(format: "SPEAKER %@ 1 %.3f %.3f <NA> <NA> %@ <NA> <NA>\n",
+                       parts[0], $0.startSeconds, $0.endSeconds - $0.startSeconds, $0.speakerId)
+            }.joined()
+            try rttm.write(to: out.appendingPathComponent("\(parts[0]).rttm"), atomically: true, encoding: .utf8)
+            timing += "\(parts[0])\t\(DiarizationRunner.engine.rawValue)\t\(String(format: "%.1f", seconds))\t\(String(format: "%.2f", elapsed))\n"
+            print("[diarize] \(parts[0]) \(Int(seconds)) s → \(String(format: "%.1f", elapsed)) s, \(Set(diar.map(\.speakerId)).count) speakers")
+        }
+        try timing.write(to: out.appendingPathComponent("timing.tsv"), atomically: true, encoding: .utf8)
+        return 0
+    } catch {
+        print("[diarize] ❌ \(error)")
         return 1
     }
 }
@@ -857,6 +894,9 @@ func main() async -> Int32 {
     case "transcribe":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdTranscribe(path: args[2])
+    case "diarize":
+        guard args.count > 3 else { usage(); return 64 }
+        return await cmdDiarize(list: args[2], outDir: args[3], speakers: args.count > 4 ? Int(args[4]) ?? 0 : 0)
     case "superdiar":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdSuperDiar(path: args[2])

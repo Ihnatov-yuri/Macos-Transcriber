@@ -13,12 +13,44 @@ import FluidAudio
 ///
 /// Models auto-download from `huggingface.co/FluidInference/speaker-diarization-coreml`
 /// the first time `prepareModels()` runs.
+///
+/// Since 5.0, NVIDIA's Nemotron 3 Diarization (via FluidAudio's
+/// `Nemotron3Diarizer`) runs first. Benched 2026-10-25: AMI test DER 13.5%
+/// against 24.0% for the offline pipeline (collar 0), speaker confusion 0.8%
+/// against 3.0%; on the 381-clip set of real calls it ties (95.2% vs 95.5%)
+/// and splits people less. It holds at most 8 voices, so the offline pipeline
+/// stays as the fallback: more than 8 expected, all 8 slots used, more voices
+/// than the user's upper bound, or fewer than an exact count.
 final class DiarizationRunner: @unchecked Sendable {
     struct SpeakerSegment: Sendable {
         let startSeconds: Double
         let endSeconds: Double
         let speakerId: String
     }
+
+    enum Engine: String {
+        case nemotron, fluid
+    }
+
+    /// `diar.engine` = nemotron (default) | fluid. TRANSCRIBERR_DIAR_ENGINE
+    /// overrides it for one CLI run (A/B without touching shared defaults).
+    static let engineKey = "diar.engine"
+    static var engine: Engine {
+        let pick = ProcessInfo.processInfo.environment["TRANSCRIBERR_DIAR_ENGINE"]
+            ?? UserDefaults.standard.string(forKey: engineKey) ?? ""
+        return Engine(rawValue: pick) ?? .nemotron
+    }
+
+    static let nemotronMaxSpeakers = 8
+    /// Nemotron marks speech word by word (trained on forced-alignment
+    /// labels), so a speaker's pauses come out as silence. Bridging gaps up
+    /// to this long gave the best AMI DER (1.0 s: 13.8%, 1.5 s: 13.5% but
+    /// 3x the false alarm); without it 24% of speech reads as missed.
+    static let nemotronGapSeconds = 1.0
+
+    /// Not thread-safe (FluidAudio's own note): one run at a time.
+    private let nemotronLock = NSLock()
+    nonisolated(unsafe) private var nemotron: Nemotron3Diarizer?
 
     nonisolated(unsafe) private var manager: OfflineDiarizerManager?
     /// (maxSpeakers, threshold) the current manager was configured with.
@@ -66,6 +98,21 @@ final class DiarizationRunner: @unchecked Sendable {
         numClusters: Int = 0,
         exact: Bool = false
     ) async throws -> [SpeakerSegment] {
+        if Self.engine == .nemotron, numClusters <= Self.nemotronMaxSpeakers {
+            do {
+                let segments = try await runNemotron(samples: samples)
+                if let reason = Self.nemotronFallback(segments, numClusters: numClusters, exact: exact) {
+                    AppLog.info("diar", "nemotron: \(reason) — running the offline diarizer instead")
+                } else {
+                    let merged = await mergeSameVoices(segments, samples: samples)
+                    AppLog.info("diar", "nemotron: \(Set(merged.map(\.speakerId)).count) voices, \(merged.count) regions")
+                    return merged
+                }
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw error }
+                AppLog.warn("diar", "nemotron failed: \(error.localizedDescription) — running the offline diarizer instead")
+            }
+        }
         let thresholds: [Double] = (exact && numClusters > 1) ? [0.6, 0.45, 0.34] : [0.6]
         var out: [SpeakerSegment] = []
         var succeeded = false
@@ -116,6 +163,135 @@ final class DiarizationRunner: @unchecked Sendable {
                 speakerId: normalize($0.speakerId)
             )
         }
+    }
+
+    // MARK: - Nemotron 3
+
+    /// The 10.24 s-chunk preset on the Neural Engine. On the real-call clip
+    /// set it equals the GPU-only `offline` preset (95.2% both), and the GPU
+    /// stays free for Whisper's decoder. 203x realtime on an M3 Pro.
+    private func runNemotron(samples: [Float]) async throws -> [SpeakerSegment] {
+        if nemotron == nil {
+            let config = Nemotron3Config.fast128
+            let models = try await Nemotron3Models.loadFromHuggingFace(
+                config: config, computeUnits: .cpuAndNeuralEngine)
+            nemotron = Nemotron3Diarizer(config: config, models: models)
+            AppLog.info("diar", "nemotron ready (fast128, ANE)")
+        }
+        guard let nemotron else { return [] }
+        try Task.checkCancellation()
+        let lock = nemotronLock
+        let (probs, frames) = try await Task.detached(priority: .userInitiated) {
+            try lock.withLock { try nemotron.processComplete(samples) }
+        }.value
+        let raw = Nemotron3Diarizer.segments(probabilities: probs, frameCount: frames).map {
+            // 1-based like the offline diarizer's S1, S2… keys.
+            SpeakerSegment(startSeconds: Double($0.startSeconds), endSeconds: Double($0.endSeconds),
+                           speakerId: String(format: "SPEAKER_%02d", $0.speakerIndex + 1))
+        }
+        return Self.bridgeGaps(raw, maxGap: Self.nemotronGapSeconds)
+    }
+
+    /// Nemotron can open a recording that starts mid-conversation with a
+    /// second slot for the voice already speaking (its speaker cache is
+    /// empty on the first chunk): the reference slice en-b gave one person
+    /// two labels at 0:10 and 0:21 under every preset. The 23 h of full
+    /// calls never did, but a recording can start mid-sentence too, so
+    /// labels whose voices match become one. Such a label is short, often
+    /// under ClusterVoice.minClips clean clips, so every clip counts here.
+    private func mergeSameVoices(_ diar: [SpeakerSegment], samples: [Float]) async -> [SpeakerSegment] {
+        guard Set(diar.map(\.speakerId)).count > 1 else { return diar }
+        do {
+            let floor = VoiceActivity.speechFloor(samples)
+            let ranges = ClusterVoice.clipRanges(diar, sampleCount: samples.count, window: PeopleMatch.clipSeconds)
+                .mapValues { $0.filter { VoiceActivity.rms(samples[$0]) >= floor } }
+                .filter { !$0.value.isEmpty }
+            let order = ranges.keys.sorted()
+            let flat = try await PeopleEmbedder.embed(order.flatMap { ranges[$0]!.map { samples[$0] } })
+            var clips: [String: [[Float]]] = [:]
+            var i = 0
+            for key in order {
+                clips[key] = Array(flat[i..<(i + ranges[key]!.count)])
+                i += ranges[key]!.count
+            }
+            let (into, sims) = Self.sameVoiceMerges(clips, seconds: Self.speechSeconds(diar))
+            AppLog.info("diar", "nemotron voice check: clips \(order.map { "\($0) \(clips[$0]!.count)" }.joined(separator: ", ")); \(sims)")
+            guard !into.isEmpty else { return diar }
+            AppLog.info("diar", "nemotron: same voice under two labels, merging \(into.sorted { $0.key < $1.key }.map { "\($0.key)→\($0.value)" })")
+            return diar.map { SpeakerSegment(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds,
+                                             speakerId: into[$0.speakerId] ?? $0.speakerId) }
+        } catch {
+            if error is CancellationError { return diar }
+            AppLog.warn("diar", "nemotron: voice check failed, labels kept: \(error.localizedDescription)")
+            return diar
+        }
+    }
+
+    /// Which label folds into which: the most alike pair at People's
+    /// same-voice bar (0.62, centroid to centroid) or above
+    /// merges first (the quieter into the louder, by seconds spoken), its
+    /// clips pooled, until no pair passes. Also the first round's
+    /// similarities, for the log. Labels without clips are left alone.
+    /// Benched 2026-10-25: en-b's split label scored 0.77 from one clip;
+    /// different people in AMI and the 33 call tracks at most 0.58.
+    static func sameVoiceMerges(_ clips: [String: [[Float]]], seconds: [String: Double],
+                                threshold: Float = VoiceSuggestions.sameVoice) -> (into: [String: String], sims: String) {
+        var pools = clips.filter { !$0.value.isEmpty }
+        var into: [String: String] = [:]
+        var firstRound = ""
+        while pools.count > 1 {
+            let centroid = pools.mapValues { VoiceActivity.normalizedMean($0) }
+            let keys = centroid.keys.sorted()
+            var best: (a: String, b: String, sim: Float)?
+            var shown: [String] = []
+            for (i, a) in keys.enumerated() {
+                for b in keys[(i + 1)...] {
+                    let sim = VoiceActivity.cosine(centroid[a]!, centroid[b]!)
+                    shown.append("\(a)~\(b) \(String(format: "%.2f", sim))")
+                    if sim >= threshold, sim > (best?.sim ?? -1) { best = (a, b, sim) }
+                }
+            }
+            if firstRound.isEmpty { firstRound = shown.joined(separator: ", ") }
+            guard let best else { break }
+            let (keep, drop) = (seconds[best.a] ?? 0) >= (seconds[best.b] ?? 0) ? (best.a, best.b) : (best.b, best.a)
+            pools[keep]! += pools.removeValue(forKey: drop)!
+            into[drop] = keep
+            for (k, v) in into where v == drop { into[k] = keep }
+        }
+        return (into, firstRound)
+    }
+
+    /// Joins each speaker's regions that are at most `maxGap` apart.
+    static func bridgeGaps(_ diar: [SpeakerSegment], maxGap: Double) -> [SpeakerSegment] {
+        var out: [SpeakerSegment] = []
+        for (_, regions) in Dictionary(grouping: diar, by: \.speakerId) {
+            var merged: [SpeakerSegment] = []
+            for r in regions.sorted(by: { $0.startSeconds < $1.startSeconds }) {
+                if let last = merged.last, r.startSeconds - last.endSeconds <= maxGap {
+                    merged[merged.count - 1] = SpeakerSegment(
+                        startSeconds: last.startSeconds, endSeconds: max(last.endSeconds, r.endSeconds),
+                        speakerId: r.speakerId)
+                } else {
+                    merged.append(r)
+                }
+            }
+            out += merged
+        }
+        return out.sorted { ($0.startSeconds, $0.speakerId) < ($1.startSeconds, $1.speakerId) }
+    }
+
+    /// Why Nemotron's result can't stand, or nil when it can. Voices are
+    /// counted without scraps (foldScraps folds those later anyway), so a
+    /// stray few seconds in a spare slot doesn't send a meeting to the
+    /// fallback; a full house of 8 slots does, scraps included, since
+    /// voices past the 8th were squeezed into them.
+    static func nemotronFallback(_ diar: [SpeakerSegment], numClusters: Int, exact: Bool) -> String? {
+        let total = speechSeconds(diar)
+        if total.count >= nemotronMaxSpeakers { return "all \(nemotronMaxSpeakers) speaker slots used" }
+        let voices = total.count - scrapClusters(total).count
+        if numClusters > 0, voices > numClusters { return "\(voices) voices, more than the \(numClusters) expected" }
+        if exact, numClusters > 1, voices < numClusters { return "\(voices) of exactly \(numClusters) voices" }
+        return nil
     }
 
     // MARK: - Post-processing

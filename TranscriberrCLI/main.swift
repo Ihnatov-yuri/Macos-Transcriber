@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @preconcurrency import AVFoundation
 import FluidAudio
@@ -1004,7 +1005,7 @@ func main() async -> Int32 {
 }
 
 /// Parakeet UK release on this Mac and on Hugging Face. `update` fetches a
-/// newer release and switches to it at once (no engine runs in this process).
+/// newer release and switches to it at once, unless the app is running.
 func cmdUKModel(_ sub: String) async -> Int32 {
     let installed = ParakeetUKModel.manifest(at: ParakeetUKModel.modelDirectory)
     print("installed: \(ParakeetUKModel.isInstalled() ? ParakeetUKModel.versionName() : "none")"
@@ -1021,7 +1022,13 @@ func cmdUKModel(_ sub: String) async -> Int32 {
     guard sub == "update" else { return 0 }
     let result = await ParakeetUKModel.checkForUpdate()
     print("update check: \(result)")
-    ParakeetUKModel.applyPendingUpdate()
+    // The running app may have the current files open: it switches at its
+    // next launch instead.
+    if NSRunningApplication.runningApplications(withBundleIdentifier: "nl.ihnatov.Transcriberr").isEmpty {
+        ParakeetUKModel.applyPendingUpdate()
+    } else {
+        print("Transcriberr is running: the new release takes over at its next launch")
+    }
     let now = ParakeetUKModel.manifest(at: ParakeetUKModel.modelDirectory)
     print("now: \(ParakeetUKModel.versionName()) @ \(now.map { String($0.revision.prefix(8)) } ?? "no manifest")")
     if case .failed = result { return 1 }

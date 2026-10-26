@@ -10,6 +10,11 @@ import SwiftData
 ///   transcriberrcli thinkab <out.json> [titles] [people] [lines]
 @MainActor
 func cmdThinkAB(out: String, titleCount: Int, peopleCount: Int, maxLines: Int) async -> Int32 {
+    // It reads the library like `kb`: the same switch closes it.
+    guard AssistantAccess.isAllowed else {
+        FileHandle.standardError.write(Data((AssistantAccess.refusal + "\n").utf8))
+        return 77   // EX_NOPERM
+    }
     let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore())
     let backend = factory.backend(for: .gemmaLiteRT)
     do {

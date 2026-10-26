@@ -366,10 +366,13 @@ struct PeopleStore {
                 p.print = Voiceprint(model: model.rawValue, seconds: 0, embeddings: [])
                 p.samples = []
                 p.sources = 0
-                pending.append(p)
             }
             p.parked = parked
             people[i] = p
+            // No voice in `model` yet, or only the empty one a stopped
+            // rebuild parked. Taken after parking: the voice just parked
+            // holds the recordings and speakers to rebuild from.
+            if !p.hasVoice { pending.append(p) }
         }
         try write(people)
         return pending
@@ -511,21 +514,46 @@ struct PeopleStore {
 
     /// A rebuilt voice replaces the person's samples (Improve on their page):
     /// one per item, in order, then trimmed to the cap. The caller has
-    /// already checked that it scores better.
+    /// already checked that it scores better. `snapshot` is the person the
+    /// rebuild started from: samples added since (Find people's keep
+    /// learning, Save voice) are kept after the items, not dropped. A voice
+    /// model changed meanwhile writes nothing.
     func replaceVoice(of id: UUID, with items: [(recordingId: UUID?, earlier: Bool?, date: Date, print: Voiceprint)],
-                      now: Date = Date()) throws {
+                      basedOn snapshot: Person? = nil, now: Date = Date()) throws {
         var people = try read()
         guard let i = people.firstIndex(where: { $0.id == id }), !items.isEmpty else { throw PeopleError.missing }
         var p = people[i]
+        // Samples learned while the rebuild ran, with their embeddings.
+        var added: [(sample: Person.Sample, embeddings: [[Float]])] = []
+        if let snapshot {
+            guard p.print.model == snapshot.print.model,
+                  items.allSatisfy({ $0.print.model == p.print.model }) else { throw PeopleError.otherModel }
+            let known = Set(snapshot.allSamples.map(\.id))
+            var start = 0
+            for s in p.allSamples {
+                let end = min(p.print.embeddings.count, start + s.count)
+                if !known.contains(s.id) { added.append((s, Array(p.print.embeddings[start..<end]))) }
+                start = end
+            }
+        }
+        // A recording learned again meanwhile: the newer sample stands for
+        // it, or the same speech would count twice.
+        let newer = Set(added.compactMap(\.sample.recordingId))
+        let rebuilt = items.filter { item in item.recordingId.map { !newer.contains($0) } ?? true }
         p.print = Voiceprint(model: p.print.model, created: p.print.created,
-                             seconds: items.map(\.print.seconds).reduce(0, +),
-                             embeddings: items.flatMap(\.print.embeddings))
-        p.samples = items.map {
+                             seconds: rebuilt.map(\.print.seconds).reduce(0, +) + added.map(\.sample.seconds).reduce(0, +),
+                             embeddings: rebuilt.flatMap(\.print.embeddings) + added.flatMap(\.embeddings))
+        p.samples = rebuilt.map {
             Person.Sample(id: UUID(), recordingId: $0.recordingId, date: $0.date,
                           seconds: $0.print.seconds, count: $0.print.embeddings.count, earlier: $0.earlier)
+        } + added.map { a -> Person.Sample in
+            // Count matches the embeddings actually taken, as trim expects.
+            var s = a.sample
+            s.count = a.embeddings.count
+            return s
         }
         p.trim()
-        p.sources = items.count
+        p.sources = rebuilt.count + added.count
         let recs = items.compactMap(\.recordingId)
         p.learnedFrom = Array(Set((p.learnedFrom ?? []) + recs))
         p.candidates = p.candidates?.filter { !recs.contains($0.recordingId) }

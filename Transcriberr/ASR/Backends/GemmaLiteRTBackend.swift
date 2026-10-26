@@ -151,10 +151,19 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// Runs `body` on a fresh CPU engine after the GPU engine failed with
     /// `error`; rethrows `error` when that failure is not the engine's
     /// (cancellation, a timeout) or there is no GPU to fall back from.
-    private func retryOnCPU<T>(after error: Error, _ body: (Engine) async throws -> T) async throws -> T {
+    /// `inference` is the caller's `beginInference()` id.
+    private func retryOnCPU<T>(after error: Error, inference: Int, _ body: (Engine) async throws -> T) async throws -> T {
         guard engineOnGPU, error is LiteRTLMError, let file = modelFile else { throw error }
         try Task.checkCancellation()
+        // A GPU call that wedge recovery already gave up on (lock reset, gate
+        // evicted) and that came back with an error late: another call may
+        // hold the engine now, and a CPU run would sit next to it.
+        guard inferenceId == inference, inferringSince != nil else { throw error }
         AppLog.warn("litert", "GPU call failed (\(error.localizedDescription)) — moving to CPU")
+        // From here the call is timed as a CPU call, on its own clock: the
+        // time the failed GPU attempt used is not charged to it.
+        inferringSince = Date()
+        inferringOnCPU = true
         let gen = buildGeneration
         // A GPU engine that failed once stays broken ("already has an
         // outstanding map pending"), so it goes now. The caller's reference
@@ -170,8 +179,9 @@ actor GemmaLiteRTBackend: ASRBackend {
             isReady = false
             throw error
         }
-        // Released while the CPU engine built: hand nothing back.
-        guard buildGeneration == gen else { throw error }
+        // Released while the CPU engine built, or declared wedged meanwhile
+        // (the lock and the gate went to the next caller): hand nothing back.
+        guard buildGeneration == gen, inferenceId == inference, engine == nil else { throw error }
         engine = cpu
         AppLog.info("litert", "CPU engine ready — GPU retried in \(Int(Self.gpuRetryInterval / 60)) min")
         return try await body(cpu)
@@ -212,8 +222,18 @@ actor GemmaLiteRTBackend: ASRBackend {
         // section, arbitration) is 120 s and counts its queue wait, so a
         // healthy generation someone else started 60-120 s ago is not
         // proof of a wedge. A real hang is still healed, one timeout later.
+        let budget = inferringOnCPU ? Self.stuckCPUInferenceAge : Self.stuckInferenceAge
         guard let since = inferringSince,
-              Date().timeIntervalSince(since) >= Self.stuckInferenceAge else {
+              Date().timeIntervalSince(since) >= budget else {
+            // A CPU call under its budget is left alone: a load here would
+            // build a GPU engine next to it (during a CPU retry there is no
+            // engine to find). Its caller timed out at 120 s and may not ask
+            // again (a brief or a person read gives up after one recovery),
+            // so look again once the budget runs out.
+            if let since = inferringSince, inferringOnCPU {
+                scheduleWedgeCheck(inferenceId, after: budget - Date().timeIntervalSince(since) + 1, modelPath: modelPath)
+                return
+            }
             try await load(modelPath: modelPath)
             return
         }
@@ -245,16 +265,45 @@ actor GemmaLiteRTBackend: ASRBackend {
     }
 
     static let stuckInferenceAge: TimeInterval = 120
+    /// The same for a call on the CPU engine. Twice the GPU age: the CPU
+    /// decodes the same prompt several times slower, and the prompts that
+    /// land there after a GPU failure are the long ones (past ~2.5k tokens).
+    /// It also outlasts the runner's retry of a timed-out chunk (another
+    /// 120 s), so a slow but healthy CPU call is not cut off while the retry
+    /// is queued behind it.
+    static let stuckCPUInferenceAge: TimeInterval = 240
 
-    /// When the call now inside the native engine started; nil when none
-    /// is. The engine lock admits one call at a time.
+    /// When the call now inside the native engine started (for a CPU retry,
+    /// when the retry started); nil when none is. The engine lock admits one
+    /// call at a time.
     private var inferringSince: Date?
+    /// That call runs on the CPU engine, so `stuckCPUInferenceAge` applies.
+    private var inferringOnCPU = false
     private var inferenceId = 0
+    /// The call a wedge check is already set for.
+    private var wedgeCheckFor: Int?
 
     private func beginInference() -> Int {
         inferenceId += 1
         inferringSince = Date()
+        inferringOnCPU = !engineOnGPU
         return inferenceId
+    }
+
+    private func scheduleWedgeCheck(_ inference: Int, after seconds: TimeInterval, modelPath: URL?) {
+        guard wedgeCheckFor != inference else { return }
+        wedgeCheckFor = inference
+        AppLog.info("litert", "wedge check: CPU call not stuck yet, checking again in \(Int(seconds))s")
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            await self?.runWedgeCheck(inference, modelPath: modelPath)
+        }
+    }
+
+    private func runWedgeCheck(_ inference: Int, modelPath: URL?) async {
+        if wedgeCheckFor == inference { wedgeCheckFor = nil }
+        guard inferenceId == inference, inferringSince != nil else { return }
+        try? await recoverWedge(modelPath: modelPath)
     }
 
     private func endInference(_ id: Int) {
@@ -356,7 +405,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         do {
             reply = try await attempt(engine)
         } catch {
-            reply = try await retryOnCPU(after: error) { try await attempt($0) }
+            reply = try await retryOnCPU(after: error, inference: inference) { try await attempt($0) }
         }
         let raw = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         var cleaned = Self.trimRepetitionTail(Self.stripPreamble(raw))
@@ -475,7 +524,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         do {
             out = try await attempt(engine)
         } catch {
-            return try await retryOnCPU(after: error) { try await attempt($0) }
+            return try await retryOnCPU(after: error, inference: inference) { try await attempt($0) }
         }
         if out.isEmpty {
             // Defense in depth: a fresh conversation on a now-exclusive

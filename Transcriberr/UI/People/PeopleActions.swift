@@ -228,7 +228,10 @@ enum VoiceImprover {
                       !a.hasPrefix(RecordingRepository.taggedKeyPrefix) && b.hasPrefix(RecordingRepository.taggedKeyPrefix)
                   }).first
             else { continue }
-            if let p = try? await PeopleVoice.learn(speaker: key, in: rec) {
+            let before = PeopleVoice.signature(rec)
+            // Deleted or re-run in the main window meanwhile: skipped.
+            if let p = try? await PeopleVoice.learn(speaker: key, in: rec),
+               rec.modelContext != nil, PeopleVoice.signature(rec) == before {
                 fresh.append((m.id, nil, m.date, p))
             }
         }
@@ -283,7 +286,7 @@ enum VoiceImprover {
                            message: "Rebuilt from \(fresh.count) \(fresh.count == 1 ? "recording" : "recordings"), but it scored \(after.percent)% against \(before.percent)% now, so the current voice stays. A reading at this Mac, or more meetings with \(person.name), is what would help.")
         }
         do {
-            try PeopleStore.shared.replaceVoice(of: person.id, with: chosen)
+            try PeopleStore.shared.replaceVoice(of: person.id, with: chosen, basedOn: person)
         } catch {
             return Outcome(before: before, after: after, applied: false, used: 0, leftOut: leftOut,
                            message: error.localizedDescription)

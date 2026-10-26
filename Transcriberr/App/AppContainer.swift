@@ -274,13 +274,30 @@ final class AppContainer: @unchecked Sendable {
     private func retitleMissed() async {
         let weekAgo = Int64(Date().addingTimeInterval(-7 * 86_400).timeIntervalSince1970 * 1000)
         let pending = Set(repository.pendingTasks().map(\.recordingId))
+        // One try each: a title that keeps failing must not load the text
+        // engine at every launch for a week. Tries older than the window go.
+        let triedKey = "autoTitle.catchUpTried"
+        var tried = (UserDefaults.standard.dictionary(forKey: triedKey) as? [String: Int64] ?? [:])
+            .filter { $0.value >= weekAgo }
         let missed = ((try? repository.all()) ?? []).filter {
             $0.createdAtMillis >= weekAgo && TranscriptionJobManager.isDefaultTitle($0.title) && !$0.segments.isEmpty
                 && !jobManager.isActive($0.id) && !pending.contains($0.id)
+                && $0.folder?.isDictation != true && tried[$0.id.uuidString] == nil
         }
+        defer { UserDefaults.standard.set(tried, forKey: triedKey) }
         guard !missed.isEmpty else { return }
         AppLog.info("app", "naming \(missed.count) recording(s) whose run ended without a title")
         for recording in missed {
+            // Each title takes seconds to minutes: by the time this one's turn
+            // comes, the user may have renamed or deleted it, or re-run it
+            // (whose own run titles it). generateAutoTitle only guards the
+            // title against changes during its own await.
+            guard !recording.isDeleted, recording.modelContext != nil,
+                  TranscriptionJobManager.isDefaultTitle(recording.title),
+                  !jobManager.isActive(recording.id) else { continue }
+            // Noted before the await: a try that never returns counts too.
+            tried[recording.id.uuidString] = Int64(Date().timeIntervalSince1970 * 1000)
+            UserDefaults.standard.set(tried, forKey: triedKey)
             await generateAutoTitle(for: recording, segments: recording.segments)
         }
     }

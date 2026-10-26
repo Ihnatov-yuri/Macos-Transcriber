@@ -32,8 +32,24 @@ struct PersonPage: View {
     @State private var draftName = ""
     @State private var confirmDelete = false
     @State private var merging: Person?
+    @State private var forgetting: Person.Sample?
     @State private var pageError: String?
     @State private var showDetail = false
+    /// The person the page last loaded, so only a reload is debounced.
+    @State private var loadedFor: UUID?
+
+    /// What `reload` depends on: the name its segments are fetched by, the
+    /// candidates it lists, and the changes that rename lines in recordings.
+    private struct ReloadKey: Equatable {
+        let id: UUID
+        let name: String
+        let matches: [Person.Hearing]?
+        let candidates: [Person.Hearing]?
+        let learnedFrom: [UUID]?
+        init(_ p: Person) {
+            id = p.id; name = p.name; matches = p.matches; candidates = p.candidates; learnedFrom = p.learnedFrom
+        }
+    }
 
     private var busy: String? { training.busy[person.id] }
     private var confidence: VoiceConfidence { PeopleConfidence.assess(person, others: others, unmatched: ["you"]) }
@@ -73,8 +89,19 @@ struct PersonPage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        // Any change to the person (a match logged, an answer, a rename).
-        .task(id: person) { reload() }
+        // A change that can move what `reload` reads: a rename, a match
+        // logged (it named a speaker), an answer, a recording learned from.
+        // Not the voice itself, which a Voice model switch rewrites person
+        // by person. Debounced after the first load, so a running Find
+        // people (one save per recording) reloads once it pauses.
+        .task(id: ReloadKey(person)) {
+            if loadedFor == person.id {
+                try? await Task.sleep(for: .milliseconds(400))
+                if Task.isCancelled { return }
+            }
+            loadedFor = person.id
+            reload()
+        }
         .onChange(of: runner.revision) { reloadBrief() }
         .sheet(isPresented: $recordingReading) {
             AddPersonSheet(initialName: person.name, personId: person.id) { recordingReading = false }
@@ -98,6 +125,13 @@ struct PersonPage: View {
             Button("Merge") { merge(into: target) }
         } message: { target in
             Text("One person from two: \(person.name)'s voice samples and history join \(target.name)'s, and recordings naming \(person.name) name \(target.name).")
+        }
+        .confirmationDialog("Forget this sample of \(person.name)'s voice?",
+                            isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
+                            titleVisibility: .visible, presenting: forgetting) { s in
+            Button("Forget", role: .destructive) { forget(s) }
+        } message: { s in
+            Text("\(Int(s.seconds)) s of their voice from “\(sampleTitle(s))” is removed, and that recording is not offered for learning again.")
         }
     }
 
@@ -277,8 +311,8 @@ struct PersonPage: View {
                             LitButtonChrome(.ghost, compact: true) { Text("Open") }
                         }
                     }
-                    TapButton { forget(s) } label: {
-                        LitButtonChrome(.ghost, compact: true) { Text("Forget") }
+                    TapButton { forgetting = s } label: {
+                        LitButtonChrome(.ghost, compact: true) { Text("Forget…") }
                     }
                     .disabled(samples.count < 2 || busy != nil)
                     .help(samples.count < 2 ? "The only sample: delete the person instead." : "Remove this sample from their voice.")
@@ -720,6 +754,7 @@ struct PersonPage: View {
                 training.busy[id] = "Listening to \(i + 1) of \(todo.count)…"
                 guard let rec = try? container.repository.get(id: m.id), !rec.isDeleted else { continue }
                 let keys = m.keys.filter { !$0.hasPrefix(RecordingRepository.taggedKeyPrefix) }.sorted()
+                let before = PeopleVoice.signature(rec)
                 var prints: [Voiceprint] = []
                 var unlearnable = false, failure: Error?, refusedHere = 0
                 for key in keys {
@@ -742,6 +777,10 @@ struct PersonPage: View {
                         else { failure = error }
                     }
                 }
+                // Deleted or transcribed again while its voices were read:
+                // its keys may be other people now, so nothing from it is
+                // used and it stays offered.
+                guard !rec.isDeleted, rec.modelContext != nil, PeopleVoice.signature(rec) == before else { continue }
                 do {
                     if prints.isEmpty {
                         if refusedHere > 0, failure == nil {

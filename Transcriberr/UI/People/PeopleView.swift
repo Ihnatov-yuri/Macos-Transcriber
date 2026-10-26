@@ -52,6 +52,11 @@ struct PeopleView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: PeopleStore.didChange)) { _ in
             people = PeopleStore.shared.load()
+            // Deleted (or merged away): back to the overview, which the
+            // detail already falls back to, so the list marks it too.
+            if case .person(let id) = selection, !people.contains(where: { $0.id == id }) {
+                selection = .overview
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: VoiceprintStore.didChange)) { _ in
             mine = PeopleEmbedder.myVoice()
@@ -246,7 +251,16 @@ struct PeopleOverview: View {
     @State private var titles: [UUID: String] = [:]
     @State private var drafts: [String: String] = [:]
     @State private var scanned = false
+    /// Loaded once already, so only a reload is debounced.
+    @State private var loaded = false
     private var suggest: PeopleSuggestionRunner { PeopleSuggestionRunner.shared }
+
+    private struct ReloadKey: Equatable {
+        let id: UUID
+        let name: String
+        let updated: Date
+        init(_ p: Person) { id = p.id; name = p.name; updated = p.updated }
+    }
     private var briefs: PersonBriefRunner { PersonBriefRunner.shared }
 
     static let recentDays = 30.0
@@ -271,7 +285,18 @@ struct PeopleOverview: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .task(id: people.map(\.updated)) { reload() }
+        // Who is saved, under what name, and when each voice last changed
+        // (unknown voices are compared with it): what `reload` reads of
+        // them. Debounced after the first load, so a Voice model switch
+        // (one save per person rebuilt) reloads once it pauses.
+        .task(id: people.map(ReloadKey.init)) {
+            if loaded {
+                try? await Task.sleep(for: .milliseconds(400))
+                if Task.isCancelled { return }
+            }
+            loaded = true
+            reload()
+        }
         .onChange(of: scan.isRunning) { if !scan.isRunning { reload() } }
         .onChange(of: suggest.busy) { if suggest.busy == nil { reload() } }
         .onChange(of: briefs.revision) { reload() }

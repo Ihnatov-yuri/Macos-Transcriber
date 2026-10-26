@@ -162,10 +162,14 @@ enum PersonBriefBuilder {
         let work = Box<Task<Void, Never>>()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
-                claim.set(cont)
+                // Cancelled before it started: no generation nobody will read.
+                guard claim.set(cont) else { return }
                 work.value = Task.detached(priority: .userInitiated) {
                     do { claim.resume(Result<T, Error>.success(try await op())) } catch { claim.resume(Result<T, Error>.failure(error)) }
                 }
+                // A cancel that landed between `set` and the line above found
+                // no work to stop.
+                if claim.isDone { work.value?.cancel() }
                 Task.detached(priority: .utility) {
                     try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                     // Claimed before the work is cancelled: the cancelled
@@ -426,11 +430,19 @@ private final class BoundedClaim: @unchecked Sendable {
     private var early: Error?
     private var done = false
 
-    func set<T: Sendable>(_ c: CheckedContinuation<T, Error>) {
+    /// False when a result (a cancel) came first and `c` is already resumed.
+    @discardableResult
+    func set<T: Sendable>(_ c: CheckedContinuation<T, Error>) -> Bool {
         lock.lock()
-        if done, let early { lock.unlock(); c.resume(throwing: early); return }
+        if done, let early { lock.unlock(); c.resume(throwing: early); return false }
         cont = c
         lock.unlock()
+        return true
+    }
+
+    var isDone: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return done
     }
 
     func resume<T: Sendable>(_ result: Result<T, Error>) {

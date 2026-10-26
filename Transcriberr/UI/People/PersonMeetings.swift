@@ -276,6 +276,9 @@ struct PersonBriefView: Equatable {
         out.meetings = meetings(all, in: period, now: now)
         var seenTopics = Set<String>()
         var seenItems: [Row.Kind: [Set<String>]] = [:]
+        // Row ids key the page's ForEach and Done: the same text twice in
+        // one meeting (too short to have meaning words) is shown once.
+        var seenIds = Set<String>()
         func words(_ s: String) -> Set<String> { PersonBriefStore.meaningWords(s) }
         /// Said before in a newer meeting already shown.
         func repeated(_ kind: Row.Kind, _ text: String) -> Bool {
@@ -293,12 +296,12 @@ struct PersonBriefView: Equatable {
             for c in e.brief.commitments {
                 let row = Row(kind: .commitment, item: c, meeting: m)
                 if closed.contains(row.id) { out.closedCount += 1 }
-                else if !repeated(.commitment, c.text) { out.commitments.append(row) }
+                else if seenIds.insert(row.id).inserted, !repeated(.commitment, c.text) { out.commitments.append(row) }
             }
             for q in e.brief.questions {
                 let row = Row(kind: .question, item: q, meeting: m)
                 if closed.contains(row.id) { out.closedCount += 1 }
-                else if !repeated(.question, q.text) { out.questions.append(row) }
+                else if seenIds.insert(row.id).inserted, !repeated(.question, q.text) { out.questions.append(row) }
             }
             // Newest meeting first: the first word on a topic is the last said.
             for t in e.brief.topics where seenTopics.insert((t.topic ?? t.text).lowercased()).inserted {

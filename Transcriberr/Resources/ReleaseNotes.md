@@ -48,6 +48,10 @@
 - Settings › AI assistants: switch off Let AI assistants read my library, and Claude and other assistants connected to Transcriberr see no tools and cannot read anything. One already connected is refused at its next request. The section also shows when an assistant last read the library.
 - Settings sections fold away: click a section's title, and the app remembers which ones you keep open. Style & vocabulary starts folded. Learned names and your word choices are now small chips instead of one row each, with Show all for the rest.
 - Buttons across the app are now real buttons to VoiceOver and other accessibility tools; before, many could be read but not pressed. Pause and Stop on the Record screen included.
+- Parakeet UK keeps itself up to date. Once a day, when update checks are on, Transcriberr asks Hugging Face whether a newer release of the model is out, downloads it in the background next to the one in use, checks every file against the fingerprint Hugging Face publishes for it, and switches to it the next time Transcriberr starts.
+- This brings version 2 of Parakeet UK: better in meetings and in English than version 1, and it keeps English sentences inside Ukrainian speech more often.
+- Super now pairs Whisper with Parakeet UK when you have not chosen its engines. Parakeet v2, the English-only model, is no longer downloaded unless you pick it.
+
 
 ## 4.7.0
 - Ihnatov Parakeet UK is now an engine of its own, next to stock Parakeet v3. It is Parakeet v3 fine-tuned for Ukrainian, and it downloads on first use (about 630 MB) from huggingface.co/ihnatov-yuri/parakeet-tdt-0.6b-v3-uk, so a new Mac gets it like the other speech models. Every file is checked against its fingerprint before it is used.

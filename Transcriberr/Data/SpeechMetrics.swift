@@ -86,7 +86,8 @@ struct MeetingSpeech: Equatable, Identifiable {
     var date: Date
     /// "en", "uk" or nil when the script does not tell (see `language`).
     var language: String?
-    /// People who said at least `minParticipantWords`.
+    /// Everyone who said a word, them included: a quiet side of a 1:1 is
+    /// still half of it.
     var participants: Int
     /// Seconds of their lines: generous, for weighting and display only.
     var talkSeconds: Double
@@ -133,7 +134,6 @@ enum SpeechMeasure {
     static let tightLine = 2.0...12.0
     /// Overlap between two tight lines that counts as cutting in.
     static let overlap = 0.5
-    static let minParticipantWords = 25
     /// Rates per minute of speech are taken per words spoken, at an even
     /// pace, so padded timestamps do not water them down.
     static let wordsPerMinute = 140.0
@@ -187,7 +187,7 @@ enum SpeechMeasure {
         let language = SpeechLexicon.language(of: text)
         return MeetingSpeech(
             recordingId: recordingId, title: title, date: date, language: language,
-            participants: wordsBy.values.filter { $0 >= minParticipantWords }.count,
+            participants: max(1, wordsBy.values.filter { $0 > 0 }.count),
             talkSeconds: talk,
             spanSeconds: (sorted.map(\.end).max() ?? 0) - (sorted.first?.start ?? 0),
             words: SpeechLexicon.words(text).count,

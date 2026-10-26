@@ -1,7 +1,8 @@
 import Foundation
 
 /// Whether AI assistants (Claude and other MCP clients) may read the
-/// library through `transcriberrcli mcp` and `transcriberrcli kb`.
+/// library through `transcriberrcli mcp` and `transcriberrcli kb` (and
+/// the `thinkab` developer tool).
 /// Settings → AI assistants switches it; the CLI is a separate process, so
 /// it reads the app's preferences fresh on every request: switching it off
 /// cuts off an assistant that is already connected, at its next call.

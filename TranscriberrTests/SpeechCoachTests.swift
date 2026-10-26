@@ -21,7 +21,7 @@ final class SpeechCoachTests: XCTestCase {
         XCTAssertEqual(m.spanSeconds, 100, accuracy: 0.001)
         XCTAssertEqual(m.words, 30)
         XCTAssertEqual(m.meetingWords, 30 + 10 + 13)
-        XCTAssertEqual(m.participants, 1, "only Yuri said 25 words")
+        XCTAssertEqual(m.participants, 3, "everyone who spoke counts, however little")
         XCTAssertEqual(m.turns, 2, "0-50 is one turn over a 1 s gap")
         XCTAssertEqual(m.longestTurn, 49, accuracy: 0.001, "a turn ends where Anna starts")
         XCTAssertEqual(m.interruptions, 1, "Yuri's tight line starts inside Anna's")
@@ -31,7 +31,7 @@ final class SpeechCoachTests: XCTestCase {
         XCTAssertEqual(m.language, "en")
         XCTAssertEqual(m.fillers, 2, "um, you know")
         XCTAssertEqual(m.hedges, 2, "I think, maybe")
-        XCTAssertEqual(m.value(.talkShare) ?? 0, 100 * 30.0 / 53, accuracy: 0.01, "share of the words")
+        XCTAssertEqual(m.value(.talkShare) ?? 0, 100 * 30.0 / 53 * 3, accuracy: 0.01, "share of the words, against a fair third")
         XCTAssertNil(SpeechMeasure.measure(lines, name: "Nobody", recordingId: UUID(), title: "", date: Date()))
     }
 

@@ -84,6 +84,14 @@ final class TranscriptionJobManager: @unchecked Sendable {
         self.repository = repository
     }
 
+    /// Only the names the app gives a new recording ("Meeting 26/10/2026,
+    /// 13:08", "Recording 2026-10-26 …"). The launch catch-up uses this, not
+    /// `shouldAutoTitle`, whose plain-ASCII clause also matches generated and
+    /// typed titles like "Node Migration And Bot Updates".
+    nonisolated static func isDefaultTitle(_ title: String) -> Bool {
+        title.range(of: #"^(Meeting|Recording)[ _]\d"#, options: .regularExpression) != nil
+    }
+
     nonisolated static func shouldAutoTitle(_ title: String) -> Bool {
         // Default titles: "Recording <date>" and "Meeting <date>". The
         // meeting form failed BOTH old checks — wrong prefix, and its

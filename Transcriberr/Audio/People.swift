@@ -366,10 +366,13 @@ struct PeopleStore {
                 p.print = Voiceprint(model: model.rawValue, seconds: 0, embeddings: [])
                 p.samples = []
                 p.sources = 0
-                pending.append(p)
             }
             p.parked = parked
             people[i] = p
+            // No voice in `model` yet, or only the empty one a stopped
+            // rebuild parked. Taken after parking: the voice just parked
+            // holds the recordings and speakers to rebuild from.
+            if !p.hasVoice { pending.append(p) }
         }
         try write(people)
         return pending

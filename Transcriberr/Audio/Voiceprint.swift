@@ -109,6 +109,12 @@ enum VoiceprintStore {
         }
     }
 
+    struct OtherModel: LocalizedError {
+        var errorDescription: String? {
+            "This reading was read with another voice model than your saved voice, so it was not added; nothing was changed."
+        }
+    }
+
     struct UnreadablePrint: LocalizedError {
         var errorDescription: String? {
             "Your saved voice cannot be read (damaged, or made by an older model). Record it again in Settings → Audio input; nothing was changed."
@@ -120,6 +126,10 @@ enum VoiceprintStore {
     /// the first enrollment. The raw audio is appended to the enrollment
     /// so a future model re-embeds all of it.
     static func add(_ print: Voiceprint, audio: [Float]) throws {
+        // The user's print is always the built-in model's (the mic gate runs
+        // on it): a reading embedded by People's model would be compared
+        // across models, or saved as a print `load()` refuses.
+        guard print.model == Voiceprint.currentModel else { throw OtherModel() }
         // A print that exists but cannot be read is never replaced from
         // here: its enrollment audio is what a future model re-embeds.
         if isUnreadable { throw UnreadablePrint() }

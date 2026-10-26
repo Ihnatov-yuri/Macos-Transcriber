@@ -868,6 +868,12 @@ func main() async -> Int32 {
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
     case "gentest":
         return await cmdGenTest()
+    case "thinkab":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdThinkAB(out: args[2],
+                                titleCount: args.count > 3 ? Int(args[3]) ?? 8 : 8,
+                                peopleCount: args.count > 4 ? Int(args[4]) ?? 3 : 3,
+                                maxLines: args.count > 5 ? Int(args[5]) ?? 60 : 60)
     case "refinalize":
         guard args.count > 2 else { usage(); return 64 }
         return cmdRefinalize(path: args[2])

@@ -704,7 +704,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 let words = vocabulary
                 do {
                     let brief = try await withChunkTimeout(
-                        seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass)
+                        seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass) * GemmaLiteRTBackend.thinkingTimeoutScale
                     ) {
                         try await ens.prepareBrief(transcript: firstPass, vocabulary: words)
                     }
@@ -760,7 +760,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // keep the confidence-voted text for this chunk.
                 let ruled: String
                 do {
-                    ruled = try await withChunkTimeout(seconds: 120) {
+                    ruled = try await withChunkTimeout(seconds: 120 * GemmaLiteRTBackend.thinkingTimeoutScale) {
                         await ens.arbitrate(
                             textA: info.textA, textB: info.textB,
                             context: ctx, languages: params.languages)

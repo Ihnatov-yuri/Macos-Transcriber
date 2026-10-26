@@ -358,12 +358,18 @@ struct AddPersonSheet: View {
         phase = .learning
         Task { @MainActor in
             do {
-                let print = try await PeopleVoice.learn(reading: samples)
                 if myVoice {
+                    // Your voice is the mic gate's, always the built-in model;
+                    // `add` checks the reading is one voice.
+                    let print = try await VoiceEmbedder.shared.enroll(samples)
                     try VoiceprintStore.add(print, audio: samples)
                     failed = false
                     note = "Added \(Int(print.seconds)) s to your voice."
-                } else if let personId {
+                    phase = .idle
+                    return
+                }
+                let print = try await PeopleVoice.learn(reading: samples)
+                if let personId {
                     saved(try PeopleStore.shared.add(print, to: personId, from: nil), seconds: print.seconds)
                 } else {
                     saved(try PeopleStore.shared.remember(print, as: trimmedName), seconds: print.seconds)

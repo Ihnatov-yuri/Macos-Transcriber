@@ -186,10 +186,34 @@ enum ParakeetUKModel {
         return Manifest(revision: revision, files: files.sorted { $0.path < $1.path })
     }
 
-    /// The same anonymous request as the app's update check (no cookies,
-    /// cache, locale or build details).
+    /// Anonymous like the app's update check (UpdateChecker, which the CLI
+    /// target does not have): no cookies, cache or credentials, and fixed
+    /// headers that carry no build, CFNetwork, Darwin or locale details.
+    static let session: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.httpCookieStorage = nil
+        cfg.httpShouldSetCookies = false
+        cfg.urlCredentialStorage = nil
+        cfg.urlCache = nil
+        cfg.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        cfg.httpAdditionalHeaders = [:]
+        return URLSession(configuration: cfg)
+    }()
+
+    static func request(for url: URL, timeout: TimeInterval = 20) -> URLRequest {
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: timeout)
+        req.httpMethod = "GET"
+        req.httpShouldHandleCookies = false
+        req.setValue("Transcriberr", forHTTPHeaderField: "User-Agent")
+        req.setValue("en", forHTTPHeaderField: "Accept-Language")
+        return req
+    }
+
+    /// Automatic update checks at most this often.
+    static let checkInterval: TimeInterval = 24 * 60 * 60
+
     private static func getJSON(_ url: String) async throws -> Any {
-        let (data, response) = try await UpdateChecker.session.data(for: UpdateChecker.request(for: URL(string: url)!))
+        let (data, response) = try await session.data(for: request(for: URL(string: url)!))
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw ASRError.modelLoadFailed(reason: "Parakeet UK: Hugging Face answered HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)")
         }
@@ -232,8 +256,8 @@ enum ParakeetUKModel {
             }
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             if file.size > 50_000_000 { AppLog.info("parakeet-uk", "fetching \(file.path) (\(file.size / 1_000_000) MB)") }
-            let (temp, response) = try await UpdateChecker.session.download(
-                for: UpdateChecker.request(for: remoteURL(file, revision: m.revision), timeout: 120))
+            let (temp, response) = try await session.download(
+                for: request(for: remoteURL(file, revision: m.revision), timeout: 120))
             defer { try? fm.removeItem(at: temp) }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -339,7 +363,7 @@ enum ParakeetUKModel {
             try? await Task.sleep(for: .seconds(60))
             while !Task.isCancelled {
                 let last = UserDefaults.standard.object(forKey: lastCheckKey) as? Date ?? .distantPast
-                if await allowed(), isInstalled(), Date().timeIntervalSince(last) >= UpdateChecker.interval {
+                if await allowed(), isInstalled(), Date().timeIntervalSince(last) >= checkInterval {
                     if case .failed = await checkForUpdate() {} else {
                         UserDefaults.standard.set(Date(), forKey: lastCheckKey)
                     }

@@ -263,7 +263,7 @@ final class AppContainer: @unchecked Sendable {
         let weekAgo = Int64(Date().addingTimeInterval(-7 * 86_400).timeIntervalSince1970 * 1000)
         let pending = Set(repository.pendingTasks().map(\.recordingId))
         let missed = ((try? repository.all()) ?? []).filter {
-            $0.createdAtMillis >= weekAgo && TranscriptionJobManager.shouldAutoTitle($0.title) && !$0.segments.isEmpty
+            $0.createdAtMillis >= weekAgo && TranscriptionJobManager.isDefaultTitle($0.title) && !$0.segments.isEmpty
                 && !jobManager.isActive($0.id) && !pending.contains($0.id)
         }
         guard !missed.isEmpty else { return }

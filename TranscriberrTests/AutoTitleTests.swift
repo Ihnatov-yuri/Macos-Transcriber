@@ -43,5 +43,13 @@ final class AutoTitleDefaultTitleTests: XCTestCase {
         XCTAssertTrue(TranscriptionJobManager.shouldAutoTitle("Recording 2026-10-26 12:24"))
         XCTAssertFalse(TranscriptionJobManager.shouldAutoTitle("Node Migration And Bot Updates: follow-up"))
         XCTAssertFalse(TranscriptionJobManager.shouldAutoTitle("Call with Kees"))
+        // The launch catch-up renames only the app's own default names: a
+        // generated or typed plain title is never touched again.
+        XCTAssertTrue(TranscriptionJobManager.isDefaultTitle("Meeting 26/10/2026, 13:08"))
+        XCTAssertTrue(TranscriptionJobManager.isDefaultTitle("Recording 2026-10-26 12:24"))
+        XCTAssertTrue(TranscriptionJobManager.isDefaultTitle("Recording_1792141249733"))
+        XCTAssertFalse(TranscriptionJobManager.isDefaultTitle("Node Migration And Bot Updates"))
+        XCTAssertFalse(TranscriptionJobManager.isDefaultTitle("Meeting Kickoff And Alignment Discussion"))
+        XCTAssertFalse(TranscriptionJobManager.isDefaultTitle("Recordings of the team"))
     }
 }

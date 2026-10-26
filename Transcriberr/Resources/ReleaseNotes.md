@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.0.1
+- Naming missed recordings at launch now only touches recordings that still have the name Transcriberr gave them ("Meeting" or "Recording" and a date). In 5.0.0 it also renamed last week's recordings that already had a name, and would have done so at every launch.
+
 ## 5.0.0
 - People has its own place in the sidebar. Each saved person gets a page with every recording they speak in, how long they talked, and the last thing they said there. Click a recording to open it at their first line.
 - Each page shows how sure Transcriberr is of finding that person, as a percentage and Learning, Good or Strong. It explains why: how much of their speech was learned and from how many recordings, how alike the samples are, how close they sound to anyone else saved (you included), and how clearly they matched lately.

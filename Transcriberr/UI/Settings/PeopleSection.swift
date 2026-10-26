@@ -471,7 +471,7 @@ struct AddPersonSheet: View {
                     return
                 }
                 let person = try PeopleStore.shared.remember(print, as: trimmedName, from: id,
-                                                              speakers: speakerKey.map { Person.Sample.speakers([$0]) })
+                                                              speakers: Person.Sample.speakers([key]))
                 try container.repository.setSpeakerName(person.name, for: key, in: rec)
                 try? TranscriptExporter.export(recording: rec)
                 saved(person, seconds: print.seconds)

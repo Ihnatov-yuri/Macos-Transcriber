@@ -27,6 +27,13 @@ xcodegen generate
 # command-line builds and scripts use, and the DerivedData folder Xcode itself
 # builds from on ⌘R. Patching only the first left ⌘R failing on
 # "Multiple commands produce .../include/module.modulemap".
+# LiteRT-LM keeps its prebuilt Android/iOS/Linux libraries in Git LFS, and
+# one of them (linux_x86_64/libGemmaModelConstraintProvider.so) is gone from
+# GitHub's LFS store: the resolve's `git lfs pull` failed and a clean checkout
+# could not build at all. None of those files is used; the Mac binary comes
+# from the release zip in its Package.swift. So no LFS download, for these
+# resolves only (the user's git config is left alone).
+export GIT_LFS_SKIP_SMUDGE=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=lfs.fetchexclude GIT_CONFIG_VALUE_0='*'
 xcodebuild -resolvePackageDependencies -scheme Transcriberr -derivedDataPath .build/xcode >/dev/null
 scripts/patch-artifacts.sh .build/xcode/SourcePackages
 xcodebuild -resolvePackageDependencies -scheme Transcriberr >/dev/null

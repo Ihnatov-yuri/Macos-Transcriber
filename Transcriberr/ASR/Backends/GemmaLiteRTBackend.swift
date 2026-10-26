@@ -82,7 +82,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         // constraint ("Model requires one of [cpu]").
         var failures: [String] = []
         var built: (engine: Engine, gpu: Bool)?
-        for gpu in [true, false] {
+        for gpu in Self.forceCPU ? [false] : [true, false] {
             do {
                 let e = try await makeEngine(file: file, gpu: gpu)
                 // Outside this do/catch so a stale build does not fall
@@ -112,16 +112,33 @@ actor GemmaLiteRTBackend: ASRBackend {
         throw ASRError.modelLoadFailed(reason: "LiteRT engine init failed — \(failures.joined(separator: "; "))")
     }
 
+    /// Token window of the GPU engine. 32K, not the Android default of
+    /// 8192: whole-transcript presets (CLEAN of a 40-min recording ≈ 10k
+    /// tokens in + 8k out) must fit INPUT + OUTPUT in this window — at 8192
+    /// the input alone overflowed it and CLEAN truncated at ~9%.
+    static let gpuWindow = 32768
+    /// Token window of the CPU engine. The CPU executor sizes its buffers by
+    /// the window up front: at 32K it reached a 25 GB footprint four seconds
+    /// after loading and passed 100 GB in a person brief, at 16K 22.5 GB at
+    /// load (measured 26 Oct, M3 Pro; the old app peaked at 110 GB the same
+    /// way). At 8K the same brief finished at a steady 9 GB. A request that does not fit is not
+    /// sent to the CPU at all.
+    static let cpuWindow = 8192
+    /// Prompt plus answer of one audio chunk: ≤ 28 s of audio and a short
+    /// instruction, well inside the CPU window.
+    static let chunkTokens = 2048
+
+    /// Conservative token count for a prompt: a UTF-8 byte per 3 is about
+    /// one token per 3 Latin letters and per 1.5 Cyrillic ones, both more
+    /// than Gemma's tokenizer uses.
+    nonisolated static func estimatedTokens(_ text: String) -> Int { text.utf8.count / 3 + 1 }
+
     private func makeEngine(file: URL, gpu: Bool) async throws -> Engine {
         let config = try EngineConfig(
             modelPath: file.path,
             backend: gpu ? .gpu : .cpu(),
             audioBackend: .cpu(),
-            // 32K, not the Android default of 8192: whole-transcript
-            // presets (CLEAN of a 40-min recording ≈ 10k tokens in +
-            // 8k out) must fit INPUT + OUTPUT in this window — at 8192
-            // the input alone overflowed it and CLEAN truncated at ~9%.
-            maxNumTokens: 32768,
+            maxNumTokens: Self.maxNumTokensOverride ?? (gpu ? Self.gpuWindow : Self.cpuWindow),
             cacheDir: NSTemporaryDirectory()
         )
         let e = Engine(engineConfig: config)
@@ -152,9 +169,20 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// `error`; rethrows `error` when that failure is not the engine's
     /// (cancellation, a timeout) or there is no GPU to fall back from.
     /// `inference` is the caller's `beginInference()` id.
-    private func retryOnCPU<T>(after error: Error, inference: Int, _ body: (Engine) async throws -> T) async throws -> T {
+    /// `needTokens` is the request's prompt plus its answer budget.
+    private func retryOnCPU<T>(after error: Error, inference: Int, needTokens: Int,
+                               _ body: (Engine) async throws -> T) async throws -> T {
         guard engineOnGPU, error is LiteRTLMError, let file = modelFile else { throw error }
         try Task.checkCancellation()
+        guard needTokens <= Self.cpuWindow else {
+            // Too long for the CPU window: fail this call instead. The broken
+            // GPU engine goes, so the next call gets a fresh GPU try.
+            AppLog.warn("litert", "GPU call failed (\(error.localizedDescription)) — ~\(needTokens) tokens is too long for the CPU engine; not retried")
+            engine = nil
+            isReady = false
+            BackendFactory.returnFreedMemorySoon()
+            throw error
+        }
         // A GPU call that wedge recovery already gave up on (lock reset, gate
         // evicted) and that came back with an error late: another call may
         // hold the engine now, and a CPU run would sit next to it.
@@ -190,10 +218,15 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// On CPU after a GPU failure and the quiet spell is over: build a GPU
     /// engine again. Called holding the engine lock, so no call is running
     /// on the CPU engine it replaces.
-    private func retryGPUIfDue() async {
-        guard !engineOnGPU, let failed = gpuFailedAt,
-              Date().timeIntervalSince(failed) >= Self.gpuRetryInterval,
-              let file = modelFile else { return }
+    /// `needTokens` past the CPU window retries the GPU now: the CPU engine
+    /// cannot take that request.
+    private func retryGPUIfDue(needTokens: Int = 0) async {
+        let tooLong = needTokens > Self.cpuWindow
+        guard !engineOnGPU, let file = modelFile else { return }
+        if !tooLong {
+            guard let failed = gpuFailedAt,
+                  Date().timeIntervalSince(failed) >= Self.gpuRetryInterval else { return }
+        }
         gpuFailedAt = nil
         AppLog.info("litert", "trying the GPU again")
         engine = nil
@@ -405,7 +438,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         do {
             reply = try await attempt(engine)
         } catch {
-            reply = try await retryOnCPU(after: error, inference: inference) { try await attempt($0) }
+            reply = try await retryOnCPU(after: error, inference: inference, needTokens: Self.chunkTokens) { try await attempt($0) }
         }
         let raw = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         var cleaned = Self.trimRepetitionTail(Self.stripPreamble(raw))
@@ -494,7 +527,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         // The caller may have given up (timeout) while this call queued:
         // don't spend a generation nobody will read.
         try Task.checkCancellation()
-        await retryGPUIfDue()
+        let need = Self.estimatedTokens(systemInstruction) + Self.estimatedTokens(userMessage) + maxTokens
+        await retryGPUIfDue(needTokens: need)
         // Read AFTER the wait: a wedge recovery swaps the engine while we
         // queue, and the one bound before the wait is the wedged one.
         guard isReady, let engine else {
@@ -524,7 +558,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         do {
             out = try await attempt(engine)
         } catch {
-            return try await retryOnCPU(after: error, inference: inference) { try await attempt($0) }
+            return try await retryOnCPU(after: error, inference: inference, needTokens: need) { try await attempt($0) }
         }
         if out.isEmpty {
             // Defense in depth: a fresh conversation on a now-exclusive
@@ -535,6 +569,13 @@ actor GemmaLiteRTBackend: ASRBackend {
         }
         return out
     }
+
+    /// Experiment switches (CLI only, the app never sets them):
+    /// TRANSCRIBERR_LITERT_CPU=1 builds the CPU engine straight away,
+    /// TRANSCRIBERR_LITERT_MAXTOKENS=<n> sets the engine's token window.
+    nonisolated static let forceCPU = ProcessInfo.processInfo.environment["TRANSCRIBERR_LITERT_CPU"] == "1"
+    nonisolated static let maxNumTokensOverride: Int? =
+        ProcessInfo.processInfo.environment["TRANSCRIBERR_LITERT_MAXTOKENS"].flatMap(Int.init)
 
     nonisolated static let thinkingBudget: Int? =
         ProcessInfo.processInfo.environment["TRANSCRIBERR_GEMMA_THINKING"].flatMap(Int.init)

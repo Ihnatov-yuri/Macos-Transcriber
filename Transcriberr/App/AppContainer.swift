@@ -359,6 +359,16 @@ final class AppContainer: @unchecked Sendable {
     }
 
     func requestDeleteRecording() {
+        // ⌘⌫ is a menu key equivalent, so it reaches the menu before the
+        // focused text field: typing in search, a title or a note and
+        // pressing ⌘⌫ asked to delete the recording instead of deleting to
+        // the start of the line. Typed while text has focus, the keystroke
+        // goes back to the text; the menu item clicked still deletes.
+        if NSApp.currentEvent?.type == .keyDown,
+           NSApp.keyWindow?.firstResponder is NSText {
+            NSApp.sendAction(#selector(NSResponder.deleteToBeginningOfLine(_:)), to: nil, from: nil)
+            return
+        }
         deleteRecordingRequested &+= 1
     }
 

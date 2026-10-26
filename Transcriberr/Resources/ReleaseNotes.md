@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.0.5
+- When the GPU is busy and the text engine moves to the CPU, it now uses about 9 GB instead of growing past 100 GB, which could make the whole Mac swap. A request too long for the CPU engine fails with a message and is tried on the GPU again next time.
+- ⌘⌫ in a text field deletes to the start of the line again. Choosing Delete Recording… from the menu still deletes the selected recording.
+
 ## 5.0.4
 - Switching the voice model back after a stopped rebuild no longer leaves people with an empty voice. They are rebuilt from their recordings.
 - Your own voice only learns from readings made with the built-in voice model, and the High accuracy model works through one batch at a time.

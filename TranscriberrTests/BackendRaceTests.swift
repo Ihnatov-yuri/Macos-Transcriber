@@ -62,3 +62,19 @@ final class LiteRTIdleReleaseTests: XCTestCase {
         XCTAssertFalse(factory.backend(for: .gemmaLiteRT) as AnyObject === first, "released once the queue is idle")
     }
 }
+
+/// The CPU engine's window is small (its buffers scale with it): the token
+/// estimate that decides what may run there must never undercount.
+final class LiteRTWindowTests: XCTestCase {
+    func testEstimateOvercountsLatinAndCyrillic() {
+        let english = String(repeating: "the meeting went well ", count: 100)   // ~500 tokens
+        let ukrainian = String(repeating: "зустріч пройшла добре ", count: 100)   // ~600 tokens
+        XCTAssertGreaterThanOrEqual(GemmaLiteRTBackend.estimatedTokens(english), english.count / 4)
+        XCTAssertGreaterThanOrEqual(GemmaLiteRTBackend.estimatedTokens(ukrainian), ukrainian.count / 2)
+    }
+
+    func testAudioChunkFitsTheCPUWindow() {
+        XCTAssertLessThan(GemmaLiteRTBackend.chunkTokens, GemmaLiteRTBackend.cpuWindow)
+        XCTAssertLessThan(GemmaLiteRTBackend.cpuWindow, GemmaLiteRTBackend.gpuWindow)
+    }
+}

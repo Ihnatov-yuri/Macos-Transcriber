@@ -98,11 +98,7 @@ struct DetailView: View {
         }
         .task(id: recording.id) {
             focus = focusName
-            // Recordings named before 5.0 may still show one person as two
-            // speakers of the same name.
-            if (try? container.repository.foldSameNamedSpeakers(in: recording)) ?? 0 > 0 {
-                try? TranscriptExporter.export(recording: recording)
-            }
+            foldSpeakersIfIdle()
             // Another recording's Find people must not report here.
             findingPeople = false
             peopleNote = nil
@@ -114,6 +110,22 @@ struct DetailView: View {
                 showTimestamps = container.uiPrefs.showTimestamps
                 transcriptStyle = container.uiPrefs.transcriptStyle
             }
+        }
+        // Skipped above while a run was queued or running: done once it ends
+        // (finished, failed or cancelled), the page still open.
+        .onChange(of: container.jobManager.isActive(recording.id)) { _, active in
+            if !active { foldSpeakersIfIdle() }
+        }
+    }
+
+    /// Recordings named before 5.0 may still show one person as two
+    /// speakers of the same name. Not while a run for this recording is
+    /// queued or running: its speakers are a draft the run replaces.
+    private func foldSpeakersIfIdle() {
+        guard !recording.isDeleted, recording.modelContext != nil,
+              !container.jobManager.isActive(recording.id) else { return }
+        if (try? container.repository.foldSameNamedSpeakers(in: recording)) ?? 0 > 0 {
+            try? TranscriptExporter.export(recording: recording)
         }
     }
 

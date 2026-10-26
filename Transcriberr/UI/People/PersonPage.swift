@@ -35,6 +35,21 @@ struct PersonPage: View {
     @State private var forgetting: Person.Sample?
     @State private var pageError: String?
     @State private var showDetail = false
+    /// The person the page last loaded, so only a reload is debounced.
+    @State private var loadedFor: UUID?
+
+    /// What `reload` depends on: the name its segments are fetched by, the
+    /// candidates it lists, and the changes that rename lines in recordings.
+    private struct ReloadKey: Equatable {
+        let id: UUID
+        let name: String
+        let matches: [Person.Hearing]?
+        let candidates: [Person.Hearing]?
+        let learnedFrom: [UUID]?
+        init(_ p: Person) {
+            id = p.id; name = p.name; matches = p.matches; candidates = p.candidates; learnedFrom = p.learnedFrom
+        }
+    }
 
     private var busy: String? { training.busy[person.id] }
     private var confidence: VoiceConfidence { PeopleConfidence.assess(person, others: others, unmatched: ["you"]) }
@@ -74,8 +89,19 @@ struct PersonPage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        // Any change to the person (a match logged, an answer, a rename).
-        .task(id: person) { reload() }
+        // A change that can move what `reload` reads: a rename, a match
+        // logged (it named a speaker), an answer, a recording learned from.
+        // Not the voice itself, which a Voice model switch rewrites person
+        // by person. Debounced after the first load, so a running Find
+        // people (one save per recording) reloads once it pauses.
+        .task(id: ReloadKey(person)) {
+            if loadedFor == person.id {
+                try? await Task.sleep(for: .milliseconds(400))
+                if Task.isCancelled { return }
+            }
+            loadedFor = person.id
+            reload()
+        }
         .onChange(of: runner.revision) { reloadBrief() }
         .sheet(isPresented: $recordingReading) {
             AddPersonSheet(initialName: person.name, personId: person.id) { recordingReading = false }

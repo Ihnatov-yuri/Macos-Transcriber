@@ -176,9 +176,9 @@ final class AppContainer: @unchecked Sendable {
 
         // Wire auto-titler after construction so we can capture `self`.
         let jobs = jobManager
-        jobs.autoTitler = { [weak self] recording, segments, params in
+        jobs.autoTitler = { [weak self] recording, segments, _ in
             guard let self else { return }
-            await self.generateAutoTitle(for: recording, segments: segments, params: params)
+            await self.generateAutoTitle(for: recording, segments: segments)
         }
         // Hand the multi-gigabyte LiteRT engine back once the queue has
         // been quiet for a while — it is the only thing holding the
@@ -226,6 +226,15 @@ final class AppContainer: @unchecked Sendable {
             }
         }
 
+        // Name recordings whose run finished without a title, once the
+        // launch work has settled.
+        if !Self.isTestHost {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(45))
+                await self?.retitleMissed()
+            }
+        }
+
         // Pre-warm Parakeet (the default speech-to-text engine). First-ever
         // launch downloads ~1 GB of CoreML models from HuggingFace; after
         // that this is a fast cache load, and every Run/live session starts
@@ -245,17 +254,34 @@ final class AppContainer: @unchecked Sendable {
 
     // MARK: - Auto-title
 
+    /// Recordings of the last week that still carry a default title and have
+    /// a transcript, with no run of their own coming: the title their run
+    /// should have set when the text engine failed (on 26 Oct LiteRT's GPU
+    /// calls timed out under a training job, and the failure was silent).
     @MainActor
-    private func generateAutoTitle(
-        for recording: Recording,
-        segments: [Segment],
-        params: TranscriptionRunner.Params
-    ) async {
+    private func retitleMissed() async {
+        let weekAgo = Int64(Date().addingTimeInterval(-7 * 86_400).timeIntervalSince1970 * 1000)
+        let pending = Set(repository.pendingTasks().map(\.recordingId))
+        let missed = ((try? repository.all()) ?? []).filter {
+            $0.createdAtMillis >= weekAgo && TranscriptionJobManager.shouldAutoTitle($0.title) && !$0.segments.isEmpty
+                && !jobManager.isActive($0.id) && !pending.contains($0.id)
+        }
+        guard !missed.isEmpty else { return }
+        AppLog.info("app", "naming \(missed.count) recording(s) whose run ended without a title")
+        for recording in missed {
+            await generateAutoTitle(for: recording, segments: recording.segments)
+        }
+    }
+
+    @MainActor
+    private func generateAutoTitle(for recording: Recording, segments: [Segment]) async {
         // Spawned as its own task after the run: the recording (and its
         // segments, by cascade) can already be gone by the time this starts.
         guard !recording.isDeleted, recording.modelContext != nil else { return }
-        guard let sample = AutoTitle.sample(segments.map { (start: $0.startSeconds, text: $0.text) })
-        else { return }
+        guard let sample = AutoTitle.sample(segments.map { (start: $0.startSeconds, text: $0.text) }) else {
+            AppLog.info("app", "auto-title skipped — too little text")
+            return
+        }
         // Captured before the (possibly model-loading) await: a title the
         // user types while Gemma thinks must win over the generated one.
         let titleBefore = recording.title
@@ -287,9 +313,14 @@ final class AppContainer: @unchecked Sendable {
                 // The run's own backup fired before the title landed —
                 // refresh it so recording.json carries the real title.
                 BackupService.backupRecording(recording)
+                AppLog.info("app", "auto-title: \(trimmed)")
+            } else {
+                AppLog.warn("app", "auto-title: the text engine's answer was not a usable title")
             }
         } catch {
-            // Auto-title is best-effort; swallow.
+            // Best-effort, but never silent: a failure here once left meetings
+            // unnamed with nothing in the log.
+            AppLog.warn("app", "auto-title failed: \(error.localizedDescription)")
         }
     }
 

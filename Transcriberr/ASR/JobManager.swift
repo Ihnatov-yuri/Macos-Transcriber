@@ -84,7 +84,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
         self.repository = repository
     }
 
-    private func shouldAutoTitle(_ title: String) -> Bool {
+    nonisolated static func shouldAutoTitle(_ title: String) -> Bool {
         // Default titles: "Recording <date>" and "Meeting <date>". The
         // meeting form failed BOTH old checks — wrong prefix, and its
         // "09:19" timestamp tripped the no-colon rule of the generic clause.
@@ -607,7 +607,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         note: note
                     )
                     // Auto-title: only if the title still looks like a default.
-                    if !allSegments.isEmpty, shouldAutoTitle(recording.title) {
+                    if !allSegments.isEmpty, Self.shouldAutoTitle(recording.title) {
                         Task { @MainActor [weak self] in
                             await self?.autoTitle(recording: recording, segments: allSegments, params: params)
                         }

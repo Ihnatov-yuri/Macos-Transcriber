@@ -35,3 +35,13 @@ final class AutoTitleTests: XCTestCase {
         XCTAssertNil(AutoTitle.clean(String(repeating: "Word ", count: 30)))
     }
 }
+
+final class AutoTitleDefaultTitleTests: XCTestCase {
+    /// The launch catch-up and the end-of-run hook name the same titles.
+    func testDefaultTitlesAreRenamedOthersKept() {
+        XCTAssertTrue(TranscriptionJobManager.shouldAutoTitle("Meeting 26/10/2026, 13:08"))
+        XCTAssertTrue(TranscriptionJobManager.shouldAutoTitle("Recording 2026-10-26 12:24"))
+        XCTAssertFalse(TranscriptionJobManager.shouldAutoTitle("Node Migration And Bot Updates: follow-up"))
+        XCTAssertFalse(TranscriptionJobManager.shouldAutoTitle("Call with Kees"))
+    }
+}

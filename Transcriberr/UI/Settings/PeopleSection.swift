@@ -200,13 +200,16 @@ struct AddPersonSheet: View {
     /// Their meetings first: most people are already in the user's
     /// recordings, and a reading needs them at this Mac.
     enum Source: String, CaseIterable { case recording = "From their recordings", reading = "Record a reading" }
-    enum Phase: Equatable { case idle, recording, learning }
+    enum Phase: Equatable { case idle, starting, recording, learning }
 
     @State private var name = ""
     @State private var source: Source = .recording
     @State private var phase: Phase = .idle
     @State private var capture: UtteranceCapture?
     @State private var ticker: Task<Void, Never>?
+    /// Set when the sheet closes or Cancel is pressed while the mic is
+    /// still starting: the start then stops it instead of recording.
+    @State private var abandoned = false
     @State private var recordingId: UUID?
     @State private var speakerKey: String?
     @State private var note: String?
@@ -275,7 +278,10 @@ struct AddPersonSheet: View {
             if name.isEmpty { name = initialName }
             withSpeakers = Array(recordings.lazy.filter { $0.segments.contains { $0.speaker != nil } }.prefix(60))
         }
-        .onDisappear { if phase == .recording { _ = capture?.stop(); ticker?.cancel() } }
+        .onDisappear {
+            abandoned = true
+            if phase == .recording { _ = capture?.stop(); ticker?.cancel() }
+        }
         // Settled a moment after typing, then searched across the library.
         .task(id: trimmedName) {
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -309,6 +315,12 @@ struct AddPersonSheet: View {
                     TapButton { startReading() } label: {
                         LitButtonChrome(.primary, compact: true) { Text("Start recording") }
                     }
+                case .starting:
+                    ProgressView().controlSize(.small)
+                    Text("Starting…").font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
+                    TapButton { cancelReading() } label: {
+                        LitButtonChrome(.ghost, compact: true) { Text("Cancel") }
+                    }
                 case .recording:
                     TapButton { finishReading() } label: {
                         LitButtonChrome(.accent, compact: true) {
@@ -329,14 +341,23 @@ struct AddPersonSheet: View {
     }
 
     private func startReading() {
-        guard myVoice || personId != nil || checkName() else { return }
+        // A second click while the mic starts must not start it twice.
+        guard phase == .idle, myVoice || personId != nil || checkName() else { return }
         note = nil
+        abandoned = false
+        phase = .starting
         Task { @MainActor in
             do {
                 let c = capture ?? UtteranceCapture()
                 capture = c
                 c.voiceProcessing = false
                 try await c.start()
+                // Closed or cancelled while starting: nothing else will stop it.
+                guard !abandoned else {
+                    _ = c.stop()
+                    phase = .idle
+                    return
+                }
                 phase = .recording
                 ticker = Task { @MainActor in
                     while !Task.isCancelled, phase == .recording {
@@ -345,7 +366,7 @@ struct AddPersonSheet: View {
                     }
                 }
             } catch {
-                show(error)
+                if !abandoned { show(error) }
                 phase = .idle
             }
         }
@@ -382,6 +403,8 @@ struct AddPersonSheet: View {
     }
 
     private func cancelReading() {
+        // Still starting: the start sees this and stops the mic itself.
+        if phase == .starting { abandoned = true; return }
         ticker?.cancel()
         _ = capture?.stop()
         phase = .idle
@@ -512,7 +535,7 @@ struct AddPersonSheet: View {
     }
 
     private func close() {
-        if phase == .recording { cancelReading() }
+        if phase == .recording || phase == .starting { cancelReading() }
         onClose()
     }
 }

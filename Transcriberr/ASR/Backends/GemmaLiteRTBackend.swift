@@ -140,10 +140,21 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// Runs `body` on the CPU engine after the GPU engine failed with
     /// `error`; rethrows `error` when that failure is not the engine's
     /// (cancellation, a timeout) or there is no GPU to fall back from.
-    private func retryOnCPU<T>(after error: Error, _ body: (Engine) async throws -> T) async throws -> T {
+    /// `inference` is the caller's `beginInference()` id.
+    private func retryOnCPU<T>(after error: Error, inference: Int, _ body: (Engine) async throws -> T) async throws -> T {
         guard engineOnGPU, error is LiteRTLMError, let file = modelFile else { throw error }
         try Task.checkCancellation()
+        // A GPU call that wedge recovery already gave up on (lock reset, gate
+        // evicted) and that came back with an error late: another call may
+        // hold the engine now, and a CPU run would sit next to it.
+        guard inferenceId == inference, inferringSince != nil else { throw error }
         AppLog.warn("litert", "GPU call failed (\(error.localizedDescription)) — retrying on CPU")
+        // From here the call is timed as a CPU retry, on its own clock: the
+        // time the failed GPU attempt used is not charged to it, and the GPU
+        // wedge check no longer sees a call inside the GPU engine.
+        cpuRetry = CPURetry(inference: inference, since: Date())
+        inferringSince = nil
+        defer { if cpuRetry?.inference == inference { cpuRetry = nil } }
         // release() during the retry must stay a release: no CPU engine kept
         // and no GPU rebuild that would re-arm the gate on a dropped engine.
         let gen = buildGeneration
@@ -153,6 +164,9 @@ actor GemmaLiteRTBackend: ASRBackend {
         } else {
             cpu = try await makeEngine(file: file, gpu: false)
             guard buildGeneration == gen else { throw error }
+            // Declared wedged while the engine was built: the lock and the
+            // gate went to the next caller.
+            guard let retry = cpuRetry, retry.inference == inference, !retry.recovering else { throw error }
             cpuEngine = cpu
             AppLog.info("litert", "CPU fallback engine ready")
         }
@@ -164,14 +178,20 @@ actor GemmaLiteRTBackend: ASRBackend {
                 await self?.dropIdleCPUEngine()
             }
         }
+        let result: Result<T, Error>
         do {
-            let result = try await body(cpu)
-            if buildGeneration == gen { await replaceFailedGPUEngine(file) }
-            return result
+            result = .success(try await body(cpu))
         } catch {
-            if buildGeneration == gen { await replaceFailedGPUEngine(file) }
-            throw error
+            result = .failure(error)
         }
+        // The native CPU call is over: end the CPU retry before the rebuild
+        // below, so a wedge check during that rebuild does not take it for a
+        // live call. A retry that wedge recovery claimed is not replaced
+        // here: that recovery rebuilds the GPU engine itself.
+        let ours = cpuRetry.map { $0.inference == inference && !$0.recovering } ?? false
+        if cpuRetry?.inference == inference { cpuRetry = nil }
+        if ours, buildGeneration == gen { await replaceFailedGPUEngine(file) }
+        return try result.get()
     }
 
     /// A GPU engine that failed once stays broken: every later call fails at
@@ -201,7 +221,15 @@ actor GemmaLiteRTBackend: ASRBackend {
     /// healthy call. And the new engine is built before the lock is reset:
     /// resetting first woke the queued callers against a nil engine, and
     /// every one of them failed with "not loaded".
+    ///
+    /// A CPU fallback call in flight is judged on its own clock, never by
+    /// the GPU check: rebuilding the GPU engine and evicting the gate under
+    /// a live CPU call let the next caller run the GPU engine next to it.
     func recoverWedge(modelPath: URL?) async throws {
+        if let retry = cpuRetry {
+            try await recoverCPUWedge(retry.inference, modelPath: modelPath)
+            return
+        }
         // 120 s, not the shared 60: every caller's timeout (chunk, brief
         // section, arbitration) is 120 s and counts its queue wait, so a
         // healthy generation someone else started 60-120 s ago is not
@@ -240,8 +268,80 @@ actor GemmaLiteRTBackend: ASRBackend {
 
     static let stuckInferenceAge: TimeInterval = 120
 
-    /// When the call now inside the native engine started; nil when none
-    /// is. The engine lock admits one call at a time.
+    /// A CPU fallback call running longer than this, counted from the start
+    /// of the CPU retry, is taken for wedged. Twice the GPU age: the CPU
+    /// decodes the same prompt several times slower, and the prompts that
+    /// land here are the long ones (past ~2.5k tokens) the GPU could not
+    /// read back. It also outlasts the runner's retry of a timed-out chunk
+    /// (another 120 s), so a slow but healthy CPU call is not cut off while
+    /// the retry is queued behind it.
+    static let stuckCPUInferenceAge: TimeInterval = 240
+
+    /// The CPU fallback call now in flight (see `retryOnCPU`); nil when none.
+    private struct CPURetry {
+        /// The `beginInference()` id of the call that fell back.
+        let inference: Int
+        /// When the CPU retry started; the failed GPU attempt is not counted.
+        let since: Date
+        /// A wedge check is already set for when the budget runs out.
+        var checkScheduled = false
+        /// Wedge recovery has claimed it and is rebuilding.
+        var recovering = false
+    }
+    private var cpuRetry: CPURetry?
+
+    /// Wedge recovery for a CPU fallback call. Under its budget the call is
+    /// left alone: no GPU rebuild, no lock reset, no gate eviction. A check
+    /// is set for when the budget runs out instead, because the caller that
+    /// timed out may not ask again (a brief or a person read gives up after
+    /// one recovery). Past the budget the CPU engine is dropped and the
+    /// call is recovered the way a wedged GPU call is.
+    private func recoverCPUWedge(_ inference: Int, modelPath: URL?) async throws {
+        // A concurrent recovery that already claimed it does the rest.
+        guard let retry = cpuRetry, retry.inference == inference, !retry.recovering else { return }
+        let age = Date().timeIntervalSince(retry.since)
+        guard age >= Self.stuckCPUInferenceAge else {
+            if !retry.checkScheduled {
+                cpuRetry?.checkScheduled = true
+                let wait = Self.stuckCPUInferenceAge - age + 1
+                AppLog.info("litert", "wedge check: CPU fallback call running \(Int(age))s — not stuck yet, checking again in \(Int(wait))s")
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(wait))
+                    try? await self?.recoverCPUWedge(inference, modelPath: modelPath)
+                }
+            }
+            return
+        }
+        AppLog.warn("litert", "wedge recovery: CPU fallback call stuck \(Int(age))s — dropping the CPU engine, rebuilding in place")
+        cpuRetry?.recovering = true
+        // As release() does: the hung call keeps its own reference; nothing
+        // new runs on this engine.
+        cpuEngine = nil
+        // The GPU engine failed before the fallback and stays broken; the
+        // replacement retryOnCPU would have built never came.
+        let lock = lockGeneration
+        do {
+            try await rebuild(modelPath: modelPath)
+        } catch {
+            // The CPU call finished meanwhile (its caller handed the lock on
+            // normally) or a release() reset the lock: nothing to evict.
+            guard cpuRetry?.inference == inference, lockGeneration == lock else { throw error }
+            cpuRetry = nil
+            engine = nil
+            isReady = false
+            resetEngineLock()
+            await InferenceGate.shared.evictExclusive()
+            throw error
+        }
+        guard cpuRetry?.inference == inference, lockGeneration == lock else { return }
+        cpuRetry = nil
+        resetEngineLock()
+        await InferenceGate.shared.evictExclusive()
+    }
+
+    /// When the call now inside the native GPU engine started; nil when
+    /// none is (a call that fell back to the CPU is timed by `cpuRetry`).
+    /// The engine lock admits one call at a time.
     private var inferringSince: Date?
     private var inferenceId = 0
 
@@ -260,6 +360,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         building = nil
         engine = nil
         cpuEngine = nil
+        cpuRetry = nil
         isReady = false
         // A wedged native call may hold the engine lock forever — the whole
         // point of a rebuild is to move past it. Unblock the queue.
@@ -348,7 +449,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         do {
             reply = try await attempt(engine)
         } catch {
-            reply = try await retryOnCPU(after: error) { try await attempt($0) }
+            reply = try await retryOnCPU(after: error, inference: inference) { try await attempt($0) }
         }
         let raw = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         var cleaned = Self.trimRepetitionTail(Self.stripPreamble(raw))
@@ -465,7 +566,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         do {
             out = try await attempt(engine)
         } catch {
-            return try await retryOnCPU(after: error) { try await attempt($0) }
+            return try await retryOnCPU(after: error, inference: inference) { try await attempt($0) }
         }
         if out.isEmpty {
             // Defense in depth: a fresh conversation on a now-exclusive

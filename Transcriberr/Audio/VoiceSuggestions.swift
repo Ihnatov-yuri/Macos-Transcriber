@@ -46,6 +46,12 @@ struct UnknownVoiceStore {
     private func save(_ f: File) throws {
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Out of Time Machine like the saved voices: this runs with no one
+        // saved yet, when nothing else has marked the folder.
+        var excluded = dir
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? excluded.setResourceValues(values)
         try JSONEncoder().encode(f).write(to: url, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }

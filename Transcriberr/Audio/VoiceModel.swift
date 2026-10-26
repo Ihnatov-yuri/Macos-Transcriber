@@ -177,6 +177,20 @@ actor SimAMEmbedder {
     static let frames = 298
 
     private var model: MLModel?
+    /// One caller at a time, as in VoiceEmbedder: `embed` suspends while
+    /// the batch runs, and a second caller would drive the same model
+    /// from a second thread (the inference gate's hold is shared).
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquire() async {
+        guard busy else { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
 
     private func loaded() throws -> MLModel {
         if let model { return model }
@@ -205,6 +219,9 @@ actor SimAMEmbedder {
 
     func embed(_ clips: [ArraySlice<Float>]) async throws -> [[Float]] {
         guard !clips.isEmpty else { return [] }
+        await acquire()
+        defer { release() }
+        try Task.checkCancellation()
         let model = try loaded()
         // A shared hold like any engine's: LiteRT must never run beside it.
         let gate = try await InferenceGate.shared.acquire(owner: "voice")

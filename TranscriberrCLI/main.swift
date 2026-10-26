@@ -54,6 +54,9 @@ func usage() {
       transcriberrcli voice enroll|score|show
                                             voice print: enroll from audio (or a meeting's mic via
                                             --me), score a meeting's tracks against it
+      transcriberrcli uk-model [status|update]
+                                            Parakeet UK: installed release vs Hugging Face; update
+                                            fetches the newest and switches to it
       transcriberrcli help                 this message
 
     Each command exits 0 on success, non-zero on failure.
@@ -989,6 +992,8 @@ func main() async -> Int32 {
         return await cmdVoice(Array(args.dropFirst(2)))
     case "whisperloop":
         return await cmdWhisperLoop(Array(args.dropFirst(2)))
+    case "uk-model":
+        return await cmdUKModel(args.count > 2 ? args[2] : "status")
     case "help", "-h", "--help":
         usage()
         return 0
@@ -996,6 +1001,31 @@ func main() async -> Int32 {
         usage()
         return 64
     }
+}
+
+/// Parakeet UK release on this Mac and on Hugging Face. `update` fetches a
+/// newer release and switches to it at once (no engine runs in this process).
+func cmdUKModel(_ sub: String) async -> Int32 {
+    let installed = ParakeetUKModel.manifest(at: ParakeetUKModel.modelDirectory)
+    print("installed: \(ParakeetUKModel.isInstalled() ? ParakeetUKModel.versionName() : "none")"
+          + " @ \(installed.map { String($0.revision.prefix(8)) } ?? "no manifest (4.7.0 install)")")
+    if let pending = ParakeetUKModel.manifest(at: ParakeetUKModel.pendingDirectory) {
+        print("waiting for the next launch: \(ParakeetUKModel.versionName(at: ParakeetUKModel.pendingDirectory)) @ \(pending.revision.prefix(8))")
+    }
+    do {
+        let latest = try await ParakeetUKModel.fetchLatest()
+        print("on Hugging Face: \(latest.revision.prefix(8)), \(latest.files.count) files, \(latest.totalBytes / 1_000_000) MB")
+    } catch {
+        print("Hugging Face: \(error.localizedDescription)"); return 1
+    }
+    guard sub == "update" else { return 0 }
+    let result = await ParakeetUKModel.checkForUpdate()
+    print("update check: \(result)")
+    ParakeetUKModel.applyPendingUpdate()
+    let now = ParakeetUKModel.manifest(at: ParakeetUKModel.modelDirectory)
+    print("now: \(ParakeetUKModel.versionName()) @ \(now.map { String($0.revision.prefix(8)) } ?? "no manifest")")
+    if case .failed = result { return 1 }
+    return 0
 }
 
 let exitCode = await main()

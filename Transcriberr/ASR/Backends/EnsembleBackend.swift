@@ -21,7 +21,7 @@ actor EnsembleBackend: ASRBackend {
     private unowned let factory: BackendFactory
 
     private var kindA: BackendFactory.Kind = .parakeet
-    private var kindB: BackendFactory.Kind = .parakeetV2
+    private var kindB: BackendFactory.Kind = EnsembleBackend.defaultEngineB
     private var engineA: ASRBackend?
     private var engineB: ASRBackend?
     private var arbiter: ASRBackend?     // Gemma 4, text mode
@@ -80,6 +80,13 @@ actor EnsembleBackend: ASRBackend {
         return substitute == .whisper ? (.whisper, other) : (other, substitute)
     }
 
+    /// Super's pair when the user has not picked one: Whisper and Parakeet UK,
+    /// two engines that make different mistakes, both strong in Ukrainian and
+    /// English. Parakeet v2 (English-only) is no longer a default, so a new
+    /// Mac never downloads it unless someone picks it.
+    static let defaultEngineA: BackendFactory.Kind = .whisper
+    static let defaultEngineB: BackendFactory.Kind = .parakeetUK
+
     static func storedKind(_ key: String, fallback: BackendFactory.Kind) -> BackendFactory.Kind {
         guard let raw = UserDefaults.standard.string(forKey: key),
               let kind = BackendFactory.Kind(rawValue: raw)
@@ -93,8 +100,8 @@ actor EnsembleBackend: ASRBackend {
     /// and for Gemma if it's picked as a sub-engine.
     func load(modelPath: URL?) async throws {
         let (a, b) = Self.resolvePair(
-            Self.storedKind("ensemble.engineA", fallback: .parakeet),
-            Self.storedKind("ensemble.engineB", fallback: .parakeetV2),
+            Self.storedKind("ensemble.engineA", fallback: Self.defaultEngineA),
+            Self.storedKind("ensemble.engineB", fallback: Self.defaultEngineB),
             languages: runLanguages)
         guard a != b else {
             throw ASRError.backendUnavailable(reason: "Super merge needs two different engines.")

@@ -96,6 +96,32 @@ final class PersonBriefTests: XCTestCase {
         } catch is Boom {}
     }
 
+    func testLanguageIsNamedFromTheirWordsAndNeverRussian() {
+        let uk = PersonBriefBuilder.transcript([
+            .init(start: 64, speaker: "Iryna", text: "Що з цього сьогодні для тебе найважливіше, з чого почати?"),
+            .init(start: 3725, speaker: "Iryna", text: "Як тобі відгукується почати з глобального чи з точкового підходу до вибору сфери?"),
+        ], name: "Iryna")
+        XCTAssertEqual(PersonBriefBuilder.language(of: uk), "Ukrainian")
+        let en = PersonBriefBuilder.transcript(lines, name: "Kate") + "\n[00:50] Kate: I will send the updated pricing deck to the whole team before the review."
+        XCTAssertEqual(PersonBriefBuilder.language(of: en), "English")
+        XCTAssertNil(PersonBriefBuilder.language(of: "[00:01] Kate: Ok."))
+    }
+
+    func testBuildNamesTheLanguageInEverySection() async throws {
+        let uk = PersonBriefBuilder.transcript([
+            .init(start: 64, speaker: "Iryna", text: "Що з цього сьогодні для тебе найважливіше, з чого почати?"),
+            .init(start: 90, speaker: "Iryna", text: "Я надішлю тобі підсумок нашої розмови сьогодні ввечері."),
+        ], name: "Iryna")
+        var systems: [String] = []
+        _ = try await PersonBriefBuilder.build(transcript: uk, name: "Iryna", lineStarts: [64, 90]) { system, _, _ in
+            systems.append(system)
+            return "GIST: Підсумок."
+        }
+        XCTAssertFalse(systems.isEmpty)
+        XCTAssertTrue(systems.allSatisfy { $0.contains("Write in Ukrainian, the language of the transcript") })
+        XCTAssertTrue(PersonBriefBuilder.systemPrompt(name: "Kate").contains("Write in the language of the transcript."))
+    }
+
     func testCacheKeyChangesWithInputAndName() {
         let k = PersonBriefBuilder.key(transcript: "a", name: "Kate")
         XCTAssertEqual(k, PersonBriefBuilder.key(transcript: "a", name: "Kate"))

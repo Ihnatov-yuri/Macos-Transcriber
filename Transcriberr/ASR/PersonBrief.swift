@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import NaturalLanguage
 
 /// What one person said that matters later: what they committed to, the
 /// questions they raised that stayed open, and the last thing they said on
@@ -26,7 +27,7 @@ struct PersonBrief: Codable, Equatable, Sendable {
 
 enum PersonBriefBuilder {
     /// Bumped when the prompt changes, so cached reads are redone.
-    static let promptVersion = 5
+    static let promptVersion = 6
     /// Meetings read per brief: everything in the last `recentDays`, and
     /// always the newest one, newest first up to `maxMeetings`. Older ones
     /// say little about what is open now, and each costs a read on a local
@@ -42,8 +43,13 @@ enum PersonBriefBuilder {
         var text: String
     }
 
-    static func systemPrompt(name: String) -> String {
-        """
+    /// "Write in the language of the transcript" alone did not hold: a
+    /// Ukrainian meeting came back entirely in English, the language of the
+    /// prompt. The rule names the language when the text makes it clear.
+    static func systemPrompt(name: String, language: String? = nil) -> String {
+        let languageRule = language.map { "Write in \($0), the language of the transcript, even though these instructions are in English." }
+            ?? "Write in the language of the transcript."
+        return """
         You read part of a meeting transcript. Each line is "[time] Speaker: words". Report only what \(name) said. Answer in EXACTLY this format, one item per line, nothing else:
         GIST: <one or two plain sentences: what \(name) mainly said, reported, proposed or asked for in this part>
         COMMIT: [time] <a task \(name) took on, written as a short to-do, with for whom and by when if stated>
@@ -55,7 +61,7 @@ enum PersonBriefBuilder {
         - Rewrite speech as clean written sentences: no fillers, false starts or quotes.
         - A COMMIT is something \(name) will do. Waiting for others, hopes and wishes are not.
         - Leave out greetings, small talk, jokes and banter.
-        - Write in the language of the transcript.
+        - \(languageRule)
         - Exactly 1 GIST line, first. At most 5 COMMIT, 5 QUESTION and 6 TOPIC lines. Leave out any kind there is nothing of. Never invent.
         """
     }
@@ -103,10 +109,13 @@ enum PersonBriefBuilder {
         var merged = PersonBrief()
         var lastError: Error?
         let parts = MeetingBriefBuilder.sections(transcript)
+        // One language for the whole meeting: sections of a mixed meeting
+        // would otherwise each answer in their own.
+        let system = systemPrompt(name: name, language: language(of: transcript))
         for (i, section) in parts.enumerated() {
             try Task.checkCancellation()
             do {
-                let raw = try await generate(systemPrompt(name: name), "TRANSCRIPT:\n" + section, maxOutputTokens)
+                let raw = try await generate(system, "TRANSCRIPT:\n" + section, maxOutputTokens)
                 merge(parse(raw, lineStarts: lineStarts, name: name), into: &merged)
             } catch is CancellationError {
                 throw CancellationError()
@@ -118,6 +127,28 @@ enum PersonBriefBuilder {
         }
         if merged.isEmpty, let lastError { throw lastError }
         return (merged, lastError == nil)
+    }
+
+    /// The transcript's main language by name, only among the app's
+    /// languages (never Russian: Ukrainian text must not be read as it), and
+    /// only when the recognizer is sure. Timestamps and speaker labels are
+    /// left out of the read.
+    static func language(of transcript: String) -> String? {
+        let words = transcript.replacingOccurrences(
+            of: #"(?m)^\[[\d:]+\] [^:\n]*: "#, with: "", options: .regularExpression)
+        guard words.count >= 40 else { return nil }
+        let names: [NLLanguage: String] = [
+            .english: "English", .ukrainian: "Ukrainian", .dutch: "Dutch", .german: "German",
+            .french: "French", .spanish: "Spanish", .italian: "Italian", .portuguese: "Portuguese",
+            .polish: "Polish", .arabic: "Arabic",
+        ]
+        let recognizer = NLLanguageRecognizer()
+        recognizer.languageConstraints = Array(names.keys)
+        recognizer.processString(words)
+        guard let lang = recognizer.dominantLanguage,
+              let confidence = recognizer.languageHypotheses(withMaximum: 1)[lang], confidence >= 0.6
+        else { return nil }
+        return names[lang]
     }
 
     /// A wall-clock bound that also gives way to cancellation: Stop on the

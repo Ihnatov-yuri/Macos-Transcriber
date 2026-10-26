@@ -265,10 +265,18 @@ final class AppContainer: @unchecked Sendable {
         let missed = ((try? repository.all()) ?? []).filter {
             $0.createdAtMillis >= weekAgo && TranscriptionJobManager.isDefaultTitle($0.title) && !$0.segments.isEmpty
                 && !jobManager.isActive($0.id) && !pending.contains($0.id)
+                && $0.folder?.isDictation != true
         }
         guard !missed.isEmpty else { return }
         AppLog.info("app", "naming \(missed.count) recording(s) whose run ended without a title")
         for recording in missed {
+            // Each title takes seconds to minutes: by the time this one's turn
+            // comes, the user may have renamed or deleted it, or re-run it
+            // (whose own run titles it). generateAutoTitle only guards the
+            // title against changes during its own await.
+            guard !recording.isDeleted, recording.modelContext != nil,
+                  TranscriptionJobManager.isDefaultTitle(recording.title),
+                  !jobManager.isActive(recording.id) else { continue }
             await generateAutoTitle(for: recording, segments: recording.segments)
         }
     }

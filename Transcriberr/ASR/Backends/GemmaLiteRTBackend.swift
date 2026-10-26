@@ -23,8 +23,14 @@ actor GemmaLiteRTBackend: ASRBackend {
     private(set) var isReady = false
 
     private var engine: Engine?
+    /// Told after every generation or chunk: BackendFactory hands the engine
+    /// back after a quiet spell, whoever used it last (a brief, the coach,
+    /// dictation polish — not only the transcription queue).
+    private let onUse: (@Sendable () -> Void)?
 
-    init() {}
+    init(onUse: (@Sendable () -> Void)? = nil) {
+        self.onUse = onUse
+    }
 
     // MARK: - Lifecycle
 
@@ -99,6 +105,8 @@ actor GemmaLiteRTBackend: ASRBackend {
             self.isReady = true
             await InferenceGate.shared.setLitertActive(true)
             AppLog.info("litert", "engine ready on \(built.gpu ? "GPU" : "CPU")")
+            // A load nobody generates on still gets handed back.
+            onUse?()
             return
         }
         throw ASRError.modelLoadFailed(reason: "LiteRT engine init failed — \(failures.joined(separator: "; "))")
@@ -127,64 +135,66 @@ actor GemmaLiteRTBackend: ASRBackend {
     // LiteRT's WebGPU read-back then times out after 20 s on any prompt past
     // ~2.5k tokens and the call comes back null ("Native sendMessage returned
     // null"), while short prompts still pass. Only such a failed call is
-    // retried on a CPU engine; the next call tries the GPU again. The CPU
-    // engine is built on first need and dropped after a quiet spell, so a
-    // second copy of the model is held only while the GPU keeps failing.
+    // retried on a CPU engine, which then BECOMES the engine: the GPU one is
+    // dropped on the spot. Rebuilding a GPU engine after every failure (the
+    // old way) loaded the model again for each brief section while the GPU
+    // stayed busy and kept a second multi-GB copy alive the whole time —
+    // eleven reloads in eighteen minutes on 26 Oct, peak footprint 110 GB.
+    // The GPU gets another try only after `gpuRetryInterval`.
 
     private var engineOnGPU = false
     private var modelFile: URL?
-    private var cpuEngine: Engine?
-    private var cpuEngineLastUse = Date.distantPast
-    static let cpuEngineIdle: TimeInterval = 300
+    /// When the GPU engine last failed; nil while the GPU is trusted.
+    private var gpuFailedAt: Date?
+    static let gpuRetryInterval: TimeInterval = 600
 
-    /// Runs `body` on the CPU engine after the GPU engine failed with
+    /// Runs `body` on a fresh CPU engine after the GPU engine failed with
     /// `error`; rethrows `error` when that failure is not the engine's
     /// (cancellation, a timeout) or there is no GPU to fall back from.
     private func retryOnCPU<T>(after error: Error, _ body: (Engine) async throws -> T) async throws -> T {
         guard engineOnGPU, error is LiteRTLMError, let file = modelFile else { throw error }
         try Task.checkCancellation()
-        AppLog.warn("litert", "GPU call failed (\(error.localizedDescription)) — retrying on CPU")
+        AppLog.warn("litert", "GPU call failed (\(error.localizedDescription)) — moving to CPU")
+        let gen = buildGeneration
+        // A GPU engine that failed once stays broken ("already has an
+        // outstanding map pending"), so it goes now. The caller's reference
+        // is the last one and drops when this call returns.
+        engine = nil
+        engineOnGPU = false
+        gpuFailedAt = Date()
+        BackendFactory.returnFreedMemorySoon()
         let cpu: Engine
-        if let cpuEngine {
-            cpu = cpuEngine
-        } else {
-            cpu = try await makeEngine(file: file, gpu: false)
-            cpuEngine = cpu
-            AppLog.info("litert", "CPU fallback engine ready")
-        }
-        cpuEngineLastUse = Date()
-        defer {
-            cpuEngineLastUse = Date()
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(Self.cpuEngineIdle))
-                await self?.dropIdleCPUEngine()
-            }
-        }
         do {
-            let result = try await body(cpu)
-            await replaceFailedGPUEngine(file)
-            return result
+            cpu = try await makeEngine(file: file, gpu: false)
         } catch {
-            await replaceFailedGPUEngine(file)
+            isReady = false
             throw error
         }
+        // Released while the CPU engine built: hand nothing back.
+        guard buildGeneration == gen else { throw error }
+        engine = cpu
+        AppLog.info("litert", "CPU engine ready — GPU retried in \(Int(Self.gpuRetryInterval / 60)) min")
+        return try await body(cpu)
     }
 
-    /// A GPU engine that failed once stays broken: every later call fails at
-    /// once ("already has an outstanding map pending"), even with the GPU
-    /// free again. A fresh one (~1 s) gives the next call a real GPU try.
-    private func replaceFailedGPUEngine(_ file: URL) async {
+    /// On CPU after a GPU failure and the quiet spell is over: build a GPU
+    /// engine again. Called holding the engine lock, so no call is running
+    /// on the CPU engine it replaces.
+    private func retryGPUIfDue() async {
+        guard !engineOnGPU, let failed = gpuFailedAt,
+              Date().timeIntervalSince(failed) >= Self.gpuRetryInterval,
+              let file = modelFile else { return }
+        gpuFailedAt = nil
+        AppLog.info("litert", "trying the GPU again")
+        engine = nil
+        BackendFactory.returnFreedMemorySoon()
         do {
             try await rebuild(modelPath: file)
         } catch {
-            AppLog.warn("litert", "could not rebuild the engine after a GPU failure: \(error.localizedDescription)")
+            // No engine at all: the next generateText loads one from scratch.
+            isReady = false
+            AppLog.warn("litert", "could not rebuild the engine for a GPU retry: \(error.localizedDescription)")
         }
-    }
-
-    private func dropIdleCPUEngine() {
-        guard cpuEngine != nil, Date().timeIntervalSince(cpuEngineLastUse) >= Self.cpuEngineIdle else { return }
-        cpuEngine = nil
-        AppLog.info("litert", "CPU fallback engine released (idle)")
     }
 
     /// Surgical wedge recovery: rebuild ONLY this engine and evict the
@@ -255,7 +265,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         buildGeneration += 1
         building = nil
         engine = nil
-        cpuEngine = nil
+        engineOnGPU = false
+        gpuFailedAt = nil
         isReady = false
         // A wedged native call may hold the engine lock forever — the whole
         // point of a rebuild is to move past it. Unblock the queue.
@@ -313,6 +324,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         let lockGen = await acquireEngine()
         defer { releaseEngine(lockGen) }
         try Task.checkCancellation()
+        await retryGPUIfDue()
         // Read AFTER the wait — see generateText.
         guard let engine else {
             throw ASRError.modelLoadFailed(reason: "LiteRT Gemma not loaded")
@@ -398,6 +410,7 @@ actor GemmaLiteRTBackend: ASRBackend {
     }
 
     private func releaseEngine(_ generation: Int) {
+        onUse?()
         guard generation == lockGeneration else { return }   // zombie holder
         if engineWaiters.isEmpty { engineBusy = false }
         else { engineWaiters.removeFirst().resume(returning: lockGeneration) }
@@ -432,6 +445,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         // The caller may have given up (timeout) while this call queued:
         // don't spend a generation nobody will read.
         try Task.checkCancellation()
+        await retryGPUIfDue()
         // Read AFTER the wait: a wedge recovery swaps the engine while we
         // queue, and the one bound before the wait is the wedged one.
         guard isReady, let engine else {

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Mirror of `asr/AsrFactory.kt`.
@@ -151,7 +152,7 @@ final class BackendFactory: @unchecked Sendable {
             return b
         case .gemmaLiteRT:
             if let b = sharedLiteRT { return b }
-            let b = GemmaLiteRTBackend()
+            let b = GemmaLiteRTBackend(onUse: { [weak self] in self?.noteLiteRTUse() })
             sharedLiteRT = b
             return b
         case .ensemble:
@@ -206,6 +207,60 @@ final class BackendFactory: @unchecked Sendable {
         return true
     }
 
+    // MARK: - Idle release
+    //
+    // The transcription queue used to be the only thing that released
+    // LiteRT. Person briefs, the speech coach, presets, dictation polish and
+    // the launch title catch-up all load it outside that queue, and the
+    // engine then stayed resident until the next transcription: 2.5 GB of
+    // GPU memory plus the CPU copy's pages, in swap for hours.
+
+    /// Quiet spell after the last generation before the engine goes.
+    static let liteRTIdleSeconds: UInt64 = 180
+    /// Set by AppContainer: false while a transcription job is queued or
+    /// running — a Super run calls Gemma minutes apart and must not reload
+    /// it between arbitrations.
+    var liteRTReleaseAllowed: (@MainActor () -> Bool)?
+    private var liteRTIdleTask: Task<Void, Never>?
+
+    /// Every generation restarts the countdown.
+    func noteLiteRTUse() {
+        cacheLock.withLock {
+            liteRTIdleTask?.cancel()
+            liteRTIdleTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: Self.liteRTIdleSeconds * 1_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                await self.releaseLiteRTIfQuiet()
+            }
+        }
+    }
+
+    /// The idle release, also run on a memory-pressure warning. A busy
+    /// engine reschedules itself: its generation ends with noteLiteRTUse.
+    func releaseLiteRTIfQuiet() async {
+        if let allowed = liteRTReleaseAllowed, await !allowed() {
+            noteLiteRTUse()
+            return
+        }
+        _ = await releaseLiteRTIfIdle()
+    }
+
+    /// Hands pages the allocator kept after a big free back to the system.
+    /// Without it the dropped engine's buffers stayed in the footprint (and
+    /// in swap) as empty malloc regions: 4.3 GB of them on 26 Oct.
+    static func returnFreedMemory() {
+        _ = malloc_zone_pressure_relief(nil, 0)
+    }
+
+    /// For an engine dropped while a caller's local still holds it: by a
+    /// second later that call has returned and the buffers are free.
+    static func returnFreedMemorySoon() {
+        Task.detached(priority: .utility) {
+            try? await Task.sleep(for: .seconds(2))
+            returnFreedMemory()
+        }
+    }
+
     func releaseLiteRT() async {
         let (ens, litert) = cacheLock.withLock {
             defer { sharedEnsemble = nil; sharedLiteRT = nil }
@@ -214,6 +269,7 @@ final class BackendFactory: @unchecked Sendable {
         guard litert != nil || ens != nil else { return }
         await ens?.release()
         await litert?.release()
+        Self.returnFreedMemory()
         AppLog.info("factory", "released LiteRT engine and lifted the inference gate")
     }
 }

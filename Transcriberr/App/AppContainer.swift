@@ -47,6 +47,8 @@ final class AppContainer: @unchecked Sendable {
     let transcriptionRunner: TranscriptionRunner
     let postProcessor: PostProcessor
     let jobManager: TranscriptionJobManager
+    /// Kept alive for the app's lifetime; see init.
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     // MARK: - Dictation
     let dictationSettings: DictationSettings
@@ -189,6 +191,16 @@ final class AppContainer: @unchecked Sendable {
         jobs.onIdle = { [weak self] in
             await self?.backendFactory.releaseLiteRTIfIdle() ?? true
         }
+        backendFactory.liteRTReleaseAllowed = { [weak jobs] in jobs?.isIdle ?? true }
+        // macOS says memory is short: the idle engine is the cheapest thing
+        // to give back. A running job or generation keeps it.
+        let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        pressure.setEventHandler { [weak self] in
+            AppLog.info("app", "memory pressure — releasing the idle LiteRT engine")
+            Task { await self?.backendFactory.releaseLiteRTIfQuiet() }
+        }
+        pressure.resume()
+        memoryPressureSource = pressure
 
         // Anonymous new-release check (see UpdateChecker). Not under the
         // unit-test host.

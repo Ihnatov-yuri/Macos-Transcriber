@@ -72,6 +72,9 @@ final class TranscriptionJobManager: @unchecked Sendable {
     /// with auto-transcribe on, that post-processing waits for THIS job to
     /// consume the source. Returns early when the job is cancelled.
     var waitForAudio: ((UUID) async -> Void)?
+    /// Nothing queued or running — BackendFactory's own LiteRT idle
+    /// release waits for this.
+    var isIdle: Bool { queue.isEmpty && currentJob == nil }
     static let idleReleaseSeconds: UInt64 = 120
     private var idleTask: Task<Void, Never>?
     /// Held while the queue has work: a Super run on a long meeting takes

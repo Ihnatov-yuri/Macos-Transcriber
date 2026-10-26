@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.0.3
+- Transcriberr gives back the memory its text engine used three minutes after the last use, whatever used it: people briefs, the speech coach, presets, titles or dictation polish. Before, it stayed loaded until the next transcription, often several gigabytes for hours.
+- When the GPU is busy and the text engine falls back to the CPU, it now stays on the CPU for ten minutes instead of reloading the model for every request. Reading a person's meetings while the GPU was taken could load it a dozen times and use tens of gigabytes.
+- Memory the engine freed is returned to macOS straight away, and the engine is released when macOS reports that memory is running low.
+
 ## 5.0.2
 - The meeting's calendar invite now helps name people. A saved person who is on the invite is recognised a little more readily than someone who is not.
 - In a call with up to three other people, when voices account for everyone but one speaker and one person on the invite, that speaker gets that person's name.

@@ -43,3 +43,22 @@ final class BackendRaceTests: XCTestCase {
         XCTAssertEqual(GoogleGeminiBackend.minimalThinkingBudget(for: "gemini-2.5-flash"), 0)
     }
 }
+
+/// LiteRT's own idle release: it waits for the transcription queue, and
+/// hands the engine back once the queue lets it.
+final class LiteRTIdleReleaseTests: XCTestCase {
+    @MainActor
+    func testIdleReleaseWaitsForTheQueue() async {
+        let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore())
+        let first = factory.backend(for: .gemmaLiteRT) as AnyObject
+        var queueBusy = true
+        factory.liteRTReleaseAllowed = { !queueBusy }
+
+        await factory.releaseLiteRTIfQuiet()
+        XCTAssertTrue(factory.backend(for: .gemmaLiteRT) as AnyObject === first, "kept while a job runs")
+
+        queueBusy = false
+        await factory.releaseLiteRTIfQuiet()
+        XCTAssertFalse(factory.backend(for: .gemmaLiteRT) as AnyObject === first, "released once the queue is idle")
+    }
+}

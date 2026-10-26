@@ -46,6 +46,9 @@ struct TranscriberrApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Recording") { container.requestNewRecording() }
                     .keyboardShortcut("n")
+                Button("Delete Recording…") { container.requestDeleteRecording() }
+                    .keyboardShortcut(.delete, modifiers: .command)
+                    .disabled(container.librarySelection == nil)
             }
             CommandMenu("Dictation") {
                 Button(container.dictation.phase == .listening ? "Stop Dictation" : "Start Dictation") {
@@ -76,6 +79,9 @@ struct TranscriberrApp: App {
         Settings {
             SettingsView()
                 .environment(container)
+                // People → Add person lists recordings with @Query: without
+                // the store here that sheet had no container to read.
+                .modelContainer(container.modelContainer)
                 .frame(minWidth: 560, minHeight: 480)
         }
     }

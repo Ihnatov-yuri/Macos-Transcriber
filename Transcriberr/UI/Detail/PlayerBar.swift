@@ -3,6 +3,7 @@ import SwiftUI
 /// Player bar: play/pause, waveform with tap-to-seek, time label.
 struct PlayerBar: View {
     let recording: Recording
+    var startAt: Double? = nil
     @Environment(AppContainer.self) private var container
 
     var body: some View {
@@ -55,7 +56,7 @@ struct PlayerBar: View {
         .padding(.vertical, 10)
         .background(AppColor.baseDeep)
         .task(id: recording.id) {
-            container.audioPlayer.load(url: URL(fileURLWithPath: recording.audioPath))
+            container.audioPlayer.load(url: URL(fileURLWithPath: recording.audioPath), startAt: startAt)
         }
         // The player is app-wide: closing or deleting the recording, or
         // leaving the Library, took this bar away while the audio kept

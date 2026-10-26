@@ -65,6 +65,17 @@ final class AppContainer: @unchecked Sendable {
     private(set) var newRecordingRequested = 0
     /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
     private(set) var dictatePaneRequested = 0
+    /// Bumped to bring People forward; `pendingPerson` is whose page to
+    /// open (nil for the overview), consumed by PeopleView like
+    /// `pendingNewRecording` above.
+    private(set) var peoplePaneRequested = 0
+    var pendingPerson: UUID?
+    /// The recording open in Library, kept here so leaving for People (a
+    /// speaker's page) and coming back reopens it.
+    var librarySelection: UUID?
+    /// Bumped by File > Delete Recording… (⌘⌫): Library asks to delete
+    /// the recording open there.
+    private(set) var deleteRecordingRequested = 0
     var pendingNewRecording = false
 
     /// The unit-test host launches this same app. It must not act like a
@@ -106,7 +117,12 @@ final class AppContainer: @unchecked Sendable {
         )
 
         // Before UIPrefs / DictationSettings read the engine choices.
-        if !Self.isTestHost { ParakeetUKModel.adoptMovedEngineChoices() }
+        if !Self.isTestHost {
+            ParakeetUKModel.adoptMovedEngineChoices()
+            // A newer Parakeet UK release downloaded last session takes over
+            // now, before any engine can open the files.
+            ParakeetUKModel.applyPendingUpdate()
+        }
         gemmaSettings = GemmaSettingsStore()
         promptStore   = PromptStore()
         presetStore   = PresetStore()
@@ -160,9 +176,9 @@ final class AppContainer: @unchecked Sendable {
 
         // Wire auto-titler after construction so we can capture `self`.
         let jobs = jobManager
-        jobs.autoTitler = { [weak self] recording, segments, params in
+        jobs.autoTitler = { [weak self] recording, segments, _ in
             guard let self else { return }
-            await self.generateAutoTitle(for: recording, segments: segments, params: params)
+            await self.generateAutoTitle(for: recording, segments: segments)
         }
         // Hand the multi-gigabyte LiteRT engine back once the queue has
         // been quiet for a while — it is the only thing holding the
@@ -179,6 +195,9 @@ final class AppContainer: @unchecked Sendable {
         if !Self.isTestHost {
             updates.start()
             ModelCatalog.excludeModelsFromBackup()
+            // Look for a newer Parakeet UK release (it takes over at the next launch).
+            let updates = self.updates
+            ParakeetUKModel.startUpdateLoop { await MainActor.run { updates.autoCheck } }
         }
 
         // Self-heal transcripts lost to interrupted runs (app updated or
@@ -207,6 +226,15 @@ final class AppContainer: @unchecked Sendable {
             }
         }
 
+        // Name recordings whose run finished without a title, once the
+        // launch work has settled.
+        if !Self.isTestHost {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(45))
+                await self?.retitleMissed()
+            }
+        }
+
         // Pre-warm Parakeet (the default speech-to-text engine). First-ever
         // launch downloads ~1 GB of CoreML models from HuggingFace; after
         // that this is a fast cache load, and every Run/live session starts
@@ -226,21 +254,34 @@ final class AppContainer: @unchecked Sendable {
 
     // MARK: - Auto-title
 
+    /// Recordings of the last week that still carry a default title and have
+    /// a transcript, with no run of their own coming: the title their run
+    /// should have set when the text engine failed (on 26 Oct LiteRT's GPU
+    /// calls timed out under a training job, and the failure was silent).
     @MainActor
-    private func generateAutoTitle(
-        for recording: Recording,
-        segments: [Segment],
-        params: TranscriptionRunner.Params
-    ) async {
+    private func retitleMissed() async {
+        let weekAgo = Int64(Date().addingTimeInterval(-7 * 86_400).timeIntervalSince1970 * 1000)
+        let pending = Set(repository.pendingTasks().map(\.recordingId))
+        let missed = ((try? repository.all()) ?? []).filter {
+            $0.createdAtMillis >= weekAgo && TranscriptionJobManager.shouldAutoTitle($0.title) && !$0.segments.isEmpty
+                && !jobManager.isActive($0.id) && !pending.contains($0.id)
+        }
+        guard !missed.isEmpty else { return }
+        AppLog.info("app", "naming \(missed.count) recording(s) whose run ended without a title")
+        for recording in missed {
+            await generateAutoTitle(for: recording, segments: recording.segments)
+        }
+    }
+
+    @MainActor
+    private func generateAutoTitle(for recording: Recording, segments: [Segment]) async {
         // Spawned as its own task after the run: the recording (and its
         // segments, by cascade) can already be gone by the time this starts.
         guard !recording.isDeleted, recording.modelContext != nil else { return }
-        let sample = segments
-            .sorted { $0.startSeconds < $1.startSeconds }
-            .prefix(20)
-            .map(\.text)
-            .joined(separator: " ")
-        guard sample.count > 30 else { return }
+        guard let sample = AutoTitle.sample(segments.map { (start: $0.startSeconds, text: $0.text) }) else {
+            AppLog.info("app", "auto-title skipped — too little text")
+            return
+        }
         // Captured before the (possibly model-loading) await: a title the
         // user types while Gemma thinks must win over the generated one.
         let titleBefore = recording.title
@@ -253,13 +294,10 @@ final class AppContainer: @unchecked Sendable {
                 try await backend.load(modelPath: nil)
             }
             let title = try await backend.generateText(
-                systemInstruction: "You name audio recordings. Output ONLY a 3–6 word title in title case. No quotes, no period.",
-                userMessage: "Title this transcript:\n\n\(String(sample.prefix(2000)))",
-                maxTokens: 32
+                systemInstruction: AutoTitle.systemPrompt,
+                userMessage: AutoTitle.userMessage(excerpts: sample),
+                maxTokens: AutoTitle.maxOutputTokens
             )
-            let trimmed = title
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'.“”"))
             // The recording may have been deleted while the engine loaded
             // and generated — writing into a deleted model is a SwiftData
             // crash (same guard as JobManager's), and so is the backup
@@ -269,15 +307,20 @@ final class AppContainer: @unchecked Sendable {
                 AppLog.info("app", "auto-title skipped — the title changed while it was generated")
                 return
             }
-            if trimmed.count >= 3 && trimmed.count < 90 {
+            if let trimmed = AutoTitle.clean(title) {
                 recording.title = trimmed
                 try? recording.modelContext?.save()
                 // The run's own backup fired before the title landed —
                 // refresh it so recording.json carries the real title.
                 BackupService.backupRecording(recording)
+                AppLog.info("app", "auto-title: \(trimmed)")
+            } else {
+                AppLog.warn("app", "auto-title: the text engine's answer was not a usable title")
             }
         } catch {
-            // Auto-title is best-effort; swallow.
+            // Best-effort, but never silent: a failure here once left meetings
+            // unnamed with nothing in the log.
+            AppLog.warn("app", "auto-title failed: \(error.localizedDescription)")
         }
     }
 
@@ -286,8 +329,17 @@ final class AppContainer: @unchecked Sendable {
         newRecordingRequested &+= 1
     }
 
+    func requestDeleteRecording() {
+        deleteRecordingRequested &+= 1
+    }
+
     func requestDictatePane() {
         dictatePaneRequested &+= 1
+    }
+
+    func requestPeoplePane(person: UUID? = nil) {
+        pendingPerson = person
+        peoplePaneRequested &+= 1
     }
 
     // MARK: - Updates

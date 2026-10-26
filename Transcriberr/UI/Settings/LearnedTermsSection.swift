@@ -4,6 +4,8 @@ import SwiftUI
 /// transcripts, with one-click promotion into the permanent list.
 struct LearnedTermsSection: View {
     @Environment(AppContainer.self) private var container
+    @State private var showAll = false
+    static let folded = 16
 
     var body: some View {
         let s = container.dictationSettings
@@ -18,25 +20,24 @@ struct LearnedTermsSection: View {
                      : "Nothing new — every recurring name is already in your vocabulary.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             } else {
-                ForEach(terms.prefix(40)) { term in
-                    HStack {
-                        Text(term.spelling)
-                        Text("\(term.recordings) recordings · \(term.occurrences)×")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Spacer()
-                        TapButton { c.addToVocabulary(term.spelling) } label: {
-                            LitButtonChrome(.ghost, compact: true) { Text("Add") }
-                        }
-                        TapButton { c.dismissSuggestion(term.spelling) } label: {
-                            Image(systemName: "xmark.circle").foregroundStyle(AppColor.ink3)
-                        }
+                // Chips that wrap: one line used to hold one name, forty
+                // names took a screen and a half.
+                FlowLayout(spacing: 6) {
+                    ForEach(showAll ? terms : Array(terms.prefix(Self.folded))) { term in
+                        WordChip(term.spelling,
+                                 help: "\(term.recordings) recordings · \(term.occurrences)×. + adds it to your vocabulary; × hides it for good.",
+                                 add: { c.addToVocabulary(term.spelling) },
+                                 remove: { c.dismissSuggestion(term.spelling) })
                     }
                 }
-                if terms.count > 40 {
-                    Text("…and \(terms.count - 40) more, applied automatically while the toggle above is on.")
-                        .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-                }
-                HStack {
+                HStack(spacing: AppMetric.m) {
+                    if terms.count > Self.folded {
+                        TapButton { showAll.toggle() } label: {
+                            Text(showAll ? "Show fewer" : "Show all \(terms.count)")
+                                .font(AppFont.text(12)).foregroundStyle(AppColor.accentOnLight)
+                        }
+                    }
+                    Spacer()
                     TapButton { for t in terms { c.addToVocabulary(t.spelling) } } label: {
                         LitButtonChrome(.ghost, compact: true) { Text("Add all \(terms.count)") }
                     }
@@ -48,5 +49,51 @@ struct LearnedTermsSection: View {
             Text("A capitalized word that recurs across recordings and never appears as an ordinary lowercase word is treated as a name. Learned names are applied to dictation (exact spelling, never fuzzy) and offered here; Add makes one permanent, × hides it for good.")
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
         }
+    }
+}
+
+/// One word as a small pill: the word, then + (keep) and/or × (drop).
+struct WordChip: View {
+    let word: String
+    var struck: String? = nil
+    let help: String
+    var add: (() -> Void)? = nil
+    var remove: (() -> Void)? = nil
+
+    init(_ word: String, struck: String? = nil, help: String,
+         add: (() -> Void)? = nil, remove: (() -> Void)? = nil) {
+        self.word = word
+        self.struck = struck
+        self.help = help
+        self.add = add
+        self.remove = remove
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let struck {
+                Text(struck).strikethrough().foregroundStyle(AppColor.ink3)
+                Text("→").foregroundStyle(AppColor.ink3)
+            }
+            Text(word).foregroundStyle(AppColor.ink)
+            if let add {
+                TapButton(action: add) {
+                    Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(AppColor.ink2)
+                }
+                .accessibilityLabel("Add \(word) to vocabulary")
+            }
+            if let remove {
+                TapButton(action: remove) {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(AppColor.ink3)
+                }
+                .accessibilityLabel("Remove \(word)")
+            }
+        }
+        .font(AppFont.text(12))
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(Color.white.opacity(0.66)).overlay(Capsule().stroke(AppColor.hair)))
+        .help(help)
     }
 }

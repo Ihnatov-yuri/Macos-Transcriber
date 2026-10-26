@@ -87,6 +87,8 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             if ukFineTune {
                 try await ParakeetUKModel.ensureDownloaded(progress: logProgress)
                 models = try await AsrModels.load(from: ParakeetUKModel.modelDirectory, version: .v3)
+                // From here the files are open: a newer release waits for the next launch.
+                ParakeetUKModel.markInUse()
                 // FluidAudio answers a folder that fails to load by deleting
                 // it and downloading STOCK v3 into it. Never run that as UK.
                 guard ParakeetUKModel.isFineTune(at: ParakeetUKModel.modelDirectory) else {

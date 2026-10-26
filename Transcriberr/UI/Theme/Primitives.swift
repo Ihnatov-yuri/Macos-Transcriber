@@ -28,17 +28,27 @@ struct TapButton<Label: View>: View {
     }
 
     @State private var pressed = false
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         label()
             .opacity(pressed ? 0.6 : 1.0)
+            // A disabled button must look it: a primary pill read as
+            // pressable while its action was off (found 2026-10-24).
+            .opacity(isEnabled ? 1 : 0.4)
             .contentShape(Rectangle())
-            .onTapGesture(perform: action)
+            .onTapGesture { if isEnabled { action() } }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in if !pressed { pressed = true } }
                     .onEnded { _ in pressed = false }
             )
+            // A tap gesture alone is invisible to accessibility: VoiceOver
+            // read these as text and could not press them (found 2026-10-23
+            // when a sheet's Cancel could not be pressed through AX).
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { if isEnabled { action() } }
     }
 }
 
@@ -296,14 +306,16 @@ struct PulseDot: View {
 struct InverseFooter<Left: View, Right: View>: View {
     let title: String
     let subtitle: String?
-    let action: () -> Void
+    let action: (() -> Void)?
     @ViewBuilder var left: Left
     @ViewBuilder var right: Right
 
+    /// No action: a status footer ("Recognizing…"), drawn the same but not
+    /// announced as a button.
     init(
         _ title: String,
         subtitle: String? = nil,
-        action: @escaping () -> Void = {},
+        action: (() -> Void)? = nil,
         @ViewBuilder left: () -> Left = { EmptyView() },
         @ViewBuilder right: () -> Right = { EmptyView() }
     ) {
@@ -317,8 +329,10 @@ struct InverseFooter<Left: View, Right: View>: View {
     var body: some View {
         // Uses TapButton (not SwiftUI.Button) to avoid the macOS 26.5
         // _ButtonGesture crash when the action captures a @MainActor model.
-        TapButton(action: action) {
-            content
+        if let action {
+            TapButton(action: action) { content }
+        } else {
+            content.accessibilityElement(children: .combine)
         }
     }
 

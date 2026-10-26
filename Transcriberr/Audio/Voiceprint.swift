@@ -99,6 +99,45 @@ enum VoiceprintStore {
         NotificationCenter.default.post(name: didChange, object: nil)
     }
 
+    /// How alike a new reading must be to the saved voice to be added to it.
+    static let minAddSimilarity: Float = 0.5
+
+    struct NotYourVoice: LocalizedError {
+        let similarity: Float
+        var errorDescription: String? {
+            String(format: "This reading does not sound like your saved voice (%.2f, at least 0.50 needed). Was someone else reading? To start over, use Record again in Settings → Audio input.", similarity)
+        }
+    }
+
+    struct UnreadablePrint: LocalizedError {
+        var errorDescription: String? {
+            "Your saved voice cannot be read (damaged, or made by an older model). Record it again in Settings → Audio input; nothing was changed."
+        }
+    }
+
+    /// Adds a reading to the saved voice instead of replacing it: more of
+    /// the user's speech, from another day or microphone, without losing
+    /// the first enrollment. The raw audio is appended to the enrollment
+    /// so a future model re-embeds all of it.
+    static func add(_ print: Voiceprint, audio: [Float]) throws {
+        // A print that exists but cannot be read is never replaced from
+        // here: its enrollment audio is what a future model re-embeds.
+        if isUnreadable { throw UnreadablePrint() }
+        guard let old = load() else { try save(print, audio: audio); return }
+        guard print.selfSimilarity >= minSelfSimilarity else { throw MixedReading(similarity: print.selfSimilarity) }
+        let alike = VoiceActivity.cosine(old.centroid, print.centroid)
+        guard alike >= minAddSimilarity else { throw NotYourVoice(similarity: alike) }
+        let merged = Voiceprint(model: old.model, created: old.created, seconds: old.seconds + print.seconds,
+                                embeddings: Array((old.embeddings + print.embeddings).suffix(maxEmbeddings)))
+        try JSONEncoder().encode(merged).write(to: printURL, options: .atomic)
+        let previous = (try? Data(contentsOf: audioURL)) ?? Data()
+        try (previous + audio.withUnsafeBufferPointer { Data(buffer: $0) }).write(to: audioURL, options: .atomic)
+        NotificationCenter.default.post(name: didChange, object: nil)
+    }
+
+    /// Embeddings kept in the user's print, the newest.
+    static let maxEmbeddings = 200
+
     static func delete() {
         try? FileManager.default.removeItem(at: printURL)
         try? FileManager.default.removeItem(at: audioURL)
@@ -233,7 +272,15 @@ actor VoiceEmbedder {
         wp.update(repeating: 0, count: slots * modelSamples)
         mp.update(repeating: 0, count: slots * maskFrames)
         let part = modelSamples / slots
-        for (k, clip) in clips.enumerated() where !clip.isEmpty {
+        // Every third carries audio. An empty third left at zero changed
+        // the others' embeddings: a lone window beside two silent thirds
+        // scored -0.01-0.31 against its true embedding (benchmark,
+        // 2026-10-24), so a batch of 3n+1 or 3n+2 clips gave one or two
+        // garbage embeddings. The spare thirds repeat the batch's own clips
+        // and their outputs are dropped.
+        let voiced = clips.filter { !$0.isEmpty }
+        for k in 0..<slots where !voiced.isEmpty {
+            let clip = k < clips.count && !clips[k].isEmpty ? clips[k] : voiced[k % voiced.count]
             let row = wp.advanced(by: k * part)
             var filled = 0
             while filled < part {
@@ -241,6 +288,7 @@ actor VoiceEmbedder {
                 clip.withUnsafeBufferPointer { row.advanced(by: filled).update(from: $0.baseAddress!, count: n) }
                 filled += n
             }
+            guard k < clips.count, !clips[k].isEmpty else { continue }
             let lo = k * maskFrames / slots + maskMargin
             let hi = (k + 1) * maskFrames / slots - maskMargin
             mp.advanced(by: k * maskFrames + lo).update(repeating: 1, count: hi - lo)
@@ -262,9 +310,8 @@ actor VoiceEmbedder {
         }
     }
 
-    /// Builds a print from enrollment audio: one embedding per voiced
-    /// `enrollWindow` (half-overlapping), silence skipped.
-    func enroll(_ samples: [Float]) async throws -> Voiceprint {
+    /// The voiced `enrollWindow`s of continuous speech, half overlapping.
+    static func enrollClips(_ samples: [Float]) -> [ArraySlice<Float>] {
         let win = Int(VoiceActivity.enrollWindow * VoiceActivity.sampleRate)
         let floor = VoiceActivity.speechFloor(samples)
         var clips: [ArraySlice<Float>] = []
@@ -274,6 +321,13 @@ actor VoiceEmbedder {
             if VoiceActivity.rms(slice) >= floor { clips.append(slice) }
             start += win / 2
         }
+        return clips
+    }
+
+    /// Builds a print from enrollment audio: one embedding per voiced
+    /// `enrollWindow` (half-overlapping), silence skipped.
+    func enroll(_ samples: [Float]) async throws -> Voiceprint {
+        let clips = Self.enrollClips(samples)
         guard clips.count >= 3 else { throw VoiceprintError.tooLittleSpeech }
         let embeddings = try await embed(clips)
         // Half-overlapping windows: each voiced second is counted twice.
@@ -370,7 +424,7 @@ struct VoiceTimeline: Equatable {
                         onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> VoiceTimeline {
         let total = Double(mic.count + sys.count)
         let micShare = total > 0 ? Double(mic.count) / total : 0.5
-        let m = try await VoiceEmbedder.shared.scores(mic, against: print) { onProgress?($0 * micShare) }
+        let m = try await VoiceEmbedder.shared.scores(mic, against: print, onProgress: { onProgress?($0 * micShare) })
         let fit = fits(m)
         guard fit.0 else { throw Mismatch(strong: fit.strong, ambiguous: fit.ambiguous) }
         // The call audio is the others nearly always, and scoring all of it
@@ -411,11 +465,15 @@ enum ClusterVoice {
     /// 0.32; two clusters both near the threshold are one voice split in
     /// two or a voice like the user's, and neither is named.
     static let margin: Float = 0.10
+    /// The user's cluster on 3 s clips (2026-10-24): the user 0.53 at the
+    /// least, every other voice at most 0.36. The 1.5 s target-speaker gate
+    /// keeps VoiceActivity's 0.40.
+    static let userOnThreshold: Float = 0.45
 
     /// Sample ranges (16 kHz) to embed per cluster.
     static func clipRanges(_ regions: [DiarizationRunner.SpeakerSegment],
-                           sampleCount: Int) -> [String: [Range<Int>]] {
-        let rate = VoiceActivity.sampleRate, win = VoiceActivity.window
+                           sampleCount: Int, window: Double = VoiceActivity.window) -> [String: [Range<Int>]] {
+        let rate = VoiceActivity.sampleRate, win = window
         var byCluster: [String: [ClosedRange<Double>]] = [:]
         for r in regions where r.endSeconds > r.startSeconds {
             byCluster[r.speakerId, default: []].append(r.startSeconds...r.endSeconds)
@@ -449,7 +507,7 @@ enum ClusterVoice {
     static func compute(samples: [Float], regions: [DiarizationRunner.SpeakerSegment],
                         print: Voiceprint) async throws -> [String: Float] {
         let floor = VoiceActivity.speechFloor(samples)
-        let ranges = clipRanges(regions, sampleCount: samples.count)
+        let ranges = clipRanges(regions, sampleCount: samples.count, window: PeopleMatch.clipSeconds)
             .mapValues { $0.filter { VoiceActivity.rms(samples[$0]) >= floor } }
             .filter { $0.value.count >= minClips }
         let keys = ranges.keys.sorted()
@@ -466,11 +524,11 @@ enum ClusterVoice {
     }
 
     /// The cluster that is the user: the best median at or above
-    /// `VoiceActivity.onThreshold`, `margin` clear of the runner-up. Nil
+    /// `userOnThreshold`, `margin` clear of the runner-up. Nil
     /// when no cluster sounds like the user, or two do.
     static func user(in scores: [String: Float]) -> String? {
         let ranked = scores.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
-        guard let best = ranked.first, best.value >= VoiceActivity.onThreshold else { return nil }
+        guard let best = ranked.first, best.value >= userOnThreshold else { return nil }
         if ranked.count > 1, best.value - ranked[1].value < margin { return nil }
         return best.key
     }

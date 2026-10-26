@@ -16,6 +16,9 @@ struct LibraryView: View {
 
     @State private var query: String = ""
     @State private var selection: Recording?
+    @State private var deleting: Recording?
+    /// Recordings a merge is reading: not deletable until it is done.
+    @State private var mergingIDs: Set<UUID> = []
     @State private var importError: String?
     @State private var selectedFolderID: UUID?
     @State private var selectedTagID: UUID?
@@ -51,16 +54,28 @@ struct LibraryView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AppColor.base)
         }
+        .onAppear {
+            if selection == nil, let id = container.librarySelection {
+                selection = try? container.repository.get(id: id)
+            }
+        }
+        .onChange(of: selection?.id) { _, id in container.librarySelection = id }
+        // ⌘⌫ from the menu bar: the same confirmation as the row's Delete….
+        .onChange(of: container.deleteRecordingRequested) {
+            if let rec = selection, rec.modelContext != nil, !mergingIDs.contains(rec.id) { deleting = rec }
+        }
         .task(id: query) {
             let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Settle first: no fetch while the user is still typing.
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
+            // Clearing applies at once: waiting here showed the old filtered
+            // list for a moment, with every folder count looking wrong.
             guard !q.isEmpty else {
                 appliedQuery = ""
                 transcriptMatches = []
                 return
             }
+            // Settle first: no fetch while the user is still typing.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
             let descriptor = FetchDescriptor<Segment>(
                 predicate: #Predicate { $0.text.localizedStandardContains(q) }
             )
@@ -201,6 +216,7 @@ struct LibraryView: View {
                     TapButton { query = "" } label: {
                         Text("✕").uiLabel(11, color: AppColor.ink3)
                     }
+                    .accessibilityLabel("Clear search")
 
                 }
             }
@@ -218,9 +234,9 @@ struct LibraryView: View {
         // bought nothing and cost stability.
         return VStack(spacing: 0) {
             if rows.isEmpty {
-                Text(query.isEmpty
-                     ? "No recordings yet · tap + Import"
-                     : "No matches for “\(query)”")
+                Text(!appliedQuery.isEmpty ? "No matches for “\(appliedQuery)”"
+                     : (selectedFolderID != nil || selectedTagID != nil) ? "Nothing here yet"
+                     : "No recordings yet · tap + Import")
                     .uiLabel(10, color: AppColor.ink3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(AppMetric.l)
@@ -231,6 +247,7 @@ struct LibraryView: View {
                 } label: {
                     recordingRow(rec, selected: selection?.id == rec.id)
                 }
+                .accessibilityLabel("\(rec.title), \(Date(timeIntervalSince1970: TimeInterval(rec.createdAtMillis / 1000)).formatted(date: .abbreviated, time: .shortened)), \(formatDuration(rec.durationSeconds))")
 
                 .contextMenu {
                     Button("Reveal in Finder") {
@@ -238,7 +255,9 @@ struct LibraryView: View {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
                     }
                     Menu("Move to Folder…") {
-                        ForEach(allFolders.filter { $0.id != rec.folder?.id }, id: \.id) { folder in
+                        // Dictation history is the dictation's own; filing a
+                        // recording there hid it from All.
+                        ForEach(allFolders.filter { $0.id != rec.folder?.id && !$0.isDictation }, id: \.id) { folder in
                             Button(folder.name) {
                                 try? container.repository.move(rec, to: folder)
                             }
@@ -254,7 +273,10 @@ struct LibraryView: View {
                         Menu("Merge with…") {
                             ForEach(rows.filter { $0.id != rec.id }, id: \.id) { other in
                                 Button("\(other.title)") {
+                                    guard mergingIDs.isEmpty else { return }
+                                    mergingIDs = [rec.id, other.id]
                                     Task { @MainActor in
+                                        defer { mergingIDs = [] }
                                         do {
                                             let merged = try await container.repository.merge(rec, other)
                                             selection = merged
@@ -271,27 +293,39 @@ struct LibraryView: View {
                         }
                     }
                     Divider()
-                    Button("Delete", role: .destructive) {
-                        if selection?.id == rec.id { selection = nil }
-                        // A run in flight on this recording would keep
-                        // appending segments to a deleted model — stop it
-                        // first (JobManager also bails on its own if the
-                        // model vanishes, but don't make it find out the
-                        // hard way).
-                        container.jobManager.cancel(rec.id)
-                        // Delete through the VIEW's context — @Query observes
-                        // this context, and deleting a view-context object via
-                        // the repository's separate context is a no-op (the
-                        // row never disappeared).
-                        context.delete(rec)
-                        try? context.save()
-                    }
+                    Button("Delete…", role: .destructive) { deleting = rec }
+                        .disabled(mergingIDs.contains(rec.id))
                 }
                 HairlineSoft()
             }
         }
         .padding(.horizontal, AppMetric.sheetPadding)
+        .confirmationDialog("Delete “\(deleting?.title ?? "")”?",
+                            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible, presenting: deleting) { rec in
+            Button("Delete", role: .destructive) { delete(rec) }
+        } message: { _ in
+            Text("The transcript, outputs and versions are removed from Transcriberr. The audio file stays on disk.")
+        }
     }
+
+    private func delete(_ rec: Recording) {
+        // isDeleted resets after a save; the context is the reliable sign.
+        guard rec.modelContext != nil, !mergingIDs.contains(rec.id) else { return }
+        if selection?.id == rec.id { selection = nil }
+        // A run in flight on this recording would keep
+        // appending segments to a deleted model — stop it
+        // first (JobManager also bails on its own if the
+        // model vanishes, but don't make it find out the
+        // hard way).
+        container.jobManager.cancel(rec.id)
+        // Delete through the VIEW's context — @Query observes
+        // this context, and deleting a view-context object via
+        // the repository's separate context is a no-op (the
+        // row never disappeared).
+        context.delete(rec)
+        try? context.save()
+        }
 
     private func recordingRow(_ rec: Recording, selected: Bool) -> some View {
         let createdDate = Date(timeIntervalSince1970: TimeInterval(rec.createdAtMillis / 1000))
@@ -397,7 +431,8 @@ struct LibraryView: View {
         let q = appliedQuery.lowercased()
         guard !q.isEmpty else { return rows }
         return rows.filter { rec in
-            rec.title.lowercased().contains(q) || transcriptMatches.contains(rec.id)
+            // Same matching as the transcript fetch: "cafe" finds "café".
+            rec.title.localizedStandardContains(q) || transcriptMatches.contains(rec.id)
         }
     }
 
@@ -491,8 +526,9 @@ struct LibraryView: View {
             )
             // Importing while a folder is active files the recording there —
             // otherwise it lands unfiled and is invisible in the current view.
-            if let folderID = selectedFolderID {
-                rec.folder = allFolders.first { $0.id == folderID }
+            if let folderID = selectedFolderID,
+               let folder = allFolders.first(where: { $0.id == folderID }), !folder.isDictation {
+                rec.folder = folder
             }
             try container.repository.save(rec)
             selection = rec

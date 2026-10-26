@@ -26,7 +26,12 @@ func usage() {
       transcriberrcli record [seconds]     capture seconds (default 5) from the mic
       transcriberrcli decode <file>        decode to 16k mono Float32 and chunk it
       transcriberrcli noisesup <file>      run the offline noise-suppression pass
-      transcriberrcli transcribe <file>    Parakeet v3 ASR on any audio file (downloads models on first run)
+      transcriberrcli transcribe <file> [--json] [--language Dutch]
+                                           Parakeet v3 ASR on any audio file (downloads models on first run);
+                                           --json prints only JSON with word-level start/end times
+      transcriberrcli diarize <list.tsv> <outdir> [speakers]
+                                            the app's diarizer (diar.engine, fallback, foldScraps) on
+                                            "<id>\t<audio>" lines; writes <id>.rttm + timing.tsv
       transcriberrcli context <when|file> [minutes]  the calendar invite a recording at that time would use
       transcriberrcli bench [score <backend> [engA engB]] [--dir <dir>]  the user's checked references; score an engine on them
       transcriberrcli vocab <file.txt> [Language]
@@ -49,6 +54,9 @@ func usage() {
       transcriberrcli voice enroll|score|show
                                             voice print: enroll from audio (or a meeting's mic via
                                             --me), score a meeting's tracks against it
+      transcriberrcli uk-model [status|update]
+                                            Parakeet UK: installed release vs Hugging Face; update
+                                            fetches the newest and switches to it
       transcriberrcli help                 this message
 
     Each command exits 0 on success, non-zero on failure.
@@ -152,37 +160,86 @@ func cmdNoiseSup(path: String) async -> Int32 {
 }
 
 @MainActor
-func cmdTranscribe(path: String) async -> Int32 {
+func cmdTranscribe(path: String, json: Bool = false, language: String? = nil) async -> Int32 {
+    // With --json, stdout carries only the JSON document; progress goes to stderr.
+    func say(_ line: String) {
+        if json { FileHandle.standardError.write((line + "\n").data(using: .utf8)!) } else { print(line) }
+    }
     let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
-    print("[asr] decoding \(url.lastPathComponent)…")
+    say("[asr] decoding \(url.lastPathComponent)…")
     let decoder = AudioDecoder()
     let samples: [Float]
     do {
         samples = try await decoder.decodeAll(file: url)
     } catch {
-        print("[asr] ❌ decode failed: \(error.localizedDescription)")
+        say("[asr] ❌ decode failed: \(error.localizedDescription)")
         return 1
     }
-    print("[asr] \(samples.count) samples (\(String(format: "%.1f", Double(samples.count) / 16_000))s). Loading Parakeet v3 (first run downloads ~1 GB)…")
+    let seconds = Double(samples.count) / 16_000
+    say("[asr] \(samples.count) samples (\(String(format: "%.1f", seconds))s). Loading Parakeet v3 (first run downloads ~1 GB)…")
+    let hint = language.flatMap { ParakeetBackend.languageHint(from: [$0]) }
+    if let language, hint == nil { say("[asr] unknown --language '\(language)', using auto-detect") }
 
     do {
         let models = try await AsrModels.downloadAndLoad(version: .v3) { p in
-            FileHandle.standardOutput.write("\r  download/load \(Int(p.fractionCompleted * 100))%".data(using: .utf8)!)
+            if !json {
+                FileHandle.standardOutput.write("\r  download/load \(Int(p.fractionCompleted * 100))%".data(using: .utf8)!)
+            }
         }
-        print("")
+        if !json { print("") }
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         var state = try TdtDecoderState()
         let t0 = Date()
-        let result = try await manager.transcribe(samples, decoderState: &state, language: nil)
+        let result = try await manager.transcribe(samples, decoderState: &state, language: hint)
         let dt = Date().timeIntervalSince(t0)
-        print("[asr] ✓ \(String(format: "%.2f", dt))s compute, confidence \(String(format: "%.2f", result.confidence))")
-        print("──────────────────────────────────────────")
-        print(result.text)
-        print("──────────────────────────────────────────")
+        say("[asr] ✓ \(String(format: "%.2f", dt))s compute, confidence \(String(format: "%.2f", result.confidence))")
+        if json {
+            let doc = TranscriptJSON(text: result.text, confidence: result.confidence, durationS: seconds,
+                                     language: hint?.rawValue, timings: result.tokenTimings ?? [])
+            print(try doc.encoded())
+        } else {
+            print("──────────────────────────────────────────")
+            print(result.text)
+            print("──────────────────────────────────────────")
+        }
         return result.text.isEmpty ? 2 : 0
     } catch {
-        print("[asr] ❌ \(error)")
+        say("[asr] ❌ \(error)")
+        return 1
+    }
+}
+
+/// Benchmark entry: DiarizationRunner exactly as the runner's pre-pass calls
+/// it (no voice print, so foldScraps without scores), one RTTM per line.
+@MainActor
+func cmdDiarize(list: String, outDir: String, speakers: Int) async -> Int32 {
+    let out = URL(fileURLWithPath: NSString(string: outDir).expandingTildeInPath)
+    let runner = DiarizationRunner()
+    let decoder = AudioDecoder()
+    do {
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        var timing = ""
+        for line in try String(contentsOfFile: list, encoding: .utf8).split(separator: "\n") {
+            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let samples = try await decoder.decodeAll(file: URL(fileURLWithPath: parts[1]))
+            let seconds = Double(samples.count) / 16_000
+            let t0 = Date()
+            let diar = DiarizationRunner.foldScraps(try await runner.run(samples: samples, numClusters: speakers))
+            let elapsed = Date().timeIntervalSince(t0)
+            let rttm = diar.map {
+                String(format: "SPEAKER %@ 1 %.3f %.3f <NA> <NA> %@ <NA> <NA>\n",
+                       parts[0], $0.startSeconds, $0.endSeconds - $0.startSeconds, $0.speakerId)
+            }.joined()
+            try rttm.write(to: out.appendingPathComponent("\(parts[0]).rttm"), atomically: true, encoding: .utf8)
+            timing += "\(parts[0])\t\(DiarizationRunner.engine.rawValue)\t\(String(format: "%.1f", seconds))\t\(String(format: "%.2f", elapsed))\n"
+            print("[diarize] \(parts[0]) \(Int(seconds)) s → \(String(format: "%.1f", elapsed)) s, \(Set(diar.map(\.speakerId)).count) speakers")
+        }
+        try timing.write(to: out.appendingPathComponent("timing.tsv"), atomically: true, encoding: .utf8)
+        return 0
+    } catch {
+        print("[diarize] ❌ \(error)")
         return 1
     }
 }
@@ -856,7 +913,22 @@ func main() async -> Int32 {
         return await cmdNoiseSup(path: args[2])
     case "transcribe":
         guard args.count > 2 else { usage(); return 64 }
-        return await cmdTranscribe(path: args[2])
+        let rest = Array(args.dropFirst(2))
+        var path: String?, json = false, language: String?
+        var i = 0
+        while i < rest.count {
+            switch rest[i] {
+            case "--json": json = true
+            case "--language" where i + 1 < rest.count: i += 1; language = rest[i]
+            default: if path == nil { path = rest[i] } else { usage(); return 64 }
+            }
+            i += 1
+        }
+        guard let path else { usage(); return 64 }
+        return await cmdTranscribe(path: path, json: json, language: language)
+    case "diarize":
+        guard args.count > 3 else { usage(); return 64 }
+        return await cmdDiarize(list: args[2], outDir: args[3], speakers: args.count > 4 ? Int(args[4]) ?? 0 : 0)
     case "superdiar":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdSuperDiar(path: args[2])
@@ -868,6 +940,12 @@ func main() async -> Int32 {
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
     case "gentest":
         return await cmdGenTest()
+    case "thinkab":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdThinkAB(out: args[2],
+                                titleCount: args.count > 3 ? Int(args[3]) ?? 8 : 8,
+                                peopleCount: args.count > 4 ? Int(args[4]) ?? 3 : 3,
+                                maxLines: args.count > 5 ? Int(args[5]) ?? 60 : 60)
     case "refinalize":
         guard args.count > 2 else { usage(); return 64 }
         return cmdRefinalize(path: args[2])
@@ -914,6 +992,8 @@ func main() async -> Int32 {
         return await cmdVoice(Array(args.dropFirst(2)))
     case "whisperloop":
         return await cmdWhisperLoop(Array(args.dropFirst(2)))
+    case "uk-model":
+        return await cmdUKModel(args.count > 2 ? args[2] : "status")
     case "help", "-h", "--help":
         usage()
         return 0
@@ -921,6 +1001,31 @@ func main() async -> Int32 {
         usage()
         return 64
     }
+}
+
+/// Parakeet UK release on this Mac and on Hugging Face. `update` fetches a
+/// newer release and switches to it at once (no engine runs in this process).
+func cmdUKModel(_ sub: String) async -> Int32 {
+    let installed = ParakeetUKModel.manifest(at: ParakeetUKModel.modelDirectory)
+    print("installed: \(ParakeetUKModel.isInstalled() ? ParakeetUKModel.versionName() : "none")"
+          + " @ \(installed.map { String($0.revision.prefix(8)) } ?? "no manifest (4.7.0 install)")")
+    if let pending = ParakeetUKModel.manifest(at: ParakeetUKModel.pendingDirectory) {
+        print("waiting for the next launch: \(ParakeetUKModel.versionName(at: ParakeetUKModel.pendingDirectory)) @ \(pending.revision.prefix(8))")
+    }
+    do {
+        let latest = try await ParakeetUKModel.fetchLatest()
+        print("on Hugging Face: \(latest.revision.prefix(8)), \(latest.files.count) files, \(latest.totalBytes / 1_000_000) MB")
+    } catch {
+        print("Hugging Face: \(error.localizedDescription)"); return 1
+    }
+    guard sub == "update" else { return 0 }
+    let result = await ParakeetUKModel.checkForUpdate()
+    print("update check: \(result)")
+    ParakeetUKModel.applyPendingUpdate()
+    let now = ParakeetUKModel.manifest(at: ParakeetUKModel.modelDirectory)
+    print("now: \(ParakeetUKModel.versionName()) @ \(now.map { String($0.revision.prefix(8)) } ?? "no manifest")")
+    if case .failed = result { return 1 }
+    return 0
 }
 
 let exitCode = await main()

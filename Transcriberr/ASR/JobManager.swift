@@ -51,7 +51,9 @@ final class TranscriptionJobManager: @unchecked Sendable {
 
     /// Optional auto-titler. We keep it as a weak indirection so AppContainer
     /// can wire it up after construction without a retain cycle.
-    var autoTitler: ((Recording, [Segment], TranscriptionRunner.Params) async -> Void)?
+    /// Main actor: it is handed live models, and a non-isolated async
+    /// closure would run (and could read them) off the main thread.
+    var autoTitler: (@MainActor (Recording, [Segment], TranscriptionRunner.Params) async -> Void)?
 
     /// Called once the queue has been empty for `idleReleaseSeconds`.
     /// AppContainer points this at `BackendFactory.releaseLiteRT`.
@@ -82,7 +84,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
         self.repository = repository
     }
 
-    private func shouldAutoTitle(_ title: String) -> Bool {
+    nonisolated static func shouldAutoTitle(_ title: String) -> Bool {
         // Default titles: "Recording <date>" and "Meeting <date>". The
         // meeting form failed BOTH old checks — wrong prefix, and its
         // "09:19" timestamp tripped the no-colon rule of the generic clause.
@@ -566,8 +568,17 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // Saved people next, so the version below already
                     // carries their names. Never fails the run.
                     if !PeopleStore.shared.load().isEmpty {
-                        statuses[recording.id]?.stage = "Finding people…"
+                        let id = recording.id
+                        statuses[id]?.stage = "Finding people…"
                         await PeopleNamer.apply(to: recording, repository: repository)
+                        // Seconds to minutes went by: the recording may have
+                        // been deleted (isDeleted resets after a save, so the
+                        // context is the reliable sign) or the run cancelled.
+                        if recording.modelContext == nil || recording.isDeleted || Task.isCancelled {
+                            statuses.removeValue(forKey: id)
+                            AppLog.info("job", "recording gone or run cancelled while finding people; stopped")
+                            return
+                        }
                     }
                     // Replaced on every run: an older run's disputes would
                     // underline words the new transcript no longer has.
@@ -596,7 +607,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         note: note
                     )
                     // Auto-title: only if the title still looks like a default.
-                    if !allSegments.isEmpty, shouldAutoTitle(recording.title) {
+                    if !allSegments.isEmpty, Self.shouldAutoTitle(recording.title) {
                         Task { @MainActor [weak self] in
                             await self?.autoTitle(recording: recording, segments: allSegments, params: params)
                         }

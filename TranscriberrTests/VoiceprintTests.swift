@@ -182,7 +182,8 @@ final class VoiceprintTests: XCTestCase {
         // One voice split in two, or two alike: neither is named.
         XCTAssertNil(ClusterVoice.user(in: ["S1": 0.55, "S2": 0.49, "S3": 0.1]))
         XCTAssertEqual(ClusterVoice.user(in: ["S1": 0.55, "S2": 0.32]), "S1")
-        XCTAssertEqual(ClusterVoice.user(in: ["S1": 0.40]), "S1")
+        XCTAssertEqual(ClusterVoice.user(in: ["S1": 0.45]), "S1")
+        XCTAssertNil(ClusterVoice.user(in: ["S1": 0.40]), "under the 3 s bar")
         XCTAssertNil(ClusterVoice.user(in: [:]))
     }
 

@@ -43,6 +43,23 @@ final class FolderTagTests: XCTestCase {
         XCTAssertThrowsError(try repo.createFolder(named: "   "))
     }
 
+    func testDictationIsNotAFolderName() throws {
+        XCTAssertThrowsError(try repo.createFolder(named: "dictation"), "would turn into dictation history")
+        let f = try repo.createFolder(named: "Notes")
+        XCTAssertThrowsError(try repo.renameFolder(f, to: "Dictation"))
+        // …but dictation itself must still be able to make its folder.
+        let d = try repo.createFolder(named: Folder.dictationName, allowReserved: true)
+        XCTAssertTrue(d.isDictation)
+    }
+
+    func testRemovingTheLastUseOfATagDeletesIt() throws {
+        let rec = try makeRecording("a")
+        try repo.setTags(["solo"], on: rec)
+        let tag = try XCTUnwrap(rec.tags.first)
+        try repo.removeTag(tag, from: rec)
+        XCTAssertTrue(try repo.tags().isEmpty, "no orphan left in the Tag menu")
+    }
+
     func testMoveAndUnfile() throws {
         let rec = try makeRecording("a")
         let folder = try repo.createFolder(named: "Trips")

@@ -74,6 +74,11 @@ func cmdKB(_ raw: [String]) -> Int32 {
     let rest = Array(parsed.positionals.dropFirst())
     // Before opening the store: help must work with no database present.
     if ["help", "-h", "--help"].contains(sub) { kbUsage(); return 0 }
+    guard AssistantAccess.isAllowed else {
+        FileHandle.standardError.write(Data((AssistantAccess.refusal + "\n").utf8))
+        return 77   // EX_NOPERM
+    }
+    AssistantAccess.noteRead()
 
     let kb: KBService
     do {

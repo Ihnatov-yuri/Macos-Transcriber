@@ -80,8 +80,8 @@ final class UIPrefs: @unchecked Sendable {
         superMaxQuality = defaults.bool(forKey: Key.superMaxQuality)
         let storedGap = defaults.double(forKey: Key.turnGap)
         turnCoalesceGapSeconds = storedGap > 0 ? storedGap : 30
-        ensembleEngineA = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.ensembleEngineA) ?? "") ?? .parakeet
-        ensembleEngineB = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.ensembleEngineB) ?? "") ?? .parakeetV2
+        ensembleEngineA = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.ensembleEngineA) ?? "") ?? EnsembleBackend.defaultEngineA
+        ensembleEngineB = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.ensembleEngineB) ?? "") ?? EnsembleBackend.defaultEngineB
 
         // Sanitize on EVERY launch: stored selections must be able to do
         // their job (audio-capable for transcription/live). Explicit engine
@@ -92,9 +92,9 @@ final class UIPrefs: @unchecked Sendable {
         let validMerge: (BackendFactory.Kind) -> Bool = {
             $0.isLocal && $0.supportsAudio && $0 != .ensemble
         }
-        if !validMerge(ensembleEngineA) { ensembleEngineA = .parakeet }
+        if !validMerge(ensembleEngineA) { ensembleEngineA = EnsembleBackend.defaultEngineA }
         if !validMerge(ensembleEngineB) || ensembleEngineB == ensembleEngineA {
-            ensembleEngineB = ensembleEngineA == .parakeetV2 ? .parakeet : .parakeetV2
+            ensembleEngineB = ensembleEngineA == EnsembleBackend.defaultEngineB ? EnsembleBackend.defaultEngineA : EnsembleBackend.defaultEngineB
         }
     }
 }

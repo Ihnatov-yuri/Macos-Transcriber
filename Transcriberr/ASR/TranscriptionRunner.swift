@@ -701,11 +701,12 @@ final class TranscriptionRunner: @unchecked Sendable {
                 if let terms = params.meetingContext?.allTerms, !terms.isEmpty {
                     vocabulary += (vocabulary.isEmpty ? "" : ", ") + terms.joined(separator: ", ")
                 }
+                let words = vocabulary
                 do {
                     let brief = try await withChunkTimeout(
-                        seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass)
+                        seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass) * GemmaLiteRTBackend.thinkingTimeoutScale
                     ) {
-                        try await ens.prepareBrief(transcript: firstPass, vocabulary: vocabulary)
+                        try await ens.prepareBrief(transcript: firstPass, vocabulary: words)
                     }
                     spellingFixes = brief?.fixes ?? []
                 } catch {
@@ -759,7 +760,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                 // keep the confidence-voted text for this chunk.
                 let ruled: String
                 do {
-                    ruled = try await withChunkTimeout(seconds: 120) {
+                    ruled = try await withChunkTimeout(seconds: 120 * GemmaLiteRTBackend.thinkingTimeoutScale) {
                         await ens.arbitrate(
                             textA: info.textA, textB: info.textB,
                             context: ctx, languages: params.languages)
@@ -1419,6 +1420,9 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// The name on the user's lines, as mic chunks get it at parse time.
     /// A nil name would let the self-introduction pass name ME after a
     /// quoted "I'm Joe", and a run starting with it render unnamed.
+    /// The speaker key of a split-track meeting's microphone lines.
+    nonisolated static let micSpeakerKey = "ME"
+
     nonisolated static func meName(_ myName: String?) -> String {
         let n = (myName ?? "").trimmingCharacters(in: .whitespaces)
         return n.isEmpty ? "Me" : n

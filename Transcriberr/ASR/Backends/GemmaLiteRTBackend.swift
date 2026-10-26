@@ -78,19 +78,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         var built: (engine: Engine, gpu: Bool)?
         for gpu in [true, false] {
             do {
-                let config = try EngineConfig(
-                    modelPath: file.path,
-                    backend: gpu ? .gpu : .cpu(),
-                    audioBackend: .cpu(),
-                    // 32K, not the Android default of 8192: whole-transcript
-                    // presets (CLEAN of a 40-min recording ≈ 10k tokens in +
-                    // 8k out) must fit INPUT + OUTPUT in this window — at 8192
-                    // the input alone overflowed it and CLEAN truncated at ~9%.
-                    maxNumTokens: 32768,
-                    cacheDir: NSTemporaryDirectory()
-                )
-                let e = Engine(engineConfig: config)
-                try await e.initialize()
+                let e = try await makeEngine(file: file, gpu: gpu)
                 // Outside this do/catch so a stale build does not fall
                 // through to a CPU attempt.
                 built = (e, gpu)
@@ -106,12 +94,97 @@ actor GemmaLiteRTBackend: ASRBackend {
                 throw ASRError.modelLoadFailed(reason: "LiteRT Gemma was released while loading")
             }
             self.engine = built.engine
+            self.engineOnGPU = built.gpu
+            self.modelFile = file
             self.isReady = true
             await InferenceGate.shared.setLitertActive(true)
             AppLog.info("litert", "engine ready on \(built.gpu ? "GPU" : "CPU")")
             return
         }
         throw ASRError.modelLoadFailed(reason: "LiteRT engine init failed — \(failures.joined(separator: "; "))")
+    }
+
+    private func makeEngine(file: URL, gpu: Bool) async throws -> Engine {
+        let config = try EngineConfig(
+            modelPath: file.path,
+            backend: gpu ? .gpu : .cpu(),
+            audioBackend: .cpu(),
+            // 32K, not the Android default of 8192: whole-transcript
+            // presets (CLEAN of a 40-min recording ≈ 10k tokens in +
+            // 8k out) must fit INPUT + OUTPUT in this window — at 8192
+            // the input alone overflowed it and CLEAN truncated at ~9%.
+            maxNumTokens: 32768,
+            cacheDir: NSTemporaryDirectory()
+        )
+        let e = Engine(engineConfig: config)
+        try await e.initialize()
+        return e
+    }
+
+    // MARK: - CPU fallback
+    //
+    // Another process can hold the GPU (a Whisper training job at 100%).
+    // LiteRT's WebGPU read-back then times out after 20 s on any prompt past
+    // ~2.5k tokens and the call comes back null ("Native sendMessage returned
+    // null"), while short prompts still pass. Only such a failed call is
+    // retried on a CPU engine; the next call tries the GPU again. The CPU
+    // engine is built on first need and dropped after a quiet spell, so a
+    // second copy of the model is held only while the GPU keeps failing.
+
+    private var engineOnGPU = false
+    private var modelFile: URL?
+    private var cpuEngine: Engine?
+    private var cpuEngineLastUse = Date.distantPast
+    static let cpuEngineIdle: TimeInterval = 300
+
+    /// Runs `body` on the CPU engine after the GPU engine failed with
+    /// `error`; rethrows `error` when that failure is not the engine's
+    /// (cancellation, a timeout) or there is no GPU to fall back from.
+    private func retryOnCPU<T>(after error: Error, _ body: (Engine) async throws -> T) async throws -> T {
+        guard engineOnGPU, error is LiteRTLMError, let file = modelFile else { throw error }
+        try Task.checkCancellation()
+        AppLog.warn("litert", "GPU call failed (\(error.localizedDescription)) — retrying on CPU")
+        let cpu: Engine
+        if let cpuEngine {
+            cpu = cpuEngine
+        } else {
+            cpu = try await makeEngine(file: file, gpu: false)
+            cpuEngine = cpu
+            AppLog.info("litert", "CPU fallback engine ready")
+        }
+        cpuEngineLastUse = Date()
+        defer {
+            cpuEngineLastUse = Date()
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.cpuEngineIdle))
+                await self?.dropIdleCPUEngine()
+            }
+        }
+        do {
+            let result = try await body(cpu)
+            await replaceFailedGPUEngine(file)
+            return result
+        } catch {
+            await replaceFailedGPUEngine(file)
+            throw error
+        }
+    }
+
+    /// A GPU engine that failed once stays broken: every later call fails at
+    /// once ("already has an outstanding map pending"), even with the GPU
+    /// free again. A fresh one (~1 s) gives the next call a real GPU try.
+    private func replaceFailedGPUEngine(_ file: URL) async {
+        do {
+            try await rebuild(modelPath: file)
+        } catch {
+            AppLog.warn("litert", "could not rebuild the engine after a GPU failure: \(error.localizedDescription)")
+        }
+    }
+
+    private func dropIdleCPUEngine() {
+        guard cpuEngine != nil, Date().timeIntervalSince(cpuEngineLastUse) >= Self.cpuEngineIdle else { return }
+        cpuEngine = nil
+        AppLog.info("litert", "CPU fallback engine released (idle)")
     }
 
     /// Surgical wedge recovery: rebuild ONLY this engine and evict the
@@ -182,6 +255,7 @@ actor GemmaLiteRTBackend: ASRBackend {
         buildGeneration += 1
         building = nil
         engine = nil
+        cpuEngine = nil
         isReady = false
         // A wedged native call may hold the engine lock forever — the whole
         // point of a rebuild is to move past it. Unblock the queue.
@@ -251,20 +325,28 @@ actor GemmaLiteRTBackend: ASRBackend {
         defer { endInference(inference) }
 
         let sampler = try SamplerConfig(topK: 1, topP: 0.95, temperature: 0.1)
-        let conversation = try await engine.createConversation(with: ConversationConfig(
-            systemMessage: Message(Self.systemInstruction(diarize: diarize)),
-            samplerConfig: sampler
-        ))
-        let message = Message(contents: [
-            Content.audioFile(wavURL.path),
-            Content.text(Self.userMessage(
-                languages: languages, translateTo: translateTo,
-                diarize: diarize, previousContext: previousContext,
-                speakerHints: speakerHints
-            )),
-        ])
-        let response = try await conversation.sendMessage(message)
-        let raw = response.toString.trimmingCharacters(in: .whitespacesAndNewlines)
+        func attempt(_ engine: Engine) async throws -> String {
+            let conversation = try await engine.createConversation(with: ConversationConfig(
+                systemMessage: Message(Self.systemInstruction(diarize: diarize)),
+                samplerConfig: sampler
+            ))
+            let message = Message(contents: [
+                Content.audioFile(wavURL.path),
+                Content.text(Self.userMessage(
+                    languages: languages, translateTo: translateTo,
+                    diarize: diarize, previousContext: previousContext,
+                    speakerHints: speakerHints
+                )),
+            ])
+            return try await conversation.sendMessage(message).toString
+        }
+        let reply: String
+        do {
+            reply = try await attempt(engine)
+        } catch {
+            reply = try await retryOnCPU(after: error) { try await attempt($0) }
+        }
+        let raw = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         var cleaned = Self.trimRepetitionTail(Self.stripPreamble(raw))
         // Boundary-echo strip: despite the fenced prompt, Gemma sometimes
         // re-transcribes the continuity hint at the chunk start. If the
@@ -359,24 +441,59 @@ actor GemmaLiteRTBackend: ASRBackend {
         defer { Task { await InferenceGate.shared.release(gateStamp, exclusive: true) } }
         let inference = beginInference()
         defer { endInference(inference) }
-        func attempt() async throws -> String {
+        // Experiment switch (CLI A/B only, the app never sets it):
+        // TRANSCRIBERR_GEMMA_THINKING=<budget> turns on Gemma 4's thinking
+        // mode with that many reasoning tokens (-1 = unbounded). Unset = off,
+        // which is how every shipped call runs.
+        let thinking = Self.thinkingBudget.map { ThinkingConfig(enableThinking: true, thinkingTokenBudget: $0) }
+        func attempt(_ engine: Engine) async throws -> String {
             let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)
             let conversation = try await engine.createConversation(with: ConversationConfig(
                 systemMessage: Message(systemInstruction),
                 samplerConfig: sampler
             ))
-            let response = try await conversation.sendMessage(Message(userMessage))
+            let t0 = Date()
+            let response = try await conversation.sendMessage(Message(userMessage), thinkingConfig: thinking)
+            if thinking != nil { Self.logThoughts(response, seconds: Date().timeIntervalSince(t0)) }
             return response.toString.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        var out = try await attempt()
+        var out: String
+        do {
+            out = try await attempt(engine)
+        } catch {
+            return try await retryOnCPU(after: error) { try await attempt($0) }
+        }
         if out.isEmpty {
             // Defense in depth: a fresh conversation on a now-exclusive
             // engine — if the first attempt was poisoned by earlier state,
             // this one isn't.
             AppLog.warn("litert", "empty generation — retrying once on exclusive engine")
-            out = try await attempt()
+            out = try await attempt(engine)
         }
         return out
+    }
+
+    nonisolated static let thinkingBudget: Int? =
+        ProcessInfo.processInfo.environment["TRANSCRIBERR_GEMMA_THINKING"].flatMap(Int.init)
+
+    /// Reasoning first costs ~13× the wall time of a plain answer (meeting
+    /// brief: 14 s → 185 s on an M3 Pro); the A/B measures quality, not the
+    /// shipped timeouts, so Gemma's watchdogs stretch while it thinks.
+    nonisolated static var thinkingTimeoutScale: Double { thinkingBudget == nil ? 1 : 15 }
+
+    /// Thinking runs only: how much reasoning each call produced and how
+    /// long it took. TRANSCRIBERR_GEMMA_THOUGHTS=<file> also appends the
+    /// reasoning itself, for reading what the model weighed.
+    nonisolated static func logThoughts(_ response: Message, seconds: Double) {
+        let thought = response.channels.values.joined(separator: "\n")
+        AppLog.info("litert", "thinking: \(thought.count)ch reasoning, \(response.toString.count)ch answer, \(String(format: "%.1f", seconds))s")
+        guard let path = ProcessInfo.processInfo.environment["TRANSCRIBERR_GEMMA_THOUGHTS"], !path.isEmpty else { return }
+        let entry = "=== \(String(format: "%.1f", seconds))s, channels \(response.channels.keys.sorted())\n\(thought)\n--- answer\n\(response.toString)\n\n"
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile(); h.write(Data(entry.utf8)); try? h.close()
+        } else {
+            try? entry.write(toFile: path, atomically: true, encoding: .utf8)
+        }
     }
 
     // MARK: - Prompts (ported from Gemma4Backend.kt)

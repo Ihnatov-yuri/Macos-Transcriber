@@ -3,6 +3,10 @@ import SwiftUI
 /// Port of Android `record/RecordScreen.kt`.
 struct RecordView: View {
     @Environment(AppContainer.self) private var container
+    /// Between pressing Record and the first buffer: the microphone and
+    /// echo filter take a few seconds to come up, and with nothing on
+    /// screen a second press stopped the recording it had just started.
+    @State private var starting = false
     /// Owned by AppShell (app lifetime), NOT a view-scoped @State: this view
     /// is torn down every time the sidebar switches sections, and a model
     /// that died with it forgot an in-progress recording — coming back
@@ -223,11 +227,11 @@ struct RecordView: View {
         switch m.uiState {
         case .idle, .finished:
             InverseFooter(
-                "Record",
-                subtitle: m.autoTranscribe ? "Auto-transcribe on stop" : "Manual run",
-                action: { triggerToggleRecord(m) }
+                starting ? "Starting…" : "Record",
+                subtitle: starting ? "Getting the microphone ready" : m.autoTranscribe ? "Auto-transcribe on stop" : "Manual run",
+                action: starting ? nil : { triggerToggleRecord(m) }
             ) {
-                PulseDot(animated: false)
+                PulseDot(animated: starting)
             } right: {
                 Rectangle()
                     .fill(AppColor.accent)
@@ -250,6 +254,11 @@ struct RecordView: View {
                     .onTapGesture {
                         triggerPauseToggle(m)
                     }
+                    // A bare tap gesture is invisible to VoiceOver: someone
+                    // could start a recording but not pause or stop it.
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { triggerPauseToggle(m) }
 
                 VStack(spacing: 2) {
                     Text("Stop & transcribe")
@@ -263,6 +272,9 @@ struct RecordView: View {
                 .padding(.vertical, AppMetric.sheetVerticalPadding)
                 .contentShape(Rectangle())
                 .onTapGesture { triggerToggleRecord(m) }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { triggerToggleRecord(m) }
 
                 Rectangle().fill(AppColor.ink).frame(width: 12, height: 12)
                     .padding(.horizontal, AppMetric.l)
@@ -272,6 +284,10 @@ struct RecordView: View {
                     .onTapGesture {
                         triggerToggleRecord(m)
                     }
+                    .accessibilityElement()
+                    .accessibilityLabel("Stop recording")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { triggerToggleRecord(m) }
             }
             .fixedSize(horizontal: false, vertical: true)
             .background(AppColor.night, in: Rectangle())
@@ -282,8 +298,13 @@ struct RecordView: View {
     /// Indirection so the tap closure doesn't directly capture `m` for an
     /// async hop — moves the `Task` creation out of the gesture closure.
     private func triggerToggleRecord(_ m: RecordModel) {
+        switch m.uiState {
+        case .idle, .finished: starting = true
+        default: break
+        }
         Task { @MainActor [weak m] in
             await m?.toggleRecord()
+            starting = false
         }
     }
 

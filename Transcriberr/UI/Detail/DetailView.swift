@@ -267,6 +267,9 @@ struct DetailView: View {
                                     guard let repo = model?.container.repository else { return }
                                     try? repo.mergeSpeakers(
                                         entry.key, into: other.key, in: recording)
+                                    // As the sheet's "Same person as…": the
+                                    // transcript file must not keep two speakers.
+                                    try? TranscriptExporter.export(recording: recording)
                                 }
                             }
                         }

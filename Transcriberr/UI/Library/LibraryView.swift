@@ -303,7 +303,9 @@ struct LibraryView: View {
         .confirmationDialog("Delete “\(deleting?.title ?? "")”?",
                             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible, presenting: deleting) { rec in
-            Button("Delete", role: .destructive) { delete(rec) }
+            // Cleared first: the title reads `deleting?.title`, and a render
+            // before the dialog's own dismissal read a deleted model.
+            Button("Delete", role: .destructive) { deleting = nil; delete(rec) }
         } message: { _ in
             Text("The transcript, outputs and versions are removed from Transcriberr. The audio file stays on disk.")
         }

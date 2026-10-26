@@ -32,6 +32,9 @@ struct SpeakerRenameSheet: View {
     @State private var scores: [String: Float] = [:]
     @State private var listening = true
     @State private var saved: [String] = []
+    /// The saved people, read once (and on change): `savedMatch` is read
+    /// several times per render, and every keystroke re-renders.
+    @State private var savedPeople: [Person] = []
 
     init(speakerKey: String, initialName: String, recording: Recording, container: AppContainer,
          others: [(key: String, display: String)] = [], hasNext: Bool = false,
@@ -57,7 +60,7 @@ struct SpeakerRenameSheet: View {
         recording.segments.filter { $0.speaker == speakerKey }.map(\.startSeconds).min()
     }
     private var savedMatch: Person? {
-        PeopleStore.shared.load().first { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }
+        savedPeople.first { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }
     }
     /// People on the meeting's calendar invite who are not yet a speaker of
     /// this recording, under their saved name when they have one.
@@ -144,9 +147,8 @@ struct SpeakerRenameSheet: View {
                     }
                 }
                 Toggle(isOn: $learnVoice) {
-                    Text(savedMatch != nil
-                         ? "Add this meeting to \(savedMatch!.name)'s voice"
-                         : "Remember their voice, so later recordings name them on their own")
+                    Text(savedMatch.map { "Add this meeting to \($0.name)'s voice" }
+                         ?? "Remember their voice, so later recordings name them on their own")
                         .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
                 }
                 .toggleStyle(.checkbox)
@@ -177,7 +179,9 @@ struct SpeakerRenameSheet: View {
                     }
                     if let p = savedMatch {
                         TapButton {
-                            onClose()
+                            // Cancel, not Save's close: mid step-through,
+                            // closing moves on to the next speaker.
+                            (onCancel ?? onClose)()
                             container.requestPeoplePane(person: p.id)
                         } label: {
                             LitButtonChrome(.ghost, compact: true) { Text("Open their page").lineLimit(1) }
@@ -200,6 +204,10 @@ struct SpeakerRenameSheet: View {
         }
         .frame(minWidth: 520, minHeight: 380)
         .task { await compare() }
+        .onReceive(NotificationCenter.default.publisher(for: PeopleStore.didChange)) { _ in
+            savedPeople = PeopleStore.shared.load()
+            saved = savedPeople.map(\.name)
+        }
     }
 
     /// A saved name typed or picked for a voice that is not theirs. Said
@@ -219,11 +227,13 @@ struct SpeakerRenameSheet: View {
     /// Ranks saved people by how much this speaker sounds like them, on
     /// the clip-level scale the matcher uses.
     private func compare() async {
-        saved = PeopleStore.shared.load().map(\.name)
-        // Already learned from this meeting: saving again would add it twice.
-        if let p = savedMatch, (p.learnedFrom ?? []).contains(recording.id) { learnVoice = false }
-        defer { listening = false }
         let people = PeopleStore.shared.load()
+        savedPeople = people
+        saved = people.map(\.name)
+        // Already learned from this meeting: saving again would add it twice.
+        if let p = people.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }),
+           (p.learnedFrom ?? []).contains(recording.id) { learnVoice = false }
+        defer { listening = false }
         let me = TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))
         let mine = PeopleEmbedder.myVoice()
         guard !people.isEmpty || mine != nil, recording.modelContext != nil else { return }
@@ -239,10 +249,12 @@ struct SpeakerRenameSheet: View {
             (v.0, ClusterVoice.median(clips.map { VoiceActivity.cosine($0, v.1) }))
         }
         scores = Dictionary(all, uniquingKeysWith: { max($0, $1) })
-        soundsLike = all
-        .filter { $0.1 >= PeopleMatch.offThreshold }
-        .sorted { $0.1 > $1.1 }
-        .prefix(3).map { ($0.0, $0.1) }
+        // From the deduplicated scores: a saved person under the user's own
+        // name appeared twice, two buttons with one ForEach id.
+        soundsLike = scores
+        .filter { $0.value >= PeopleMatch.offThreshold }
+        .sorted { $0.value > $1.value }
+        .prefix(3).map { ($0.key, $0.value) }
         // The clearest match goes straight into an empty name field.
         if trimmed.isEmpty, let best = soundsLike.first, best.score >= PeopleMatch.onThreshold { name = best.name }
     }

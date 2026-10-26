@@ -646,6 +646,16 @@ enum PeopleMatch {
     /// also adds the meeting to the person's voice (through VoiceGate): the
     /// people met again and again keep getting easier to find.
     static let learnBonus: Float = 0.05
+    /// A saved person on the meeting's calendar invite is named this much
+    /// under the bar: the invite says they were probably there. The margin
+    /// over the next person still applies, and learning still needs the
+    /// full bar plus `learnBonus`, so a voice is never trained on the head start.
+    static let inviteBonus: Float = 0.05
+    /// Naming the last speaker after the last invitee: invites of up to this
+    /// many other people (a bigger invite usually has no-shows), and only a
+    /// speaker who talked at least this long.
+    static let inviteFillMax = 3
+    static let inviteFillSeconds: Double = 20
     static let learnMinClips = 5
     /// Settings → People → Keep learning from meetings.
     static let keepLearningKey = "people.keepLearning"
@@ -658,8 +668,13 @@ enum PeopleMatch {
         }
     }
 
-    static func assign(_ clusters: [String: [[Float]]], people: [Person]) -> [String: Person] {
-        assess(clusters, people: people).compactMapValues { $0.accepted ? $0.person : nil }
+    static func assign(_ clusters: [String: [[Float]]], people: [Person], invited: Set<UUID> = []) -> [String: Person] {
+        assess(clusters, people: people, invited: invited).compactMapValues { $0.accepted ? $0.person : nil }
+    }
+
+    /// Saved people whose name is on the invite.
+    static func invited(_ attendees: [String], people: [Person]) -> Set<UUID> {
+        Set(people.filter { p in attendees.contains { MeetingContext.sameName($0, p.name) } }.map(\.id))
     }
 
     /// The closest person to one speaker, and whether the rule above names
@@ -676,7 +691,8 @@ enum PeopleMatch {
     }
 
     /// Every scored speaker's closest person, matched or not.
-    static func assess(_ clusters: [String: [[Float]]], people: [Person]) -> [String: Assessment] {
+    static func assess(_ clusters: [String: [[Float]]], people: [Person],
+                       invited: Set<UUID> = []) -> [String: Assessment] {
         let people = people.filter(\.hasVoice)
         guard !people.isEmpty else { return [:] }
         var out: [String: Assessment] = [:]
@@ -686,7 +702,8 @@ enum PeopleMatch {
             }.sorted { $0.1 > $1.1 }
             guard let best = ranked.first else { continue }
             let second = ranked.count > 1 ? ranked[1].1 : nil
-            let accepted = best.1 >= onThreshold
+            let bar = invited.contains(best.0.id) ? onThreshold - inviteBonus : onThreshold
+            let accepted = best.1 >= bar
                 && (second.map { best.1 - $0 >= margin } ?? true)
             out[key] = Assessment(person: best.0, score: best.1, runnerUp: second, accepted: accepted)
         }
@@ -901,6 +918,8 @@ enum PeopleNamer {
                 || $0.speakerName?.caseInsensitiveCompare(me) == .orderedSame
         }
         let time = PeopleVoice.speakingTime(segments)
+        // Who the calendar invite says was there (the user is not on this list).
+        let attendees = MeetingContext.decode(recording.meetingContextJSON)?.attendees ?? []
         let signature = segments.map { "\($0.speaker ?? "")@\($0.startSeconds)" }.joined(separator: ",")
         let model = VoiceModel.current
         do {
@@ -910,7 +929,8 @@ enum PeopleNamer {
             // embeddings are not comparable with the voices now saved.
             guard VoiceModel.current == model else { return 0 }
             // A speaker already carrying the person's name is not asked about.
-            let found = PeopleMatch.assess(clusters, people: people).filter { key, a in
+            let found = PeopleMatch.assess(clusters, people: people, invited: PeopleMatch.invited(attendees, people: people))
+                .filter { key, a in
                 a.accepted || (names[key] ?? nil)?.caseInsensitiveCompare(a.person.name) != .orderedSame
             }
             // The recording may have been deleted or re-run meanwhile: then
@@ -942,6 +962,21 @@ enum PeopleNamer {
             where (names[key] ?? nil) != person.name {
                 try repository.setSpeakerName(person.name, for: key, in: recording)
                 named += 1
+            }
+            // A small call where voices left exactly one speaker and exactly one
+            // invited person unaccounted for: that speaker is them. Named only,
+            // never learned from: no voice said so.
+            if (1...PeopleMatch.inviteFillMax).contains(attendees.count) {
+                var current = names.compactMapValues { $0 }.filter { !$0.value.isEmpty }
+                for (key, person) in matches { current[key] = person.name }
+                let missing = attendees.filter { a in !current.values.contains { MeetingContext.sameName($0, a) } }
+                let open = keys.filter { current[$0] == nil && (time[$0] ?? 0) >= PeopleMatch.inviteFillSeconds }
+                if missing.count == 1, open.count == 1, let key = open.first {
+                    let saved = now.values.first { MeetingContext.sameName($0.name, missing[0]) }
+                    try repository.setSpeakerName(saved?.name ?? missing[0], for: key, in: recording)
+                    named += 1
+                    AppLog.info("people", "named the one remaining speaker after the one remaining invitee")
+                }
             }
             // Clear matches teach the voice too: the same clips, no second read.
             var learned = 0

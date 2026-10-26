@@ -144,11 +144,15 @@ actor GemmaLiteRTBackend: ASRBackend {
         guard engineOnGPU, error is LiteRTLMError, let file = modelFile else { throw error }
         try Task.checkCancellation()
         AppLog.warn("litert", "GPU call failed (\(error.localizedDescription)) — retrying on CPU")
+        // release() during the retry must stay a release: no CPU engine kept
+        // and no GPU rebuild that would re-arm the gate on a dropped engine.
+        let gen = buildGeneration
         let cpu: Engine
         if let cpuEngine {
             cpu = cpuEngine
         } else {
             cpu = try await makeEngine(file: file, gpu: false)
+            guard buildGeneration == gen else { throw error }
             cpuEngine = cpu
             AppLog.info("litert", "CPU fallback engine ready")
         }
@@ -162,10 +166,10 @@ actor GemmaLiteRTBackend: ASRBackend {
         }
         do {
             let result = try await body(cpu)
-            await replaceFailedGPUEngine(file)
+            if buildGeneration == gen { await replaceFailedGPUEngine(file) }
             return result
         } catch {
-            await replaceFailedGPUEngine(file)
+            if buildGeneration == gen { await replaceFailedGPUEngine(file) }
             throw error
         }
     }

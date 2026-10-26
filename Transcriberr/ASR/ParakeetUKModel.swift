@@ -329,17 +329,23 @@ enum ParakeetUKModel {
         do {
             let latest = try await fetchLatest()
             let current = manifest(at: modelDirectory)
-            if current?.revision == latest.revision { return .upToDate }
+            let fm = FileManager.default
+            // Up to date: a release waiting from an earlier check is no longer
+            // `main` (it was reverted) and must not take over at the next launch.
+            if current?.revision == latest.revision {
+                try? fm.removeItem(at: pendingDirectory)
+                return .upToDate
+            }
             if let current, current.sameFiles(as: latest) {
                 // Only the model card changed: note the new commit, fetch nothing.
                 try JSONEncoder().encode(Manifest(revision: latest.revision, files: current.files))
                     .write(to: modelDirectory.appendingPathComponent(manifestName), options: .atomic)
+                try? fm.removeItem(at: pendingDirectory)
                 return .upToDate
             }
             if manifest(at: pendingDirectory)?.revision == latest.revision, isInstalled(at: pendingDirectory) {
                 return .downloaded(latest.revision)
             }
-            let fm = FileManager.default
             // Files of an older half-finished update are not this release's.
             if let partial = manifest(at: updateStagingDirectory), partial.revision != latest.revision {
                 try? fm.removeItem(at: updateStagingDirectory)

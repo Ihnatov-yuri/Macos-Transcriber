@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.1.0
+- Echo from the MacBook speakers is handled with your voice print. After a meeting, where the voice print says it is you, your words are never muted, including the start of a sentence; where it is clearly someone else's voice coming back through the speakers, the echo stays out. On the test calls about half the echo bursts are gone and fewer of your sentence starts are cut off. The voice print has to be enrolled, and it only applies to meetings transcribed from now on.
+- New, off by default: the Transcriberr Microphone for calls (Settings → Audio Input). Transcriberr runs Apple's echo filter on your microphone and gives the cleaned sound to Teams, Meet or Zoom through its own microphone device, so the call and the recording both get echo-free audio without the two apps fighting over the mic. It needs a small audio driver, installed once from Settings with your admin password, and the call app's microphone set to "Transcriberr Microphone". If Transcriberr quits, the device goes away and the call app falls back to another microphone; quitting during a call asks first.
+- The Settings window opened from the menu is readable again when macOS is in dark mode.
+
 ## 5.0.7
 - The echo filter in meetings is off by default. With the call on the MacBook speakers it could silence your microphone in Teams, so the other people could not hear you, and the recording lost your voice as well. It can still be turned on in Settings, which now says what it can do to the call.
 - When the echo filter is on and you connect AirPods or other headphones during a meeting, it now turns off for the rest of the recording instead of starting again.

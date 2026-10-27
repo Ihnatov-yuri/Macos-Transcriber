@@ -116,7 +116,12 @@ on and the driver is installed:
   gives the same -180 dBFS). Run the CLI as its own process so macOS asks
   for it: `launchctl submit -l nl.ihnatov.vmprobe -o out.txt -- <abs path>/transcriberrcli virtualmic 3`
   (then `launchctl remove nl.ihnatov.vmprobe`), signed with the identifier
-  requirement `package.sh` uses.
+  requirement `package.sh` uses. Remove the job as soon as `out.txt` has a
+  PASS or FAIL line: a `launchctl submit` job is kept alive, so launchd
+  starts the probe again every time it exits (seen 2026-10-27: 20 runs in a
+  few minutes). The first run asks for microphone permission for
+  `transcriberrcli`; until it is answered every run fails with
+  `mic start 268451843`.
 
 Results 2026-10-27 (MacBook Pro speakers, Transcriberr 5.0.7 running):
 tone back bit-exact (difference -180 dBFS, no silent samples), feed to

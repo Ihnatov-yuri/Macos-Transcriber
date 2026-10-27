@@ -91,7 +91,8 @@ final class BenchmarkTests: XCTestCase {
         let id = UUID()
         var s = Benchmark.Source(segmentId: id, recordingId: UUID(), recordingTitle: "q", audioPath: wav.path,
                                  language: "English", speaker: nil, start: 1, end: 2, text: "edit one", engine: nil)
-        async let a = Benchmark.record(s, machine: "engine text", in: dir)
+        let firstEdit = s
+        async let a = Benchmark.record(firstEdit, machine: "engine text", in: dir)
         s.text = "edit two"
         let first = await a
         let second = await Benchmark.record(s, machine: "edit one", in: dir)

@@ -1,4 +1,5 @@
 import XCTest
+import Synchronization
 @testable import Transcriberr
 
 /// Backend fixes that need no model: speaker numbering shared by Parakeet
@@ -51,13 +52,13 @@ final class LiteRTIdleReleaseTests: XCTestCase {
     func testIdleReleaseWaitsForTheQueue() async {
         let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore())
         let first = factory.backend(for: .gemmaLiteRT) as AnyObject
-        var queueBusy = true
-        factory.liteRTReleaseAllowed = { !queueBusy }
+        let queueBusy = Mutex(true)
+        factory.liteRTReleaseAllowed = { !queueBusy.withLock { $0 } }
 
         await factory.releaseLiteRTIfQuiet()
         XCTAssertTrue(factory.backend(for: .gemmaLiteRT) as AnyObject === first, "kept while a job runs")
 
-        queueBusy = false
+        queueBusy.withLock { $0 = false }
         await factory.releaseLiteRTIfQuiet()
         XCTAssertFalse(factory.backend(for: .gemmaLiteRT) as AnyObject === first, "released once the queue is idle")
     }

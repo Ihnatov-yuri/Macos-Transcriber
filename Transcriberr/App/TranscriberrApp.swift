@@ -87,6 +87,11 @@ struct TranscriberrApp: App {
                 // the store here that sheet had no container to read.
                 .modelContainer(container.modelContainer)
                 .frame(minWidth: 560, minHeight: 480)
+                // The palette is light-only, like the main window's: left to
+                // follow a dark system appearance, this window drew dark
+                // grey and dark red text on a dark background.
+                .background(AppColor.base.ignoresSafeArea())
+                .preferredColorScheme(.light)
         }
     }
 

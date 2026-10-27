@@ -34,9 +34,13 @@ struct YouDashboard: View {
                         Text(summary).font(AppFont.text(14)).foregroundStyle(AppColor.ink2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if loaded && meetings.isEmpty {
+                    if !loaded {
+                        // Measured in the background (under a second).
+                        Text("Measuring your meetings…")
+                            .font(AppFont.text(13)).foregroundStyle(AppColor.ink3)
+                    } else if meetings.isEmpty {
                         emptyCard
-                    } else if !meetings.isEmpty {
+                    } else {
                         goalsCard
                         if !state.notes.isEmpty { notesCard }
                         metricsCard

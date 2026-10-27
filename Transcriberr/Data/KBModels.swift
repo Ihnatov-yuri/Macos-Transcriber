@@ -22,6 +22,18 @@ struct KBRecordingSummary: Codable {
     /// Preset ids with a stored OutputDoc ("summary", "minutes", …) — tells
     /// the caller what kb_get_outputs will yield without another round trip.
     let outputPresets: [String]
+    /// The calendar invite the recording was matched to, nil when none was.
+    let meeting: KBMeeting?
+}
+
+/// One invite per recording: with overlapping events the transcription run
+/// keeps the one that covers the recording longest (MeetingContext.lookup).
+struct KBMeeting: Codable {
+    let title: String
+    let start: String           // ISO8601
+    let end: String             // ISO8601
+    /// The other people invited, the user left out.
+    let attendees: [String]
 }
 
 struct KBSegment: Codable {
@@ -139,7 +151,14 @@ enum KBRender {
         if !r.outputPresets.isEmpty {
             bits.append("outputs: \(r.outputPresets.joined(separator: ", "))")
         }
+        if let m = r.meeting { bits.append("meeting: \(m.title)") }
         return bits.joined(separator: " · ")
+    }
+
+    static func meetingLine(_ m: KBMeeting) -> String {
+        var out = "Meeting: **\(m.title)** (\(m.start) → \(m.end))"
+        if !m.attendees.isEmpty { out += " · with \(m.attendees.joined(separator: ", "))" }
+        return out
     }
 
     static func markdownList(_ rows: [KBRecordingSummary]) -> String {
@@ -149,7 +168,9 @@ enum KBRender {
     }
 
     static func markdown(_ t: KBTranscript, timestamps: Bool = true) -> String {
-        var out = "## \(t.recording.title)\n\(headerLine(t.recording))\n\n"
+        var out = "## \(t.recording.title)\n\(headerLine(t.recording))\n"
+        if let m = t.recording.meeting { out += meetingLine(m) + "\n" }
+        out += "\n"
         out += t.segments.map { line($0, timestamps: timestamps) }.joined(separator: "\n")
         out += "\n\n" + paginationFooter(t)
         return out

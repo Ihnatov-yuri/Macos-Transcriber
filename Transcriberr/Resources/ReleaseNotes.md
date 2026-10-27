@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.0.6
+- The knowledge base tools (MCP and transcriberrcli kb) now say which calendar meeting a recording was matched to: its title, start and end time, and who else was invited.
+- transcriberrcli keeps its Documents folder permission across updates, so macOS asks once instead of after every new build.
+
 ## 5.0.5
 - When the GPU is busy and the text engine moves to the CPU, it now uses about 9 GB instead of growing past 100 GB, which could make the whole Mac swap. A request too long for the CPU engine fails with a message and is tried on the GPU again next time.
 - ⌘⌫ in a text field deletes to the start of the line again. Choosing Delete Recording… from the menu still deletes the selected recording.

@@ -258,7 +258,8 @@ final class MCPServer {
             "name": "kb_list",
             "description": "List recordings in the Transcriberr knowledge base, newest first. "
                 + "Each row shows the id prefix, title, date, duration, folder, tags, and which "
-                + "generated outputs (summary/minutes/…) exist. Filter by folder, tag, or recency.",
+                + "generated outputs (summary/minutes/…) exist, plus the title of the calendar meeting it was "
+                + "matched to, if any. Filter by folder, tag, or recency.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
@@ -288,7 +289,8 @@ final class MCPServer {
         [
             "name": "kb_get_transcript",
             "description": "Read a recording's transcript with speaker names and timestamps. "
-                + "Paginated (default 200 segments per call — the footer says how to fetch more) and "
+                + "The header names the calendar meeting the recording was matched to (title, time, "
+                + "other attendees), if any. Paginated (default 200 segments per call — the footer says how to fetch more) and "
                 + "sliceable by time range. Ids are accepted as unique prefixes (≥4 chars). "
                 + "Transcripts can be long: prefer kb_get_outputs (stored summaries) when a summary suffices.",
             "inputSchema": [

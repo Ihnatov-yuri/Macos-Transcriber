@@ -115,7 +115,11 @@ struct KBService {
             folder: rec.folder?.name,
             tags: rec.tags.map(\.name).sorted(),
             segmentCount: rec.segments.count,
-            outputPresets: rec.outputs.map(\.presetId).sorted()
+            outputPresets: rec.outputs.map(\.presetId).sorted(),
+            meeting: MeetingContext.decode(rec.meetingContextJSON).map {
+                KBMeeting(title: $0.title, start: Self.iso.string(from: $0.start),
+                          end: Self.iso.string(from: $0.end), attendees: $0.attendees)
+            }
         )
     }
 

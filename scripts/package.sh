@@ -33,3 +33,17 @@ else
   codesign --force -s "$SIGN" "${HARDEN[@]}" "$APP"
 fi
 codesign --verify --deep "$APP" && echo "signed OK: $APP"
+# The CLI (MCP server) built next to the app gets the same stable requirement:
+# with the default cdhash requirement every rebuild re-asked for Documents
+# access. No hardened runtime here — it would turn on library validation and
+# refuse the Google-signed LiteRT dylib loaded from @executable_path.
+CLI="$(dirname "$APP")/transcriberrcli"
+if [ -f "$CLI" ]; then
+  if [ "$SIGN" = "-" ]; then
+    CLI_ID="nl.ihnatov.TranscriberrCLI"
+    codesign --force -s - -i "$CLI_ID" -r="designated => identifier \"$CLI_ID\"" "$CLI"
+  else
+    codesign --force -s "$SIGN" "$CLI"
+  fi
+  codesign --verify "$CLI" && echo "signed OK: $CLI"
+fi

@@ -32,6 +32,10 @@ final class KBServiceTests: XCTestCase {
         let rec = Recording(title: "Standup Meeting", audioPath: "/tmp/a.wav",
                             createdAtMillis: 1_700_000_000_000, durationSeconds: 65)
         rec.sourceLanguage = "en"
+        rec.meetingContextJSON = MeetingContext.encode(MeetingContext(
+            title: "Daily standup", attendees: ["Kees van Dijk"], emails: ["kees@example.com"],
+            inviteTerms: [], start: Date(timeIntervalSince1970: 1_700_000_000),
+            end: Date(timeIntervalSince1970: 1_700_000_900)))
         try repo.save(rec)
         recID = rec.id
         try repo.appendSegments([
@@ -122,6 +126,18 @@ final class KBServiceTests: XCTestCase {
         let sliced = try kb.transcript(id: recID.uuidString,
                                        startSeconds: 6, endSeconds: 12)
         XCTAssertEqual(sliced.segments.count, 2, "overlapping window")
+    }
+
+    func testMeetingIsReported() throws {
+        let kb = try openKB()
+        let t = try kb.transcript(id: recID.uuidString)
+        let m = try XCTUnwrap(t.recording.meeting)
+        XCTAssertEqual(m.title, "Daily standup")
+        XCTAssertEqual(m.attendees, ["Kees van Dijk"])
+        XCTAssertEqual(m.start, "2023-11-14T22:13:20Z")
+        XCTAssertTrue(KBRender.markdown(t).contains("Meeting: **Daily standup**"))
+        XCTAssertTrue(KBRender.markdownList(try kb.list()).contains("meeting: Daily standup"))
+        XCTAssertNil(try kb.list().first { $0.title == "Trip Notes" }?.meeting)
     }
 
     func testResolvePrefixAndAmbiguity() throws {

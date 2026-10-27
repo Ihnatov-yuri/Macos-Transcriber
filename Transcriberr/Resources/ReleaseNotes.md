@@ -6,6 +6,13 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.1.2
+- "Merge with…" opens a picker instead of a menu of every title: the recordings closest in time come first, each with its date, its distance from this one and its length, and you can search. Return only merges a recording you picked.
+- With the Transcriberr Microphone on, recording a meeting no longer turns on Apple's echo filter by itself; it only shares the filter a call on the Transcriberr Microphone already uses. A call app still set to your Mac's microphone keeps working.
+- If a call starts using the Transcriberr Microphone while a meeting records with its own echo filter, the call gets your plain microphone until the recording ends, instead of a second filter on the same mic.
+- Sound you play from Transcriberr during a call stays in the recording again when the Transcriberr Microphone is off.
+- Stopping a transcription while it removes echo stops it straight away.
+
 ## 5.1.1
 - When no microphone is chosen in Transcriberr, the Transcriberr Microphone now opens the system default the usual way. It used to ask for that microphone by name, which some USB microphones (a webcam's, for one) refused, and it then fell back to the default anyway.
 

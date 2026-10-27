@@ -5,6 +5,7 @@ import AppKit
 @main
 struct TranscriberrApp: App {
     @State private var container: AppContainer
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
         FontLoader.registerBundledFonts()
@@ -17,6 +18,9 @@ struct TranscriberrApp: App {
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
         ) { _ in BackupService.flush() }
         _container = State(initialValue: AppContainer())
+        // The Transcriberr Microphone, when it is on: calls can use it from
+        // launch, not only once a meeting records.
+        if !AppContainer.isTestHost { VirtualMicrophone.shared.refresh() }
     }
 
     var body: some Scene {
@@ -165,5 +169,24 @@ struct TranscriberrApp: App {
             NSApplication.AboutPanelOptionKey(rawValue: "Copyright"):
                 "© 2026 Yuri Ihnatov · PolyForm Noncommercial 1.0.0",
         ])
+    }
+}
+
+/// Quit with a call on the Transcriberr Microphone: the call's mic goes
+/// away with us (the device disappears and the call app picks another mic,
+/// or none), so ask first.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard VirtualMicrophone.shared.isInUseByCall else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "A call is using the Transcriberr Microphone"
+        alert.informativeText = "If you quit, the microphone disappears from the call. Most call apps then switch to your Mac's microphone without the echo filter; some go silent until you pick a microphone again."
+        alert.addButton(withTitle: "Quit Anyway")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        VirtualMicrophone.shared.shutdown()
     }
 }

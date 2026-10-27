@@ -43,6 +43,8 @@ nonisolated enum AudioInputDevices {
     // MARK: - Enumeration
 
     /// Every device with at least one input channel, in CoreAudio's order.
+    /// Never the Transcriberr Microphone: it carries our own mic, so
+    /// capturing from it would be the device feeding itself.
     static func available() -> [Device] {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
@@ -55,7 +57,9 @@ nonisolated enum AudioInputDevices {
         var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
                                          &addr, 0, nil, &size, &ids) == noErr else { return [] }
-        return ids.compactMap { device(for: $0) }.filter { $0.inputChannels > 0 }.map(\.device)
+        return ids.compactMap { device(for: $0) }
+            .filter { $0.inputChannels > 0 && $0.device.uid != VirtualMicrophone.micUID }
+            .map(\.device)
     }
 
     /// Real microphones: hardware that captures sound. What a "which mic"
@@ -73,7 +77,21 @@ nonisolated enum AudioInputDevices {
         return available().first { $0.uid == uid }
     }
 
-    /// The current system default input.
+    private static func rawSystemDefaultID() -> AudioObjectID {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var id = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
+        return id
+    }
+
+    /// The current system default input. When the user made the
+    /// Transcriberr Microphone the default (so call apps set to "default"
+    /// use it), the real microphone behind it: the built-in one, else the
+    /// first other microphone.
     static func systemDefault() -> Device? {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
@@ -84,7 +102,10 @@ nonisolated enum AudioInputDevices {
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
                                          &addr, 0, nil, &size, &id) == noErr,
               id != AudioObjectID(kAudioObjectUnknown) else { return nil }
-        return device(for: id)?.device
+        guard let found = device(for: id)?.device else { return nil }
+        guard found.uid == VirtualMicrophone.micUID else { return found }
+        let mics = microphones()
+        return mics.first { transportType($0.id) == kAudioDeviceTransportTypeBuiltIn } ?? mics.first
     }
 
     /// The device capture will actually use: the stored choice when it is
@@ -158,7 +179,11 @@ nonisolated enum AudioInputDevices {
     /// default we meant.
     private static func followSystemDefault(_ engine: AVAudioEngine) -> Device? {
         let fallback = systemDefault()
-        guard wasPinned(engine) else { return fallback }
+        // Left alone, the engine opens the real default — which may be the
+        // Transcriberr Microphone (the user made it the default for calls).
+        // `systemDefault` already named the mic behind it; bind to that.
+        let defaultIsOurs = fallback.map { $0.id != rawSystemDefaultID() } ?? false
+        guard wasPinned(engine) || defaultIsOurs else { return fallback }
         if let fallback,
            (try? engine.outputNode.auAudioUnit.setDeviceID(fallback.id)) != nil
             || (try? engine.inputNode.auAudioUnit.setDeviceID(fallback.id)) != nil {

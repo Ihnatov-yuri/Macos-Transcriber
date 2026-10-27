@@ -47,7 +47,8 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
     private var released = false   // under `controlLock`
     /// Set (under `lock`) once the unit was let go mid-recording because the
     /// output moved to headphones: `pull` then hands back the raw mic at
-    /// once, without the "stopped delivering" warning.
+    /// once, without the "stopped delivering" warning. A `keepsMicOnHeadphones`
+    /// unit sets it while voice processing is off, and clears it again.
     private var retired = false
     private var underruns = 0
     private var dropped = 0
@@ -58,6 +59,23 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
     private var largestPush = 0
     private var configObserver: NSObjectProtocol?
 
+    /// Where else the mic goes: the Transcriberr Microphone's feed
+    /// (`VirtualMicrophone`). Called on the engine's IO thread with every
+    /// render cycle (~10 ms, far less latency than the tap's ~100 ms
+    /// deliveries) and the samples' rate. Set before `start`.
+    var feed: (@Sendable (UnsafeBufferPointer<Float>, Double) -> Void)?
+    /// A call takes its microphone from this unit (the virtual microphone),
+    /// so it must never just let the mic go. A switch to headphones turns
+    /// voice processing off on the same engine instead (no echo to remove,
+    /// no duck on other apps; the feed carries the raw mic), and a switch
+    /// back to speakers turns it on again. Set before `start`.
+    var keepsMicOnHeadphones = false
+    private var sink: AVAudioSinkNode?
+    /// The first channel of an interleaved render cycle, copied out.
+    private let sinkScratch = UnsafeMutablePointer<Float>.allocate(capacity: 16_384)
+
+    deinit { sinkScratch.deallocate() }
+
     /// Jitter cushion kept in the FIFO (at least one tap delivery), and the
     /// most it may hold before the oldest samples are dropped (drift
     /// between the two devices).
@@ -66,8 +84,9 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
 
     /// Bring the unit up on the chosen microphone (~1 s). False when macOS
     /// refuses it; the unit is then already gone and the caller records the
-    /// raw mic as before.
-    func start(inputUID: String?) -> Bool {
+    /// raw mic as before. `voiceProcessing: false` (a `keepsMicOnHeadphones`
+    /// unit starting on headphones) runs the same engine on the raw mic.
+    func start(inputUID: String?, voiceProcessing: Bool = true) -> Bool {
         let t0 = Date()
         AudioInputDevices.apply(uid: inputUID, to: engine)
         var input: AVAudioInputNode?
@@ -75,7 +94,9 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
         do {
             try ExceptionTrap.run {
                 let node = self.engine.inputNode
-                do { try node.setVoiceProcessingEnabled(true) } catch { failure = error.localizedDescription }
+                if voiceProcessing {
+                    do { try node.setVoiceProcessingEnabled(true) } catch { failure = error.localizedDescription }
+                }
                 input = node
             }
         } catch {
@@ -86,8 +107,12 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
             release()
             return false
         }
-        input.voiceProcessingOtherAudioDuckingConfiguration = .init(
-            enableAdvancedDucking: false, duckingLevel: .min)
+        if voiceProcessing {
+            input.voiceProcessingOtherAudioDuckingConfiguration = .init(
+                enableAdvancedDucking: false, duckingLevel: .min)
+        } else {
+            lock.lock(); retired = true; lock.unlock()
+        }
         let sourceRate: Double
         do {
             sourceRate = try installTap(on: input)
@@ -104,7 +129,8 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { [weak self] _ in self?.restartAfterConfigurationChange() }
-        AppLog.info("meeting", String(format: "echo filter on (Apple voice processing, %.0f Hz) in %.2fs",
+        AppLog.info("meeting", String(format: "%@ (%.0f Hz) in %.2fs",
+                                      voiceProcessing ? "echo filter on (Apple voice processing)" : "raw mic on (headphones)",
                                       sourceRate, Date().timeIntervalSince(t0)))
         return true
     }
@@ -131,7 +157,47 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
                 self?.push(UnsafeBufferPointer(start: p, count: Int(buf.frameLength)), sourceRate: sourceRate)
             }
         }
+        if let feed { try connectSink(from: input, format: format, feed: feed) }
         return sourceRate
+    }
+
+    /// Hand every render cycle's first channel to `feed`. A new sink per
+    /// format: the rate it reports is fixed when it is made.
+    private func connectSink(from input: AVAudioInputNode, format: AVAudioFormat,
+                             feed: @escaping @Sendable (UnsafeBufferPointer<Float>, Double) -> Void) throws {
+        let rate = format.sampleRate
+        let scratch = sinkScratch
+        let node = AVAudioSinkNode { _, frames, abl in
+            let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: abl))
+            guard let first = list.first, let data = first.mData else { return noErr }
+            let n = min(Int(frames), 16_384)
+            let stride = max(1, Int(first.mNumberChannels))
+            let p = data.assumingMemoryBound(to: Float.self)
+            if stride == 1 {
+                feed(UnsafeBufferPointer(start: p, count: n), rate)
+            } else {
+                for i in 0..<n { scratch[i] = p[i * stride] }
+                feed(UnsafeBufferPointer(start: scratch, count: n), rate)
+            }
+            return noErr
+        }
+        try ExceptionTrap.run {
+            if let old = self.sink { self.engine.detach(old) }
+            self.engine.attach(node)
+            self.engine.connect(input, to: node, format: format)
+        }
+        sink = node
+    }
+
+    /// The recorder is done with this unit but the call still uses it (the
+    /// virtual microphone): stop filling the recorder's FIFO.
+    func detachRecorder() {
+        lock.lock(); defer { lock.unlock() }
+        targetRate = 0
+        fifo.removeAll(keepingCapacity: true)
+        head = 0
+        primed = false
+        converter = nil
     }
 
     /// The rate the recorder's IO callback runs at. Known only once the
@@ -240,6 +306,10 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
         controlLock.lock(); defer { controlLock.unlock() }
         guard !released else { return }
         let route = Self.outputRoute()
+        if keepsMicOnHeadphones {
+            followRoute(route)
+            return
+        }
         if route.headphones {
             releaseLocked()
             lock.lock(); retired = true; lock.unlock()
@@ -259,10 +329,54 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
         }
     }
 
+    /// `restartAfterConfigurationChange` for a unit a call depends on:
+    /// voice processing on for speakers, off for headphones, and the engine
+    /// running again either way (under `controlLock`).
+    private func followRoute(_ route: (name: String, headphones: Bool)) {
+        let wantProcessing = !route.headphones
+        do {
+            let input = engine.inputNode
+            var isProcessing = false
+            try ExceptionTrap.run { isProcessing = input.isVoiceProcessingEnabled }
+            if isProcessing == wantProcessing && engine.isRunning { return }
+            if isProcessing != wantProcessing {
+                var toggleError: Error?
+                try ExceptionTrap.run {
+                    self.engine.stop()
+                    do { try input.setVoiceProcessingEnabled(wantProcessing) } catch { toggleError = error }
+                }
+                if let toggleError { throw toggleError }
+                if wantProcessing {
+                    input.voiceProcessingOtherAudioDuckingConfiguration = .init(
+                        enableAdvancedDucking: false, duckingLevel: .min)
+                }
+                lock.lock()
+                retired = !wantProcessing
+                fifo.removeAll(keepingCapacity: true)
+                head = 0
+                primed = false
+                converter = nil
+                lock.unlock()
+                AppLog.info("meeting", wantProcessing
+                    ? "echo filter on again — output '\(route.name)' is speakers"
+                    : "echo filter off — output '\(route.name)' is headphones; the call keeps the raw mic")
+            }
+            let rate = try installTap(on: input)
+            var startError: Error?
+            try ExceptionTrap.run {
+                do { try self.engine.start() } catch { startError = error }
+            }
+            if let startError { throw startError }
+            AppLog.info("meeting", String(format: "mic engine restarted after a route change (%.0f Hz)", rate))
+        } catch {
+            AppLog.warn("meeting", "mic engine restart after a route change failed: \(error.localizedDescription)")
+        }
+    }
+
     /// Internal (not private) for the FIFO tests.
     func push(_ samples: UnsafeBufferPointer<Float>, sourceRate: Double) {
         lock.lock(); defer { lock.unlock() }
-        guard targetRate > 0 else { return }
+        guard targetRate > 0, !retired else { return }
         lastPush = Date()
         if stalled {
             stalled = false

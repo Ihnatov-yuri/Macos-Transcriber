@@ -41,6 +41,7 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
         static let micSensitivity = "recorder.micSensitivity"
         static let inputDeviceUID = "recorder.inputDeviceUID"
         static let meetingEchoFilter = "recorder.meetingEchoFilter"
+        static let virtualMicrophone = "recorder.virtualMicrophone"
     }
 
     /// Input sensitivity for transcription. Default `.auto`.
@@ -77,6 +78,15 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
         didSet { defaults.set(meetingEchoFilter, forKey: Key.meetingEchoFilter) }
     }
 
+    /// The Transcriberr Microphone: Apple's echo filter on the real mic,
+    /// passed to the call app through our virtual input device, and used
+    /// for the meeting recording's mic too (see `VirtualMicrophone`). Needs
+    /// the driver installed and the call app's microphone set to the
+    /// device. Off by default. When on, it replaces `meetingEchoFilter`.
+    var virtualMicrophone: Bool {
+        didSet { defaults.set(virtualMicrophone, forKey: Key.virtualMicrophone) }
+    }
+
     /// Run the same noise-suppression pass over *imported* files during
     /// decode. Slower (offline-renders the file once) but worthwhile for
     /// dirty source material.
@@ -90,6 +100,7 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
         noiseSuppression = (defaults.object(forKey: Key.noiseSuppression) as? Bool) ?? false
         preprocessImports = (defaults.object(forKey: Key.preprocessImports) as? Bool) ?? false
         meetingEchoFilter = (defaults.object(forKey: Key.meetingEchoFilter) as? Bool) ?? false
+        virtualMicrophone = (defaults.object(forKey: Key.virtualMicrophone) as? Bool) ?? false
         inputDeviceUID = defaults.string(forKey: Key.inputDeviceUID)
         micSensitivity = (defaults.string(forKey: Key.micSensitivity)
             .flatMap(MicSensitivity.init(rawValue:))) ?? .auto

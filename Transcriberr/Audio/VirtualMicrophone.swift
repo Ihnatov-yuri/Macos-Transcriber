@@ -205,13 +205,18 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         let vp = VoiceProcessedMic()
         vp.keepsMicOnHeadphones = true
         vp.feed = { [weak self] samples, rate in self?.deliver(samples, rate: rate) }
-        // Always an explicit real mic: left to "the system default" the
-        // engine would open the Transcriberr Microphone itself if the user
-        // made it the default — the device feeding itself.
-        let mic = AudioInputDevices.effective(uid: RecorderSettings.shared.inputDeviceUID)
+        // Only the user's own choice is selected explicitly. Following the
+        // system default goes through `AudioInputDevices.apply(uid: nil)`,
+        // which binds to the real mic behind the Transcriberr Microphone
+        // when the user made that the default (the device must never feed
+        // itself). Naming the default device explicitly instead failed on a
+        // USB webcam mic with voice processing (-10851, 2026-10-27) and fell
+        // back to the default anyway.
+        let chosen = RecorderSettings.shared.inputDeviceUID
+        let mic = AudioInputDevices.effective(uid: chosen)
         let why = recordingHolds > 0 ? "a meeting records" : "a call uses '\(Self.micName)'"
         AppLog.info("virtual-mic", "\(why) — starting the mic on '\(mic?.name ?? "default")', output '\(route.name)'")
-        if vp.start(inputUID: mic?.uid, voiceProcessing: !route.headphones) {
+        if vp.start(inputUID: chosen, voiceProcessing: !route.headphones) {
             unit = vp
         } else {
             AppLog.warn("virtual-mic", "mic engine would not start — '\(Self.micName)' carries silence")

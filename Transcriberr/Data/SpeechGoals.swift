@@ -45,6 +45,8 @@ enum GoalJudge {
     struct Verdict: Equatable {
         /// Newest first, since the goal was last revised.
         var values: [Double]
+        /// When each of `values` was measured, same order.
+        var dates: [Date] = []
         var hits: Int
         var achieved: Bool
         var stale: Bool
@@ -52,16 +54,17 @@ enum GoalJudge {
     }
 
     static func judge(_ goal: SpeechGoal, meetings: [MeetingSpeech], now: Date = Date()) -> Verdict {
-        let values = meetings
+        let measured = meetings
             .filter { $0.date > goal.revised && (goal.language == nil || $0.language == goal.language) }
             .sorted { $0.date > $1.date }
-            .compactMap { $0.value(goal.metric) }
+            .compactMap { m in m.value(goal.metric).map { (m.date, $0) } }
+        let values = measured.map(\.1)
         let recent = values.prefix(window)
         let hits = recent.filter(goal.meets).count
         let achieved = values.count >= hitsNeeded && hits >= hitsNeeded
         let days = now.timeIntervalSince(goal.revised) / 86_400
         let stale = !achieved && (values.count >= staleMeetings || (days >= staleDays && !values.isEmpty))
-        return Verdict(values: values, hits: hits, achieved: achieved, stale: stale)
+        return Verdict(values: values, dates: measured.map(\.0), hits: hits, achieved: achieved, stale: stale)
     }
 }
 

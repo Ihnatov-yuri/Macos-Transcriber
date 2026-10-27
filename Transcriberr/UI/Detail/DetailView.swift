@@ -9,6 +9,9 @@ struct DetailView: View {
     var startAt: Double? = nil
     /// A person whose lines are marked (opened from their page).
     var focusName: String? = nil
+    /// The Library search that found this recording: its words are marked
+    /// in the transcript.
+    var searchQuery: String = ""
     @State private var focus: String?
     @Environment(AppContainer.self) private var container
     @Query(sort: \Folder.sortOrder) private var allFolders: [Folder]
@@ -1071,7 +1074,8 @@ struct DetailView: View {
                     SpeakerPalette.colors[(order.firstIndex(of: key) ?? 0) % SpeakerPalette.colors.count]
                 },
                 focusName: focus,
-                onClearFocus: { focus = nil }
+                onClearFocus: { focus = nil },
+                searchQuery: searchQuery
             )
         case .output(let presetId, _):
             // Its own identity per preset and recording: History open on
@@ -1272,6 +1276,20 @@ struct TranscriptPane: View {
     /// A person whose lines are marked, with a bar to step through them.
     var focusName: String? = nil
     var onClearFocus: () -> Void = {}
+    /// The Library search that found this recording: its matches are
+    /// marked, the first one is scrolled to, and a bar steps through them.
+    var searchQuery: String = ""
+    /// Lines that contain the search, in order (computed once per query
+    /// and text, not on every playhead tick).
+    @State private var searchHits: [UUID] = []
+    @State private var searchPosition = 0
+    @State private var searchTarget: UUID?
+    /// The query the user hid the marks for.
+    @State private var hiddenQuery: String?
+    private var activeQuery: String {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return q == hiddenQuery ? "" : q
+    }
 
     private func isFocused(_ seg: Segment) -> Bool {
         guard let focusName else { return false }
@@ -1402,6 +1420,10 @@ struct TranscriptPane: View {
                 focusBar(focusName, starts: segs.filter(isFocused).map(\.startSeconds))
                 HairlineSoft()
             }
+            if !activeQuery.isEmpty {
+                searchBar(activeQuery)
+                HairlineSoft()
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -1426,6 +1448,21 @@ struct TranscriptPane: View {
                     nearBottom = isNear
                 }
                 .task(id: disputeKey(segs)) { disputeRows = disputeHits(in: sortedSegments) }
+                .task(id: SearchKey(query: activeQuery, texts: disputeKey(segs).texts)) {
+                    let q = activeQuery
+                    let hits = q.isEmpty ? [] : sortedSegments.filter { SearchHighlight.matches(q, style.apply($0.text)) }.map(\.id)
+                    let first = hits.first != searchHits.first || searchHits.isEmpty
+                    searchHits = hits
+                    if first {
+                        searchPosition = 0
+                        searchTarget = hits.first
+                    }
+                }
+                .onChange(of: searchTarget) { _, target in
+                    // First match on open, then Previous / Next.
+                    guard let target else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(target, anchor: .center) }
+                }
                 .onChange(of: tailID(in: segs)) { _, new in
                     // New chunk arrived → follow, but ONLY if the user is
                     // already at the bottom, and without animation — an
@@ -1466,11 +1503,16 @@ struct TranscriptPane: View {
     /// underline, and a link that switches the word to the other reading.
     private func segmentText(_ seg: Segment, disputes: DisputeRow?) -> Text {
         let shown = style.apply(seg.text)
-        // Stale cache (the text changed since the scan): plain text this
-        // frame; the scan re-runs because the key changed.
-        guard let disputes, disputes.text == shown, !disputes.hits.isEmpty else { return Text(shown) }
-        let hits = disputes.hits
+        let found = activeQuery.isEmpty ? [] : SearchHighlight.ranges(of: activeQuery, in: shown)
+        // Stale cache (the text changed since the scan): no dispute marks
+        // this frame; the scan re-runs because the key changed.
+        let hits = (disputes.map { $0.text == shown } ?? false) ? disputes!.hits : []
+        guard !hits.isEmpty || !found.isEmpty else { return Text(shown) }
         var attr = AttributedString(shown)
+        for r in found {
+            guard let range = Range(r, in: attr) else { continue }
+            attr[range].backgroundColor = AppColor.accent.opacity(0.28)
+        }
         for hit in hits {
             guard let r = Range(hit.range, in: attr),
                   let url = URL(string: "transcriberr-dispute:\(hit.index)") else { continue }
@@ -1577,6 +1619,45 @@ struct TranscriptPane: View {
         .padding(.horizontal, AppMetric.sheetPadding)
         .padding(.vertical, 6)
         .background(AppColor.base)
+    }
+
+    private struct SearchKey: Hashable { let query: String; let texts: [Int] }
+
+    private func searchBar(_ query: String) -> some View {
+        let count = searchHits.count
+        return HStack(spacing: AppMetric.m) {
+            Rectangle().fill(AppColor.accent).frame(width: 3, height: 14)
+            Text(count == 0 ? "No line here contains “\(query)”"
+                 : "“\(query)” in \(count == 1 ? "1 line" : "\(count) lines")").uiLabel(10)
+            if count > 1 {
+                Text("\(searchPosition + 1) of \(count)").uiLabel(9, color: AppColor.ink3)
+            }
+            Spacer()
+            TapButton { stepSearch(forward: false) } label: {
+                LitButtonChrome(.ghost, compact: true) { Text("Previous") }
+            }
+            .disabled(count < 2)
+            TapButton { stepSearch(forward: true) } label: {
+                LitButtonChrome(.ghost, compact: true) { Text("Next") }
+            }
+            .disabled(count < 2)
+            TapButton { hiddenQuery = query } label: {
+                LitButtonChrome(.secondary, compact: true) { Text("Hide") }
+            }
+            .help("Stop marking “\(query)”")
+        }
+        .padding(.horizontal, AppMetric.sheetPadding)
+        .padding(.vertical, 6)
+        .background(AppColor.base)
+    }
+
+    private func stepSearch(forward: Bool) {
+        guard !searchHits.isEmpty else { return }
+        let n = searchHits.count
+        searchPosition = (searchPosition + (forward ? 1 : n - 1)) % n
+        // Re-set even when unchanged, so the same line scrolls back into view.
+        searchTarget = nil
+        DispatchQueue.main.async { searchTarget = searchHits[searchPosition] }
     }
 
     private func jump(in starts: [Double], forward: Bool) {

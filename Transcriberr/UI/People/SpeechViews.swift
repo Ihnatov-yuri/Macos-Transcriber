@@ -75,8 +75,19 @@ struct MetricTile: View {
                     .font(AppFont.text(11)).foregroundStyle(AppColor.ink4)
                     .frame(height: 26, alignment: .leading)
             }
-            Text(series.isEmpty ? emptyReason : (trend ?? metric.explanation))
-                .font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
+            if series.isEmpty {
+                Text(emptyReason)
+                    .font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let trend {
+                Text(trend)
+                    .font(AppFont.text(11)).foregroundStyle(AppColor.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // What the number is, always on the tile (it used to show only
+            // when there was no trend, or on hover).
+            Text(metric.explanation)
+                .font(AppFont.text(10)).foregroundStyle(AppColor.ink3)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(AppMetric.m)

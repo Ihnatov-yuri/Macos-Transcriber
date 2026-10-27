@@ -167,18 +167,49 @@ struct YouDashboard: View {
                     .frame(width: 150)
                 }
             }
+            Text(metricsIntro)
+                .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
+                .fixedSize(horizontal: false, vertical: true)
             TileGrid {
                 ForEach(SpeechMetric.allCases) { m in
                     MetricTile(metric: m, meetings: meetings, language: language)
                 }
             }
-            Text("Fillers and hedges are counted in English and Ukrainian only. Speech engines leave many fillers out, so those read low; compare them between meetings transcribed the same way.")
-                .font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("About these numbers").uiLabel(10, color: AppColor.ink2)
+                ForEach(Self.aboutNumbers, id: \.self) { line in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Rectangle().fill(AppColor.ink4).frame(width: 4, height: 4)
+                        Text(line).font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
         .padding(AppMetric.l)
         .litGlass()
     }
+
+    /// Which meetings the tiles stand on, for the language picked.
+    private var metricsIntro: String {
+        let shown = meetings.filter { language == nil || $0.language == language }
+        let used = min(shown.count, SpeechMeasure.window)
+        let where_ = language.map { " in \(SpeechMetric.languageName($0))" } ?? ""
+        guard used > 0 else { return "No meeting\(where_) measured yet." }
+        let dates = shown.sorted { $0.date > $1.date }.prefix(used).map(\.date)
+        let span = dates.count > 1
+            ? " (\(dates.last!.formatted(date: .abbreviated, time: .omitted)) to \(dates.first!.formatted(date: .abbreviated, time: .omitted)))"
+            : ""
+        return "Each number is the average over your \(used == 1 ? "latest meeting" : "latest \(used) meetings")\(where_)\(span), out of \(shown.count) measured. The line under it is one point per meeting, oldest on the left; the red dot is the latest."
+    }
+
+    static let aboutNumbers: [String] = [
+        "Only what you said counts: your microphone track in meetings recorded here, and lines named you in imported ones.",
+        "Recordings with fewer than \(SpeechHistory.minimumMeetingWords) words in all (microphone tests, a few seconds) are left out.",
+        "A meeting's language comes from your own words in it: mostly Cyrillic is Ukrainian, mostly Latin is English. A language appears in the menu from two meetings.",
+        "“Lately” compares the newer half of those meetings with the older half; under 5% of a change reads as steady.",
+        "Fillers and hedges are counted in English and Ukrainian only. Speech engines leave many fillers out, so those read low; compare them between meetings transcribed the same way.",
+    ]
 
     private var historyCard: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
@@ -250,7 +281,9 @@ struct YouDashboard: View {
     /// Measured on open; the text engine runs only on a click, so opening
     /// the page never loads a model or sends anything anywhere.
     private func reload() {
+        let t0 = Date()
         let history = SpeechHistory.load(me, repository: container.repository, micIsThem: true)
+        AppLog.info("you", String(format: "measured %d meetings in %.2f s", history.meetings.count, Date().timeIntervalSince(t0)))
         meetings = history.meetings
         lines = history.lines
         state = CoachStore.shared.load()
@@ -274,8 +307,8 @@ struct GoalCard: View {
             }
             Text("\(goal.metric.title)\(goal.language.map { " in \(SpeechMetric.languageName($0))" } ?? ""): \(goal.targetText). Was \(goal.metric.format(goal.baseline))\(verdict.latest.map { ", latest \(goal.metric.format($0))" } ?? ", not measured since").")
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
-            if verdict.values.count > 1 {
-                Sparkline(values: verdict.values.reversed(), target: goal.target).frame(height: 30)
+            if !verdict.values.isEmpty {
+                GoalChart(goal: goal, verdict: verdict)
             }
             Text(goal.why).font(AppFont.text(13)).foregroundStyle(AppColor.ink)
                 .fixedSize(horizontal: false, vertical: true)
@@ -296,3 +329,74 @@ struct GoalCard: View {
         .accessibilityElement(children: .combine)
     }
 }
+
+/// A goal's meetings since it was set, as dots against the goal: green when
+/// that meeting met it. Its own scale holds the starting value, the goal and
+/// every point, with room above and below, so the dashed goal line never sits
+/// on an edge or on a point it is not.
+struct GoalChart: View {
+    let goal: SpeechGoal
+    let verdict: GoalJudge.Verdict
+
+    var body: some View {
+        // Oldest first, left to right.
+        let values = Array(verdict.values.reversed())
+        let dates = Array(verdict.dates.reversed())
+        let all = values + [goal.target, goal.baseline]
+        let lo = all.min() ?? 0, hi = all.max() ?? 1
+        let pad = max((hi - lo) * 0.18, 0.05 * max(abs(hi), 1))
+        let bottom = lo - pad, top = hi + pad
+        VStack(alignment: .leading, spacing: 3) {
+            GeometryReader { geo in
+                let w = geo.size.width, h = geo.size.height
+                let x: (Int) -> CGFloat = { i in values.count > 1 ? 6 + (w - 12) * CGFloat(i) / CGFloat(values.count - 1) : w / 2 }
+                let y: (Double) -> CGFloat = { v in h * (1 - CGFloat((v - bottom) / (top - bottom))) }
+                ZStack(alignment: .topLeading) {
+                    Path { p in
+                        p.move(to: CGPoint(x: 0, y: y(goal.target)))
+                        p.addLine(to: CGPoint(x: w, y: y(goal.target)))
+                    }
+                    .stroke(AppColor.ink3, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    Text("Goal \(goal.metric.format(goal.target))")
+                        .uiLabel(8, color: AppColor.ink3)
+                        .padding(.horizontal, 3)
+                        .background(AppColor.veilStrong)
+                        .position(x: w - 30, y: max(8, y(goal.target) - 8))
+                    if values.count > 1 {
+                        Path { p in
+                            for i in values.indices {
+                                let pt = CGPoint(x: x(i), y: y(values[i]))
+                                if i == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+                            }
+                        }
+                        .stroke(AppColor.ink3, lineWidth: 1)
+                    }
+                    ForEach(values.indices, id: \.self) { i in
+                        let met = goal.meets(values[i])
+                        Circle()
+                            .fill(met ? AppColor.statusSuccess : AppColor.base)
+                            .overlay(Circle().stroke(met ? AppColor.statusSuccess : AppColor.ink3, lineWidth: 1.5))
+                            .frame(width: 8, height: 8)
+                            .position(x: x(i), y: y(values[i]))
+                    }
+                }
+            }
+            .frame(height: 56)
+            HStack {
+                Text(dates.first.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "")
+                    .uiLabel(8, color: AppColor.ink3)
+                Spacer()
+                if dates.count > 1 {
+                    Text(dates.last.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "")
+                        .uiLabel(8, color: AppColor.ink3)
+                }
+            }
+            Text("One dot per meeting since this goal was set: \(goal.metric.unitPhrase). Filled green: that meeting met the goal.")
+                .font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(verdict.hits) of the last \(min(GoalJudge.window, values.count)) meetings met the goal of \(goal.targetText).")
+    }
+}
+

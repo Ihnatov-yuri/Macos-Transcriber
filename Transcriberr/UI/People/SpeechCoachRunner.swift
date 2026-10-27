@@ -3,20 +3,26 @@ import Observation
 
 /// Someone's measured meetings, newest first, from the library.
 enum SpeechHistory {
-    /// At most this many meetings are measured for a dashboard.
-    static let limit = 30
+    /// Fewer words than this between everyone, and it is not a meeting: a
+    /// microphone test, a stray few seconds. Counted, they dragged every
+    /// "lately" down (four 7-18 s tests on 27 Oct).
+    static let minimumMeetingWords = 80
 
     /// `meetings` when the caller already has them; `micIsThem` counts the
     /// split-track microphone lines as `name` (the user's own page).
     @MainActor
     static func load(_ name: String, repository: RecordingRepository, meetings: [PersonMeeting]? = nil,
-                     micIsThem: Bool = false, limit: Int = limit)
+                     micIsThem: Bool = false)
         -> (meetings: [MeetingSpeech], lines: [String]) {
         var out: [MeetingSpeech] = []
         var lines: [String] = []
         let list = meetings ?? (micIsThem ? PersonMeetings.loadMine(name, repository: repository)
                                           : PersonMeetings.load(name, repository: repository))
-        for m in list.prefix(limit) {
+        // Every meeting: measuring is text work over the lines (75 meetings,
+        // about 15,000 lines, a fraction of a second). Each language and
+        // each goal needs its own latest meetings, and a cap of the newest
+        // 30 hid Ukrainian (one of six meetings in it).
+        for m in list {
             guard let rec = try? repository.get(id: m.id), !rec.isDeleted else { continue }
             let all = rec.segments.compactMap { s -> SpeechLine? in
                 let who = micIsThem && s.speaker == TranscriptionRunner.micSpeakerKey
@@ -24,7 +30,8 @@ enum SpeechHistory {
                 guard let who else { return nil }
                 return SpeechLine(start: s.startSeconds, end: s.endSeconds, speaker: who, text: s.text)
             }
-            if let measured = SpeechMeasure.measure(all, name: name, recordingId: m.id, title: m.title, date: m.date) {
+            if let measured = SpeechMeasure.measure(all, name: name, recordingId: m.id, title: m.title, date: m.date),
+               measured.meetingWords >= minimumMeetingWords {
                 out.append(measured)
             }
             // Their own longer lines from the five newest meetings, for the coach.

@@ -48,7 +48,8 @@ struct LibraryView: View {
             Group {
                 if let selection {
                     DetailView(recording: selection,
-                               onClose: { self.selection = nil })
+                               onClose: { self.selection = nil },
+                               searchQuery: transcriptMatches.contains(selection.id) ? appliedQuery : "")
                 } else {
                     emptyState
                 }

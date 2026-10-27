@@ -35,6 +35,20 @@ enum SpeechMetric: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// What one chart point is, in words ("your fillers per minute of
+    /// speaking").
+    var unitPhrase: String {
+        switch self {
+        case .talkShare: return "your share of the words, as a % of a fair share"
+        case .pace: return "your words per minute"
+        case .longestTurn: return "your longest turn, in seconds"
+        case .interruptions: return "how often you started while someone was talking, per 10 minutes"
+        case .questions: return "your questions per 10 minutes of speaking"
+        case .fillers: return "your fillers per minute of speaking"
+        case .hedges: return "your hedges per minute of speaking"
+        }
+    }
+
     var explanation: String {
         switch self {
         case .talkShare: return "Share of the words spoken, against one person's fair share: 100 is exactly fair, 200 twice as much. A 1:1 and a group of six are judged alike."

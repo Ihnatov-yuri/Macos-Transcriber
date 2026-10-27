@@ -325,6 +325,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             } else {
                 (samples, chunks, duration) = try await decoder.decodeAndChunk(file: params.file)
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             AppLog.error("runner", "decode failed: \(error.localizedDescription)")
             throw error

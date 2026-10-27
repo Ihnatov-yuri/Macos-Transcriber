@@ -119,6 +119,9 @@ nonisolated enum MeetingMixRebuilder {
             }
             AppLog.info("aec", "rebuilt meeting mix from mic + sys sidecars (\(mix.count) samples)")
             return outputURL
+        } catch is CancellationError {
+            AppLog.info("aec", "mix rebuild cancelled, keeping live-gated mix")
+            return nil
         } catch {
             AppLog.warn("aec", "mix rebuild failed, keeping live-gated mix: \(error.localizedDescription)")
             return nil

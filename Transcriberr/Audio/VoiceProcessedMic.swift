@@ -70,6 +70,10 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
     /// no duck on other apps; the feed carries the raw mic), and a switch
     /// back to speakers turns it on again. Set before `start`.
     var keepsMicOnHeadphones = false
+    /// False while another unit of ours already runs voice processing on
+    /// the mic (a meeting recording's own echo filter): this one then stays
+    /// on the raw mic, also after a route change. Set before `start`.
+    var voiceProcessingAllowed = true
     private var sink: AVAudioSinkNode?
     /// The first channel of an interleaved render cycle, copied out.
     private let sinkScratch = UnsafeMutablePointer<Float>.allocate(capacity: 16_384)
@@ -333,7 +337,7 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
     /// voice processing on for speakers, off for headphones, and the engine
     /// running again either way (under `controlLock`).
     private func followRoute(_ route: (name: String, headphones: Bool)) {
-        let wantProcessing = !route.headphones
+        let wantProcessing = !route.headphones && voiceProcessingAllowed
         do {
             let input = engine.inputNode
             var isProcessing = false

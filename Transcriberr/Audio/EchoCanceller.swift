@@ -505,8 +505,11 @@ nonisolated struct VoiceGuide {
 /// run to the playback-mix rebuild of the same files. One entry per mic
 /// track, taken once; the sample count guards against a different decode.
 nonisolated enum VoiceScoreCache {
-    private static let entries = Mutex<[String: (count: Int, scores: [Float?], order: Int)]>([:])
-    private static let nextOrder = Mutex(0)
+    private struct State {
+        var entries: [String: (count: Int, scores: [Float?], order: Int)] = [:]
+        var nextOrder = 0
+    }
+    private static let state = Mutex(State())
 
     /// An entry nobody takes (auto-transcribe off, a re-run) must not pile up.
     static let capacity = 4
@@ -514,19 +517,19 @@ nonisolated enum VoiceScoreCache {
     /// When full, the OLDEST entry goes: the newest is the meeting whose
     /// mix rebuild is next.
     static func put(_ key: String, sampleCount: Int, scores: [Float?]) {
-        let order = nextOrder.withLock { n -> Int in n += 1; return n }
-        entries.withLock { e in
-            if e[key] == nil, e.count >= capacity,
-               let oldest = e.min(by: { $0.value.order < $1.value.order })?.key {
-                e.removeValue(forKey: oldest)
+        state.withLock { s in
+            s.nextOrder += 1
+            if s.entries[key] == nil, s.entries.count >= capacity,
+               let oldest = s.entries.min(by: { $0.value.order < $1.value.order })?.key {
+                s.entries.removeValue(forKey: oldest)
             }
-            e[key] = (sampleCount, scores, order)
+            s.entries[key] = (sampleCount, scores, s.nextOrder)
         }
     }
 
     static func take(_ key: String, sampleCount: Int) -> [Float?]? {
-        entries.withLock { e in
-            guard let hit = e.removeValue(forKey: key), hit.count == sampleCount else { return nil }
+        state.withLock { s in
+            guard let hit = s.entries.removeValue(forKey: key), hit.count == sampleCount else { return nil }
             return hit.scores
         }
     }

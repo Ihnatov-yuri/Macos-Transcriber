@@ -294,6 +294,10 @@ struct LibraryView: View {
                         if let other = all.first(where: { $0.id == otherID }) { merge(source, other) }
                     },
                     onCancel: { mergeSourceID = nil })
+            } else {
+                // The recording went away while the picker was up (deleted,
+                // merged elsewhere): close instead of an empty sheet.
+                Color.clear.frame(width: 1, height: 1).onAppear { mergeSourceID = nil }
             }
         }
         .confirmationDialog("Delete “\(deleting?.title ?? "")”?",

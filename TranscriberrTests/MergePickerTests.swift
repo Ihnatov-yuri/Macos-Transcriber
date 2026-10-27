@@ -40,6 +40,16 @@ final class MergePickerTests: XCTestCase {
         XCTAssertEqual(MergePicker.relation(c("x", end: -3 * 24 * 60, length: 1), to: source), "Ended 3 days before this one")
     }
 
+    func testOnlyAPickedOrOnlyRowIsMerged() {
+        let a = c("A", end: 5, length: 1), b = c("B", end: 10, length: 1)
+        XCTAssertNil(MergePicker.selection(nil, in: [a, b]), "Return must not merge the top match unasked")
+        XCTAssertEqual(MergePicker.selection(b.id, in: [a, b]), b.id)
+        XCTAssertNil(MergePicker.selection(b.id, in: [a, c("C", end: 20, length: 1)]),
+                     "a pick the search hid no longer counts")
+        XCTAssertEqual(MergePicker.selection(b.id, in: [a]), a.id, "then the one row left is the pick")
+        XCTAssertEqual(MergePicker.selection(nil, in: [a]), a.id, "the only match left is the pick")
+    }
+
     func testLengthFormat() {
         XCTAssertEqual(MergePickerSheet.length(75), "1:15")
         XCTAssertEqual(MergePickerSheet.length(3_725), "1:02:05")

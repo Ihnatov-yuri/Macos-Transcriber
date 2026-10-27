@@ -32,6 +32,13 @@ nonisolated enum MergePicker {
             .sorted { abs($0.gap(from: source)) < abs($1.gap(from: source)) }
     }
 
+    /// The recording a merge would use: the row the user picked while it is
+    /// still shown, or the only row the search left; otherwise none.
+    static func selection(_ picked: UUID?, in shown: [MergeCandidate]) -> UUID? {
+        if let picked, shown.contains(where: { $0.id == picked }) { return picked }
+        return shown.count == 1 ? shown.first?.id : nil
+    }
+
     /// "Starts 3 min after", "Ended 2 h before", "Overlaps".
     static func relation(_ c: MergeCandidate, to source: MergeCandidate) -> String {
         let g = c.gap(from: source)
@@ -120,12 +127,10 @@ struct MergePickerSheet: View {
         .onAppear { searchFocused = true }
     }
 
-    /// The highlighted row, or the closest one when nothing is highlighted
-    /// and the search left it at the top.
-    private var currentSelection: UUID? {
-        if let selected, shown.contains(where: { $0.id == selected }) { return selected }
-        return shown.first?.id
-    }
+    /// The row the user picked, or the only one the search left. Never just
+    /// the top match: Return in the search field must not merge a recording
+    /// the user did not choose.
+    private var currentSelection: UUID? { MergePicker.selection(selected, in: shown) }
 
     private func mergeSelected() {
         guard let id = currentSelection else { return }

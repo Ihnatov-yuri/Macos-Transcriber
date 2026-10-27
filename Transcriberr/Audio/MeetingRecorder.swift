@@ -386,9 +386,14 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
                 AppLog.info("meeting", "echo filter off — output '\(route.name)' is headphones")
             } else {
                 AppLog.info("meeting", "output '\(route.name)' — starting the echo filter")
+                // Told first: a call opening the Transcriberr Microphone
+                // from here on gets the raw mic, never a second unit.
+                VirtualMicrophone.shared.recorderVoiceProcessing(true)
                 let vp = VoiceProcessedMic()
                 if vp.start(inputUID: RecorderSettings.shared.inputDeviceUID) {
                     ioQueue.sync { io.voiceMic = vp }
+                } else {
+                    VirtualMicrophone.shared.recorderVoiceProcessing(false)
                 }
             }
         }
@@ -404,12 +409,15 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         let mic = selectedInputDevice()
         let micStreams = mic.map { AudioInputDevices.inputStreamChannelCounts($0.id) } ?? []
         let tapChannels = Self.tapChannelCount(forMicStreams: micStreams)
-        // Our own process is never the far side: the Transcriberr
-        // Microphone's feed is the user's mic played into its hidden device,
+        // With the Transcriberr Microphone on, our own process is never the
+        // far side: its feed is the user's mic played into a hidden device,
         // and it can start at any point of the recording (a call opens the
-        // device, the setting is turned on), after this tap is built. Left
-        // in, the user would be recorded as the far side too.
-        let excluded = VirtualMicrophone.ownProcessObject().map { [$0] } ?? []
+        // device), after this tap is built. Left in, the user would be
+        // recorded as the far side too. With it off, nothing of ours feeds
+        // anything, and sound played from Transcriberr during a call (a clip
+        // shared with the others) stays in the call track as before.
+        let excludeOwn = RecorderSettings.shared.virtualMicrophone || VirtualMicrophone.shared.isActive
+        let excluded = excludeOwn ? VirtualMicrophone.ownProcessObject().map { [$0] } ?? [] : []
         let desc = tapChannels == 1
             ? CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
             : CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
@@ -533,8 +541,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         }
         if borrowed {
             VirtualMicrophone.shared.releaseFromRecording()
-        } else {
-            vp?.stop()
+        } else if let vp {
+            vp.stop()
+            VirtualMicrophone.shared.recorderVoiceProcessing(false)
         }
         if aggID != kAudioObjectUnknown {
             AudioHardwareDestroyAggregateDevice(aggID)

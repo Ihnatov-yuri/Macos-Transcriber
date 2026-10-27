@@ -45,6 +45,13 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     private var feedProc: AudioDeviceIOProcID?
     private var unit: VoiceProcessedMic?
     private var recordingHolds = 0
+    /// A meeting recording runs its own voice-processing unit on the mic
+    /// (it started with no call on our device). Ours then runs on the raw
+    /// mic: two voice-processing units on one mic is what macOS handles
+    /// worst, and the call app still does its own echo cancelling.
+    private var recorderOwnsVoiceProcessing = false
+    /// Whether the running `unit` was allowed voice processing.
+    private var unitAllowsVoiceProcessing = true
     private var micDevice = AudioObjectID(kAudioObjectUnknown)
     private var micListener: AudioObjectPropertyListenerBlock?
     private var devicesListener: AudioObjectPropertyListenerBlock?
@@ -123,6 +130,17 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         }
     }
 
+    /// The meeting recorder starts (true) or ends (false) its own echo
+    /// filter. Called before its unit starts, so a call opening the device
+    /// meanwhile never gets a second voice-processing unit.
+    func recorderVoiceProcessing(_ on: Bool) {
+        queue.sync {
+            guard recorderOwnsVoiceProcessing != on else { return }
+            recorderOwnsVoiceProcessing = on
+            reconcile()
+        }
+    }
+
     func releaseFromRecording() {
         queue.sync {
             recordingHolds = max(0, recordingHolds - 1)
@@ -153,6 +171,14 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         guard feedProc != nil else { return }
         watchMicrophone()
         let needUnit = callInUse || recordingHolds > 0
+        if unit != nil && needUnit && unitAllowsVoiceProcessing == recorderOwnsVoiceProcessing {
+            // The recording's own filter started or ended under a running
+            // unit: bring it up again on the right side of that.
+            AppLog.info("virtual-mic", recorderOwnsVoiceProcessing
+                ? "the meeting recording runs its own echo filter — the call gets the raw mic meanwhile"
+                : "the meeting recording's echo filter ended — the call gets the echo filter again")
+            stopUnit()
+        }
         if needUnit && unit == nil { startUnit() }
         if !needUnit && unit != nil { stopUnit() }
     }
@@ -215,6 +241,8 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         let route = VoiceProcessedMic.outputRoute()
         let vp = VoiceProcessedMic()
         vp.keepsMicOnHeadphones = true
+        vp.voiceProcessingAllowed = !recorderOwnsVoiceProcessing
+        unitAllowsVoiceProcessing = vp.voiceProcessingAllowed
         vp.feed = { [weak self] samples, rate in self?.deliver(samples, rate: rate) }
         // Only the user's own choice is selected explicitly. Following the
         // system default goes through `AudioInputDevices.apply(uid: nil)`,
@@ -227,7 +255,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         let mic = AudioInputDevices.effective(uid: chosen)
         let why = recordingHolds > 0 ? "a meeting records" : "a call uses '\(Self.micName)'"
         AppLog.info("virtual-mic", "\(why) — starting the mic on '\(mic?.name ?? "default")', output '\(route.name)'")
-        if vp.start(inputUID: chosen, voiceProcessing: !route.headphones) {
+        if vp.start(inputUID: chosen, voiceProcessing: !route.headphones && vp.voiceProcessingAllowed) {
             unit = vp
         } else {
             AppLog.warn("virtual-mic", "mic engine would not start — '\(Self.micName)' carries silence")

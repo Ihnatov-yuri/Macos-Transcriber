@@ -8,7 +8,7 @@ import Foundation
 /// Fillers are the weak spot: Parakeet and Whisper both tend to leave
 /// "um", "uh" and "ееее" out of what they write, so filler rates read low
 /// and are compared only between meetings transcribed the same way.
-enum SpeechMetric: String, Codable, CaseIterable, Identifiable {
+nonisolated enum SpeechMetric: String, Codable, CaseIterable, Identifiable, Sendable {
     case talkShare, pace, longestTurn, interruptions, questions, fillers, hedges
     var id: String { rawValue }
 
@@ -78,7 +78,7 @@ enum SpeechMetric: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct SpeechLine: Equatable {
+nonisolated struct SpeechLine: Equatable, Sendable {
     var start: Double
     var end: Double
     var speaker: String
@@ -94,7 +94,7 @@ struct SpeechLine: Equatable {
 /// pace uses only tight lines (2-12 s: 122 words/min for the same voice),
 /// and cutting in only counts overlaps between tight lines (2,709 of the
 /// library's 5,153 raw overlaps were 5 s or longer, i.e. padding).
-struct MeetingSpeech: Equatable, Identifiable {
+nonisolated struct MeetingSpeech: Equatable, Identifiable, Sendable {
     var recordingId: UUID
     var title: String
     var date: Date
@@ -140,7 +140,7 @@ struct MeetingSpeech: Equatable, Identifiable {
     }
 }
 
-enum SpeechMeasure {
+nonisolated enum SpeechMeasure {
     /// Lines of the same speaker this close are one turn.
     static let turnGap = 1.5
     /// Lines at most this long have timestamps tight enough for pace and

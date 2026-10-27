@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// The user's own page: how they speak, measured; up to two goals that
 /// close when met and are rethought when they stall; and their voice print,
@@ -280,14 +281,22 @@ struct YouDashboard: View {
 
     /// Measured on open; the text engine runs only on a click, so opening
     /// the page never loads a model or sends anything anywhere.
+    ///
+    /// Every meeting is measured (0.9 s for 73 on 27 Oct), on a background
+    /// context of the same store so the page never stalls while it runs.
     private func reload() {
-        let t0 = Date()
-        let history = SpeechHistory.load(me, repository: container.repository, micIsThem: true)
-        AppLog.info("you", String(format: "measured %d meetings in %.2f s", history.meetings.count, Date().timeIntervalSince(t0)))
-        meetings = history.meetings
-        lines = history.lines
         state = CoachStore.shared.load()
-        loaded = true
+        let store = container.modelContainer, name = me
+        Task {
+            let t0 = Date()
+            let history = await Task.detached(priority: .userInitiated) {
+                SpeechHistory.load(name, repository: RecordingRepository(context: ModelContext(store)), micIsThem: true)
+            }.value
+            AppLog.info("you", String(format: "measured %d meetings in %.2f s (background)", history.meetings.count, Date().timeIntervalSince(t0)))
+            meetings = history.meetings
+            lines = history.lines
+            loaded = true
+        }
     }
 }
 

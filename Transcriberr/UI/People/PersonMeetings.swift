@@ -4,7 +4,7 @@ import Observation
 
 /// One recording a person speaks in, as plain values: the page draws these,
 /// never the SwiftData relationships behind them.
-struct PersonMeeting: Identifiable, Equatable {
+nonisolated struct PersonMeeting: Identifiable, Equatable, Sendable {
     let id: UUID
     let title: String
     let date: Date
@@ -17,16 +17,14 @@ struct PersonMeeting: Identifiable, Equatable {
     let lastSaid: String
 }
 
-enum PersonMeetings {
+nonisolated enum PersonMeetings {
     /// Every recording with a line carrying `name`, newest first.
-    @MainActor
     static func load(_ name: String, repository: RecordingRepository) -> [PersonMeeting] {
         group((try? repository.segments(spokenBy: name)) ?? [])
     }
 
     /// The user's meetings: lines under their name, and the microphone
     /// track's ("ME") whatever name it carried when it was recorded.
-    @MainActor
     static func loadMine(_ name: String, repository: RecordingRepository) -> [PersonMeeting] {
         let named = (try? repository.segments(spokenBy: name)) ?? []
         let mic = (try? repository.segments(speakerKey: TranscriptionRunner.micSpeakerKey)) ?? []
@@ -35,7 +33,6 @@ enum PersonMeetings {
     }
 
     /// Lines of one person grouped into meetings, newest first.
-    @MainActor
     static func group(_ segments: [Segment]) -> [PersonMeeting] {
         var byRecording: [UUID: (recording: Recording, segments: [Segment])] = [:]
         for s in segments {

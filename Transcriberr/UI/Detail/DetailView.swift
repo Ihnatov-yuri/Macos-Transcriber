@@ -1464,9 +1464,17 @@ struct TranscriptPane: View {
                     }
                 }
                 .onChange(of: searchTarget) { _, target in
-                    // First match on open, then Previous / Next.
+                    // First match on open, then Previous / Next. Twice: the
+                    // first scrollTo in a lazy stack goes by estimated row
+                    // heights (it landed three minutes early on a 43-minute
+                    // call); once the rows on the way are laid out, the
+                    // second lands on the line.
                     guard let target else { return }
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(target, anchor: .center) }
+                    proxy.scrollTo(target, anchor: .center)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        guard searchTarget == target else { return }
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(target, anchor: .center) }
+                    }
                 }
                 .onChange(of: tailID(in: segs)) { _, new in
                     // New chunk arrived → follow, but ONLY if the user is

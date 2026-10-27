@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.1.3
+- Open a recording the Library search found and the words you searched for are marked in its transcript. It scrolls to the first match, and a bar steps through the matching lines (Previous, Next, Hide).
+- You → How you speak covers all your meetings, not the latest 30, so every language you speak in two meetings or more is in the menu (Ukrainian was missing). Recordings of under 80 words, such as microphone tests, no longer count as meetings.
+- Goal charts show a dot per meeting since the goal was set, filled green when that meeting met it, with the goal line labelled and the first and last dates.
+- The tiles say what each number measures, and "About these numbers" explains which meetings and lines count and how the language is decided.
+
 ## 5.1.2
 - "Merge with…" opens a picker instead of a menu of every title: the recordings closest in time come first, each with its date, its distance from this one and its length, and you can search. Return only merges a recording you picked.
 - With the Transcriberr Microphone on, recording a meeting no longer turns on Apple's echo filter by itself; it only shares the filter a call on the Transcriberr Microphone already uses. A call app still set to your Mac's microphone keeps working.

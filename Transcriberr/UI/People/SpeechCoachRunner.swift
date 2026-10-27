@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// Someone's measured meetings, newest first, from the library.
-enum SpeechHistory {
+nonisolated enum SpeechHistory {
     /// Fewer words than this between everyone, and it is not a meeting: a
     /// microphone test, a stray few seconds. Counted, they dragged every
     /// "lately" down (four 7-18 s tests on 27 Oct).
@@ -10,7 +10,6 @@ enum SpeechHistory {
 
     /// `meetings` when the caller already has them; `micIsThem` counts the
     /// split-track microphone lines as `name` (the user's own page).
-    @MainActor
     static func load(_ name: String, repository: RecordingRepository, meetings: [PersonMeeting]? = nil,
                      micIsThem: Bool = false)
         -> (meetings: [MeetingSpeech], lines: [String]) {

@@ -19,6 +19,8 @@ struct LibraryView: View {
     @State private var deleting: Recording?
     /// Recordings a merge is reading: not deletable until it is done.
     @State private var mergingIDs: Set<UUID> = []
+    /// The recording "Merge with…" was opened on (its picker sheet is up).
+    @State private var mergeSourceID: UUID?
     @State private var importError: String?
     @State private var selectedFolderID: UUID?
     @State private var selectedTagID: UUID?
@@ -269,28 +271,9 @@ struct LibraryView: View {
                             }
                         }
                     }
-                    if rows.count > 1 {
-                        Menu("Merge with…") {
-                            ForEach(rows.filter { $0.id != rec.id }, id: \.id) { other in
-                                Button("\(other.title)") {
-                                    guard mergingIDs.isEmpty else { return }
-                                    mergingIDs = [rec.id, other.id]
-                                    Task { @MainActor in
-                                        defer { mergingIDs = [] }
-                                        do {
-                                            let merged = try await container.repository.merge(rec, other)
-                                            selection = merged
-                                        } catch {
-                                            AppLog.error("library", "merge failed: \(error.localizedDescription)")
-                                            let alert = NSAlert()
-                                            alert.messageText = "Merge failed"
-                                            alert.informativeText = error.localizedDescription
-                                            alert.runModal()
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if all.count > 1 {
+                        Button("Merge with…") { mergeSourceID = rec.id }
+                            .disabled(!mergingIDs.isEmpty)
                     }
                     Divider()
                     Button("Delete…", role: .destructive) { deleting = rec }
@@ -300,6 +283,19 @@ struct LibraryView: View {
             }
         }
         .padding(.horizontal, AppMetric.sheetPadding)
+        .sheet(isPresented: Binding(get: { mergeSourceID != nil }, set: { if !$0 { mergeSourceID = nil } })) {
+            if let id = mergeSourceID, let source = all.first(where: { $0.id == id }) {
+                MergePickerSheet(
+                    source: Self.mergeCandidate(source),
+                    sourceTitle: source.title,
+                    candidates: mergeCandidates(for: source),
+                    onMerge: { otherID in
+                        mergeSourceID = nil
+                        if let other = all.first(where: { $0.id == otherID }) { merge(source, other) }
+                    },
+                    onCancel: { mergeSourceID = nil })
+            }
+        }
         .confirmationDialog("Delete “\(deleting?.title ?? "")”?",
                             isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible, presenting: deleting) { rec in
@@ -308,6 +304,37 @@ struct LibraryView: View {
             Button("Delete", role: .destructive) { deleting = nil; delete(rec) }
         } message: { _ in
             Text("The transcript, outputs and versions are removed from Transcriberr. The audio file stays on disk.")
+        }
+    }
+
+    /// Every other recording, not just the ones the current filter shows;
+    /// dictation history only when merging from a dictation.
+    private func mergeCandidates(for source: Recording) -> [MergeCandidate] {
+        let fromDictation = source.folder?.isDictation == true
+        return all
+            .filter { $0.id != source.id && ($0.folder?.isDictation != true || fromDictation) }
+            .map(Self.mergeCandidate)
+    }
+
+    private static func mergeCandidate(_ r: Recording) -> MergeCandidate {
+        MergeCandidate(id: r.id, title: r.title, endMillis: r.createdAtMillis, durationSeconds: r.durationSeconds)
+    }
+
+    private func merge(_ rec: Recording, _ other: Recording) {
+        guard mergingIDs.isEmpty else { return }
+        mergingIDs = [rec.id, other.id]
+        Task { @MainActor in
+            defer { mergingIDs = [] }
+            do {
+                let merged = try await container.repository.merge(rec, other)
+                selection = merged
+            } catch {
+                AppLog.error("library", "merge failed: \(error.localizedDescription)")
+                let alert = NSAlert()
+                alert.messageText = "Merge failed"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
         }
     }
 

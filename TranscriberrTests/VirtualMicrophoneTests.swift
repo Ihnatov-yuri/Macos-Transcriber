@@ -119,4 +119,27 @@ final class VirtualMicrophoneTests: XCTestCase {
         XCTAssertEqual(VirtualMicrophone.shellQuoted("/Applications/My App's.app"), "'/Applications/My App'\\''s.app'")
         XCTAssertEqual(VirtualMicrophone.appleScriptEscaped("a \"b\" \\c"), "a \\\"b\\\" \\\\c")
     }
+
+    func testResamplingInPiecesMatchesOneGo() {
+        // The render thread resamples a big cycle in pieces so nothing is
+        // allocated there; the pieces must join without a seam.
+        let input = (0..<9_000).map { Float(sin(Double($0) * 0.05)) }
+        var whole = LinearResampler(), pieces = LinearResampler()
+        var a: [Float] = [], b: [Float] = []
+        input.withUnsafeBufferPointer { whole.process($0, from: 16_000, to: 48_000, into: &a) }
+        input.withUnsafeBufferPointer { p in
+            var done = 0
+            while done < p.count {
+                let n = min(1_000, p.count - done)
+                pieces.process(UnsafeBufferPointer(rebasing: p[done..<(done + n)]), from: 16_000, to: 48_000, into: &b)
+                done += n
+            }
+        }
+        // The carried position rounds differently, so the piecewise run may
+        // be a sample shorter; what matters is that no piece boundary jumps.
+        XCTAssertLessThanOrEqual(abs(a.count - b.count), 1)
+        let step = zip(b.dropFirst(), b).map { abs($0 - $1) }.max() ?? 0
+        XCTAssertLessThan(step, 0.02, "a smooth sine stays smooth across the pieces")
+        for (x, y) in zip(a.prefix(2_000), b.prefix(2_000)) { XCTAssertEqual(x, y, accuracy: 1e-4) }
+    }
 }

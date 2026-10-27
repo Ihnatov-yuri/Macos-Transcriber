@@ -343,8 +343,7 @@ nonisolated enum EchoCanceller {
         for f in 0..<frames {
             var target: Float = framePe[f] > nlpNearEndRatio * framePy[f] ? 1 : nlpFloor
             if let guide {
-                target = guide.target(base: target, at: Double(f * nlpFrame) / 16_000,
-                                      echoPredicted: framePy[f] > 0)
+                target = guide.target(base: target, at: Double(f * nlpFrame) / 16_000, echoPower: framePy[f])
             }
             // Open fast so the user's first syllable is never clipped, close
             // slower so a gap between words doesn't chop the tail off.
@@ -398,9 +397,12 @@ nonisolated enum EchoCanceller {
     /// passes over one meeting: the transcription run scores, and the
     /// playback-mix rebuild that follows it decodes the same track and
     /// reuses them instead of scoring it again.
+    ///
+    /// Throws only `CancellationError`: a cancelled run stops here instead
+    /// of running the suppressor over the whole meeting first.
     @concurrent
     static func cancelGuided(mic: [Float], ref: [Float], print: Voiceprint?,
-                             cacheKey: String? = nil) async -> Result {
+                             cacheKey: String? = nil) async throws -> Result {
         switch linearStage(mic: mic, ref: ref) {
         case .done(let r):
             return r
@@ -413,12 +415,16 @@ nonisolated enum EchoCanceller {
             } else {
                 do {
                     scores = try await VoiceEmbedder.shared.scores(l.out, against: print)
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
+                    try Task.checkCancellation()
                     AppLog.warn("aec", "voice print scoring failed, unguided suppressor: \(error.localizedDescription)")
                     return suppress(l, mic: mic)
                 }
                 if let cacheKey { VoiceScoreCache.put(cacheKey, sampleCount: mic.count, scores: scores) }
             }
+            try Task.checkCancellation()
             let fit = VoiceTimeline.fits(scores)
             guard fit.0 else {
                 AppLog.info("aec", "voice print does not fit this mic (\(fit.strong) clear windows, \(fit.ambiguous) borderline) — unguided suppressor")
@@ -444,38 +450,53 @@ nonisolated enum EchoCanceller {
 /// looser "it's you" bar (0.35: two fewer clipped starts, but louder echo
 /// let through) and over WebRTC AEC3 and DTLN-aec.
 nonisolated struct VoiceGuide {
+    /// `VoiceEmbedder.scores` of the subtracted mic: one value per
+    /// `VoiceActivity.hop` cell, each the best of the `VoiceActivity.window`
+    /// windows covering that cell; nil where the track is silent.
     let scores: [Float?]
-    /// Every window over a frame below this: clearly not the user. Echo
-    /// bursts score 0.01-0.04; the user over loud echo rarely drops this
+    /// Every scored cell around a frame below this: clearly not the user.
+    /// Echo bursts score 0.01-0.04; the user over loud echo rarely drops this
     /// low (0.20 muted whole phrases of theirs).
     static let notYou: Float = 0.10
-    /// The target-speaker threshold the voice timeline uses.
+    /// The target-speaker threshold the voice timeline uses. Echo residue
+    /// on loud far speech reaches 0.40-0.43 now and then (one far-side word
+    /// transcribed as the user's on the 22 Oct call), but a stricter bar
+    /// over echo-dominated frames (0.45, tried 2026-10-27) also cut the
+    /// user's own "Thank you" at the end of that call: kept at 0.40.
     static let youOn: Float = VoiceActivity.onThreshold
-    /// A window starting this soon after a frame vouches for it too, so the
-    /// first syllable before a matching window is kept.
+    /// A cell starting this soon after a frame vouches for it too, so the
+    /// first syllable before a matching cell is kept.
     static let lead = 0.3
 
-    /// Highest score among the windows overlapping [a, b] seconds; silent
-    /// (unscored) windows count as -1.
-    func maxScore(from a: Double, to b: Double) -> Float {
+    /// Highest score among the cells from 2 hops before `a` (a window
+    /// reaching into the frame) to `b`; nil when none of them was scored.
+    /// The span is the one the tuning (by ear, 2026-10-27) was done with.
+    func maxScore(from a: Double, to b: Double) -> Float? {
         let hop = VoiceActivity.hop, window = VoiceActivity.window
         let lo = max(0, Int(((a - window) / hop).rounded(.down)) + 1)
         let hi = min(scores.count - 1, Int((b / hop).rounded(.down)))
-        guard lo <= hi else { return -1 }
-        var m: Float = -1
-        for i in lo...hi { if let v = scores[i], v > m { m = v } }
+        guard lo <= hi else { return nil }
+        var m: Float?
+        for i in lo...hi { if let v = scores[i], v > (m ?? -1) { m = v } }
         return m
     }
 
     /// The suppressor's target for the 20 ms frame starting at `t`, given
-    /// the residual test's own verdict `base` (1 open, else muted).
-    func target(base: Float, at t: Double, echoPredicted: Bool) -> Float {
+    /// the residual test's own verdict `base` (1 open, else muted) and the
+    /// frame's predicted-echo power.
+    func target(base: Float, at t: Double, echoPower: Float) -> Float {
         // The print says it is the user: never mute.
-        if maxScore(from: t, to: t + Self.lead) >= Self.youOn { return 1 }
+        if let s = maxScore(from: t, to: t + Self.lead), s >= Self.youOn { return 1 }
         // The residual test would open while the filter predicts echo, but
-        // every window over the frame says clearly not the user: an echo
-        // burst. Stay muted.
-        if base == 1, echoPredicted, maxScore(from: t, to: t) < Self.notYou { return EchoCanceller.nlpFloor }
+        // nothing over the frame sounds like the user (every cell below the
+        // bar, or silent): an echo burst. Stay muted. Deliberately as strict
+        // as this: letting unscored or faint-echo frames through (tried
+        // 2026-10-27) passed echo just before the user's replies, and the
+        // transcript's echo filter then dropped their first words with it
+        // ("Yeah," "Okay," lost on the 22 Oct call).
+        if base == 1, echoPower > 0, (maxScore(from: t, to: t) ?? -1) < Self.notYou {
+            return EchoCanceller.nlpFloor
+        }
         return base
     }
 }
@@ -484,15 +505,22 @@ nonisolated struct VoiceGuide {
 /// run to the playback-mix rebuild of the same files. One entry per mic
 /// track, taken once; the sample count guards against a different decode.
 nonisolated enum VoiceScoreCache {
-    private static let entries = Mutex<[String: (count: Int, scores: [Float?])]>([:])
+    private static let entries = Mutex<[String: (count: Int, scores: [Float?], order: Int)]>([:])
+    private static let nextOrder = Mutex(0)
 
     /// An entry nobody takes (auto-transcribe off, a re-run) must not pile up.
     static let capacity = 4
 
+    /// When full, the OLDEST entry goes: the newest is the meeting whose
+    /// mix rebuild is next.
     static func put(_ key: String, sampleCount: Int, scores: [Float?]) {
+        let order = nextOrder.withLock { n -> Int in n += 1; return n }
         entries.withLock { e in
-            if e[key] == nil, e.count >= capacity, let any = e.keys.first { e.removeValue(forKey: any) }
-            e[key] = (sampleCount, scores)
+            if e[key] == nil, e.count >= capacity,
+               let oldest = e.min(by: { $0.value.order < $1.value.order })?.key {
+                e.removeValue(forKey: oldest)
+            }
+            e[key] = (sampleCount, scores, order)
         }
     }
 

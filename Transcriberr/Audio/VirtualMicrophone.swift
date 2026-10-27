@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import AVFoundation
 import CoreAudio
+import Synchronization
 
 /// The Transcriberr Microphone: Apple's echo filter on the real mic, passed
 /// to the call app (Teams, Meet, Zoom) through our own virtual input device.
@@ -21,9 +22,12 @@ import CoreAudio
 /// published: when Transcriberr quits or crashes the feed stops, and the
 /// plug-in withdraws the microphone, so the call app falls back to another
 /// mic as if a USB mic had been unplugged. While a call has the microphone
-/// open, or a meeting records, one `VoiceProcessedMic` runs on the real
-/// mic, and its sink hands every render cycle to `ring`, which the feed's
-/// IO reads.
+/// open, one `VoiceProcessedMic` runs on the real mic, and its sink hands
+/// every render cycle to `ring`, which the feed's IO reads. A meeting that
+/// records during such a call borrows that unit; a meeting with no call on
+/// the device records the way it would with this off. Starting the unit
+/// for a recording alone would put voice processing on the mic a call app
+/// may still be using directly, the v4.6-5.0.6 failure.
 nonisolated final class VirtualMicrophone: @unchecked Sendable {
     static let shared = VirtualMicrophone()
 
@@ -44,7 +48,14 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     private var micDevice = AudioObjectID(kAudioObjectUnknown)
     private var micListener: AudioObjectPropertyListenerBlock?
     private var devicesListener: AudioObjectPropertyListenerBlock?
-    private var callInUse = false
+    /// A call (any app but us) has the microphone open. Under `queue` for
+    /// changes; held in a `Mutex` so quitting can read it without waiting
+    /// for the queue (it may be bringing the unit up, about a second).
+    private let callFlag = Mutex(false)
+    private var callInUse: Bool {
+        get { callFlag.withLock { $0 } }
+        set { callFlag.withLock { $0 = newValue } }
+    }
 
     /// Cleaned mic on its way to the feed device.
     let ring = FeedRing()
@@ -53,7 +64,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     private var resampled: [Float] = []
 
     private init() {
-        resampled.reserveCapacity(16_384)
+        resampled.reserveCapacity(Self.resampleCapacity)
         // coreaudiod restarted (Install restarts it on purpose; it can also
         // crash): every device ID and IO proc we hold died with it.
         var addr = Self.address(kAudioHardwarePropertyServiceRestarted)
@@ -83,7 +94,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     /// The feed is running: the device exists and calls can use it.
     var isActive: Bool { queue.sync { feedProc != nil } }
     /// A call (any app but us) has the Transcriberr Microphone open.
-    var isInUseByCall: Bool { queue.sync { feedProc != nil && callInUse } }
+    var isInUseByCall: Bool { callInUse }
 
     static var isInstalled: Bool { FileManager.default.fileExists(atPath: installedURL.path) }
 
@@ -98,14 +109,14 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         queue.async { self.reconcile() }
     }
 
-    /// The meeting recorder's way in: the unit the call already uses, or a
-    /// new one for the recording. Not `held` when the virtual microphone is
-    /// off (the recorder then does what it did before); `held` with no unit
-    /// when it would not start. Every `held` pairs with
-    /// `releaseFromRecording`.
+    /// The meeting recorder's way in: the unit a call on the Transcriberr
+    /// Microphone already uses. Not `held` when the virtual microphone is
+    /// off or no call uses it (the recorder then does what it would with
+    /// this off); `held` with no unit when it would not start. Every `held`
+    /// pairs with `releaseFromRecording`.
     func acquireForRecording() -> (held: Bool, unit: VoiceProcessedMic?) {
         queue.sync {
-            guard feedProc != nil else { return (false, nil) }
+            guard feedProc != nil, callInUse || unit != nil else { return (false, nil) }
             recordingHolds += 1
             reconcile()
             return (true, unit)
@@ -231,16 +242,27 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         AppLog.info("virtual-mic", "mic engine stopped — no call and no recording")
     }
 
-    /// Render thread: one cycle of the mic, at the engine's rate.
+    /// Render thread: one cycle of the mic, at the engine's rate. Resampled
+    /// in pieces small enough that `resampled` never outgrows the capacity
+    /// reserved at init, so nothing is allocated on this thread.
     private func deliver(_ samples: UnsafeBufferPointer<Float>, rate: Double) {
         if rate == Self.feedRate {
             ring.write(samples)
             return
         }
-        resampled.removeAll(keepingCapacity: true)
-        resampler.process(samples, from: rate, to: Self.feedRate, into: &resampled)
-        resampled.withUnsafeBufferPointer { ring.write($0) }
+        guard let base = samples.baseAddress, rate > 0 else { return }
+        let piece = max(1, Int(Double(Self.resampleCapacity) * rate / Self.feedRate) - 2)
+        var done = 0
+        while done < samples.count {
+            let n = min(piece, samples.count - done)
+            resampled.removeAll(keepingCapacity: true)
+            resampler.process(UnsafeBufferPointer(start: base + done, count: n), from: rate, to: Self.feedRate, into: &resampled)
+            resampled.withUnsafeBufferPointer { ring.write($0) }
+            done += n
+        }
     }
+
+    static let resampleCapacity = 16_384
 
     // MARK: - Is a call using it
 
@@ -392,7 +414,13 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
 nonisolated final class FeedRing: @unchecked Sendable {
     private let capacity: Int
     private let storage: UnsafeMutablePointer<Float>
-    private var lock = os_unfair_lock()
+    /// Heap-allocated: an `os_unfair_lock` must keep one address, which a
+    /// stored property passed as `&lock` does not guarantee.
+    private let lock: os_unfair_lock_t = {
+        let p = os_unfair_lock_t.allocate(capacity: 1)
+        p.initialize(to: os_unfair_lock())
+        return p
+    }()
     private var readIndex = 0
     private var count = 0
     private var primed = false
@@ -410,25 +438,29 @@ nonisolated final class FeedRing: @unchecked Sendable {
         storage.initialize(repeating: 0, count: capacity)
     }
 
-    deinit { storage.deallocate() }
+    deinit {
+        storage.deallocate()
+        lock.deinitialize(count: 1)
+        lock.deallocate()
+    }
 
     private var cushion: Int { max(minimumCushion, largestWrite) }
     private var ceiling: Int { min(capacity, cushion + max(4 * minimumCushion, 2 * largestWrite)) }
 
     var buffered: Int {
-        os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock); defer { os_unfair_lock_unlock(lock) }
         return count
     }
 
     func reset() {
-        os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock); defer { os_unfair_lock_unlock(lock) }
         readIndex = 0
         count = 0
         primed = false
     }
 
     func write(_ samples: UnsafeBufferPointer<Float>) {
-        os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock); defer { os_unfair_lock_unlock(lock) }
         let n = min(samples.count, capacity)
         largestWrite = max(largestWrite, n)
         let src = samples.baseAddress!.advanced(by: samples.count - n)
@@ -454,7 +486,7 @@ nonisolated final class FeedRing: @unchecked Sendable {
 
     /// Exactly `n` samples into `out`: audio when primed, silence otherwise.
     func read(into out: UnsafeMutablePointer<Float>, count n: Int) {
-        os_unfair_lock_lock(&lock); defer { os_unfair_lock_unlock(&lock) }
+        os_unfair_lock_lock(lock); defer { os_unfair_lock_unlock(lock) }
         if !primed {
             // A cushion of one delivery left AFTER this read: between two
             // deliveries the reads take up to one delivery's worth.

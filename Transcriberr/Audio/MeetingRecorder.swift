@@ -404,10 +404,12 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         let mic = selectedInputDevice()
         let micStreams = mic.map { AudioInputDevices.inputStreamChannelCounts($0.id) } ?? []
         let tapChannels = Self.tapChannelCount(forMicStreams: micStreams)
-        // The Transcriberr Microphone's feed is our own mic played into its
-        // hidden device: leave our process out of the tap, or the user would
-        // be recorded as the far side too.
-        let excluded = VirtualMicrophone.shared.isActive ? VirtualMicrophone.ownProcessObject().map { [$0] } ?? [] : []
+        // Our own process is never the far side: the Transcriberr
+        // Microphone's feed is the user's mic played into its hidden device,
+        // and it can start at any point of the recording (a call opens the
+        // device, the setting is turned on), after this tap is built. Left
+        // in, the user would be recorded as the far side too.
+        let excluded = VirtualMicrophone.ownProcessObject().map { [$0] } ?? []
         let desc = tapChannels == 1
             ? CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
             : CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)

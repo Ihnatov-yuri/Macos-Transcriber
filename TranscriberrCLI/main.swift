@@ -58,6 +58,9 @@ func usage() {
       transcriberrcli uk-model [status|update]
                                             Parakeet UK: installed release vs Hugging Face; update
                                             fetches the newest and switches to it
+      transcriberrcli virtualmic [seconds]  Transcriberr Microphone driver check: a tone through the
+                                            hidden feed device, recorded back from the microphone
+                                            (silent; quit Transcriberr first)
       transcriberrcli help                 this message
 
     Each command exits 0 on success, non-zero on failure.
@@ -991,6 +994,8 @@ func main() async -> Int32 {
         return runMCPServer()
     case "voice":
         return await cmdVoice(Array(args.dropFirst(2)))
+    case "virtualmic":
+        return await cmdVirtualMic(Array(args.dropFirst(2)))
     case "whisperloop":
         return await cmdWhisperLoop(Array(args.dropFirst(2)))
     case "uk-model":

@@ -15,6 +15,11 @@ SIGN="${IDENTITY:--}"
 find "$APP/Contents/Frameworks" \( -name "*.dylib" -o -name "*.framework" \) -maxdepth 1 2>/dev/null | while read f; do
   codesign --force -s "$SIGN" "$f"
 done
+# The Transcriberr Microphone HAL plug-in in Resources: signed before the app,
+# whose seal covers it. coreaudiod's driver helper loads it from
+# /Library/Audio/Plug-Ins/HAL once Settings installs it.
+DRIVER="$APP/Contents/Resources/TranscriberrMic.driver"
+[ -d "$DRIVER" ] && codesign --force -s "$SIGN" "$DRIVER"
 # Hardened runtime + explicit entitlements. A plain re-sign drops both (Xcode's
 # ENABLE_HARDENED_RUNTIME does not survive it), and without the runtime any
 # local process could start the app with DYLD_INSERT_LIBRARIES and inherit its

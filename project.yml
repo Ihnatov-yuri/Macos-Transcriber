@@ -59,6 +59,19 @@ targets:
         product: WhisperKit
       - package: LiteRTLM
         product: LiteRTLM
+    # The Transcriberr Microphone HAL plug-in (MicDriver/), shipped in
+    # Contents/Resources for Settings to install. Plain C, built with clang:
+    # see docs/virtual-microphone.md.
+    postCompileScripts:
+      - name: Build Transcriberr Microphone driver
+        script: |
+          "$SRCROOT/scripts/build-mic-driver.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+        inputFiles:
+          - $(SRCROOT)/MicDriver/TranscriberrMic.c
+          - $(SRCROOT)/MicDriver/Info.plist
+          - $(SRCROOT)/scripts/build-mic-driver.sh
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TranscriberrMic.driver/Contents/MacOS/TranscriberrMic
     info:
       path: Transcriberr/Info.plist
       properties:

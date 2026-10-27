@@ -403,6 +403,8 @@ struct RecorderSettingsTab: View {
                 }
             }
 
+            VirtualMicrophoneSettings(settings: settings)
+
             Toggle(isOn: Binding(
                 get: { settings.preprocessImports },
                 set: { settings.preprocessImports = $0 }
@@ -423,6 +425,65 @@ struct RecorderSettingsTab: View {
         devices = AudioInputDevices.microphones()
         loopbacks = AudioInputDevices.loopbacks()
         systemDefault = AudioInputDevices.systemDefault()
+    }
+}
+
+/// The Transcriberr Microphone toggle, its driver install and what the
+/// call app has to be set to.
+private struct VirtualMicrophoneSettings: View {
+    let settings: RecorderSettings
+    @State private var installed = VirtualMicrophone.isInstalled
+    @State private var working = false
+    @State private var message: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: Binding(
+                get: { settings.virtualMicrophone },
+                set: { settings.virtualMicrophone = $0; VirtualMicrophone.shared.refresh() }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Transcriberr Microphone for calls")
+                        .font(AppFont.text(13, weight: .bold))
+                    Text("Transcriberr runs the echo filter on your mic and passes the cleaned sound to your call through a microphone called \u{201C}\(VirtualMicrophone.micName)\u{201D}. In Teams, Meet or Zoom, choose it as the microphone. The call and the recording then both lose the echo, and the call app no longer fights Transcriberr over your mic. Replaces the echo filter above.")
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.ink2)
+                    Text("The microphone only exists while Transcriberr is open. When you quit, calls switch to another microphone. With headphones the call gets your plain mic. Other apps play about 4 dB quieter while a call uses it.")
+                        .font(AppFont.text(11))
+                        .foregroundStyle(AppColor.ink2)
+                }
+            }
+            HStack(spacing: 10) {
+                Text(installed ? "Driver installed." : "Needs a small audio driver (administrator password; all sound stops for a second).")
+                    .font(AppFont.text(11))
+                    .foregroundStyle(AppColor.ink2)
+                Button(installed ? "Remove Driver" : "Install Driver") { run(remove: installed) }
+                    .disabled(working || (!installed && VirtualMicrophone.bundledDriverURL == nil))
+                if working { ProgressView().controlSize(.small) }
+            }
+            .padding(.leading, 20)
+            if let message {
+                Text(message)
+                    .font(AppFont.text(11))
+                    .foregroundStyle(AppColor.ink2)
+                    .padding(.leading, 20)
+            }
+        }
+    }
+
+    private func run(remove: Bool) {
+        working = true
+        message = nil
+        Task {
+            if remove { VirtualMicrophone.shared.shutdown() }
+            let error = await VirtualMicrophone.install(remove: remove)
+            // coreaudiod takes a moment to come back and load the plug-in.
+            try? await Task.sleep(for: .seconds(3))
+            installed = VirtualMicrophone.isInstalled
+            working = false
+            message = error ?? (remove ? "Removed." : "Installed. Choose \u{201C}\(VirtualMicrophone.micName)\u{201D} as the microphone in your call app.")
+            VirtualMicrophone.shared.refresh()
+        }
     }
 }
 

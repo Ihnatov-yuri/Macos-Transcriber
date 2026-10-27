@@ -80,6 +80,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         /// delivers, its cleaned samples replace the raw mic everywhere in
         /// `handleIO` — gate, me-timeline, mix and the `.mic` track.
         var voiceMic: VoiceProcessedMic?
+        /// `voiceMic` belongs to the Transcriberr Microphone (a call may
+        /// still be using it): hand it back instead of stopping it.
+        var voiceMicBorrowed = false
     }
     @ObservationIgnored private let io = IOState()
 
@@ -370,7 +373,14 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         //    headphones: no echo to remove, and it would still turn every
         //    other app down 4 dB. Assigned at once so a throw further down
         //    still releases it through `teardownCoreAudio`.
-        if RecorderSettings.shared.meetingEchoFilter {
+        //    With the Transcriberr Microphone on, the call and the recording
+        //    share its one unit (a second one on the same mic is what broke
+        //    the call's mic before), whatever the output.
+        let shared = VirtualMicrophone.shared.acquireForRecording()
+        if shared.held {
+            ioQueue.sync { io.voiceMic = shared.unit; io.voiceMicBorrowed = true }
+            AppLog.info("meeting", "mic shared with the Transcriberr Microphone")
+        } else if RecorderSettings.shared.meetingEchoFilter {
             let route = VoiceProcessedMic.outputRoute()
             if route.headphones {
                 AppLog.info("meeting", "echo filter off — output '\(route.name)' is headphones")
@@ -394,9 +404,13 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         let mic = selectedInputDevice()
         let micStreams = mic.map { AudioInputDevices.inputStreamChannelCounts($0.id) } ?? []
         let tapChannels = Self.tapChannelCount(forMicStreams: micStreams)
+        // The Transcriberr Microphone's feed is our own mic played into its
+        // hidden device: leave our process out of the tap, or the user would
+        // be recorded as the far side too.
+        let excluded = VirtualMicrophone.shared.isActive ? VirtualMicrophone.ownProcessObject().map { [$0] } ?? [] : []
         let desc = tapChannels == 1
-            ? CATapDescription(monoGlobalTapButExcludeProcesses: [])
-            : CATapDescription(stereoGlobalTapButExcludeProcesses: [])
+            ? CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
+            : CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
         desc.name = "Transcriberr System Tap"
         desc.isPrivate = true
         desc.muteBehavior = .unmuted
@@ -509,12 +523,17 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         // Every way capture ends comes through here — Stop, a failed start,
         // a mic unplugged mid-meeting — so the unit (and the duck it puts
         // on every other app) never outlives the recording.
-        let vp = ioQueue.sync { () -> VoiceProcessedMic? in
-            let v = self.io.voiceMic
+        let (vp, borrowed) = ioQueue.sync { () -> (VoiceProcessedMic?, Bool) in
+            let v = (self.io.voiceMic, self.io.voiceMicBorrowed)
             self.io.voiceMic = nil
+            self.io.voiceMicBorrowed = false
             return v
         }
-        vp?.stop()
+        if borrowed {
+            VirtualMicrophone.shared.releaseFromRecording()
+        } else {
+            vp?.stop()
+        }
         if aggID != kAudioObjectUnknown {
             AudioHardwareDestroyAggregateDevice(aggID)
             aggID = AudioObjectID(kAudioObjectUnknown)

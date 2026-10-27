@@ -1282,6 +1282,9 @@ struct TranscriptPane: View {
     /// Lines that contain the search, in order (computed once per query
     /// and text, not on every playhead tick).
     @State private var searchHits: [UUID] = []
+    /// No shown line has it, but the raw text does: the Clean view left the
+    /// words out (the Library searches the raw transcript).
+    @State private var searchOnlyRaw = false
     @State private var searchPosition = 0
     @State private var searchTarget: UUID?
     /// The query the user hid the marks for.
@@ -1450,9 +1453,11 @@ struct TranscriptPane: View {
                 .task(id: disputeKey(segs)) { disputeRows = disputeHits(in: sortedSegments) }
                 .task(id: SearchKey(query: activeQuery, texts: disputeKey(segs).texts)) {
                     let q = activeQuery
-                    let hits = q.isEmpty ? [] : sortedSegments.filter { SearchHighlight.matches(q, style.apply($0.text)) }.map(\.id)
+                    let segs = sortedSegments
+                    let hits = q.isEmpty ? [] : segs.filter { SearchHighlight.matches(q, style.apply($0.text)) }.map(\.id)
                     let first = hits.first != searchHits.first || searchHits.isEmpty
                     searchHits = hits
+                    searchOnlyRaw = !q.isEmpty && hits.isEmpty && segs.contains { SearchHighlight.matches(q, $0.text) }
                     if first {
                         searchPosition = 0
                         searchTarget = hits.first
@@ -1627,8 +1632,9 @@ struct TranscriptPane: View {
         let count = searchHits.count
         return HStack(spacing: AppMetric.m) {
             Rectangle().fill(AppColor.accent).frame(width: 3, height: 14)
-            Text(count == 0 ? "No line here contains “\(query)”"
-                 : "“\(query)” in \(count == 1 ? "1 line" : "\(count) lines")").uiLabel(10)
+            Text(count > 0 ? "“\(query)” in \(count == 1 ? "1 line" : "\(count) lines")"
+                 : searchOnlyRaw ? "“\(query)” is only in words the Clean view leaves out: turn Clean off to see it"
+                 : "No line here contains “\(query)”").uiLabel(10)
             if count > 1 {
                 Text("\(searchPosition + 1) of \(count)").uiLabel(9, color: AppColor.ink3)
             }

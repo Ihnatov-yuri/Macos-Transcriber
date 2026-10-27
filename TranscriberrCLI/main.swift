@@ -863,7 +863,7 @@ func cmdAEC(base: String) async -> Int32 {
         let r = try await decoder.decodeAll(file: sys)
         print("[aec] mic \(m.count) smp, sys \(r.count) smp — running NLMS…")
         let t0 = Date()
-        let (cleaned, outcome, echoDelay, _) = EchoCanceller.cancelDetailed(mic: m, ref: r)
+        let (cleaned, outcome, echoDelay, _) = await EchoCanceller.cancelGuided(mic: m, ref: r, print: VoiceprintStore.load())
         var ein = 0.0, eout = 0.0
         for v in m { ein += Double(v * v) }
         for v in cleaned { eout += Double(v * v) }

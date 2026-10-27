@@ -1,5 +1,6 @@
 import Foundation
 import Accelerate
+import Synchronization
 
 /// Offline acoustic echo cancellation over the meeting track pair.
 ///
@@ -131,9 +132,41 @@ nonisolated enum EchoCanceller {
     /// whole-track ERLE when echo was cancelled: how much of everything the
     /// mic picked up was the far side (17.5 dB ≈ 98% on a speaker call where
     /// the user said little; 3-7 dB on headphone calls where the user talks).
-    static func cancelDetailed(mic: [Float], ref: [Float]) -> (samples: [Float], outcome: Outcome, echoDelay: Int, micEchoDB: Double) {
+    static func cancelDetailed(mic: [Float], ref: [Float]) -> Result {
+        switch linearStage(mic: mic, ref: ref) {
+        case .done(let r): return r
+        case .linear(let l): return suppress(l, mic: mic)
+        }
+    }
+
+    typealias Result = (samples: [Float], outcome: Outcome, echoDelay: Int, micEchoDB: Double)
+
+    /// The subtraction stage's output, before the residual suppressor:
+    /// `out` is the mic with the predicted echo subtracted, which never
+    /// touches the user's voice, and the per-frame powers the suppressor
+    /// decides from.
+    struct Linear {
+        let out: [Float]
+        let framePe: [Float]
+        let framePy: [Float]
+        let n: Int
+        let delay: Int
+        let echoDelay: Int
+        let searchStart: Int
+        let bestCorr: Float
+    }
+
+    enum LinearStage {
+        /// Nothing to suppress: no echo path, or the linear filter could not
+        /// explain it. The result is final.
+        case done(Result)
+        case linear(Linear)
+    }
+
+    /// Steps 1 and 2: delay search and NLMS subtraction.
+    static func linearStage(mic: [Float], ref: [Float]) -> LinearStage {
         let n = min(mic.count, ref.count)
-        guard n > 16_000 else { return (mic, .noEcho, 0, 0) }
+        guard n > 16_000 else { return .done((mic, .noEcho, 0, 0)) }
 
         // ---- 1. Bulk delay via cross-correlation (8× decimated, ≤60 s) ----
         // Searched inside the LOUDEST stretches of the reference, not the
@@ -166,7 +199,7 @@ nonisolated enum EchoCanceller {
         // it, which the energy check at the end would wave straight through.
         guard bestCorr >= minCorrelation else {
             AppLog.info("aec", String(format: "no echo path (peak correlation %.3f) — keeping original mic track", bestCorr))
-            return (mic, .noEcho, 0, 0)
+            return .done((mic, .noEcho, 0, 0))
         }
         let echoDelay = delay
 
@@ -209,7 +242,6 @@ nonisolated enum EchoCanceller {
         // (measured on a real call: 5.5 dB of echo removed by warm-up alone,
         // 11.2 dB once the strict test takes over).
         var farActiveSamples = 0
-        var num = 0.0, den = 0.0
         // Per-frame residual and predicted-echo power, for the suppressor below.
         let frames = n / nlpFrame + 1
         var framePe = [Float](repeating: 0, count: frames)
@@ -278,10 +310,21 @@ nonisolated enum EchoCanceller {
             if !blockERLE.isEmpty, linearERLE < minLinearERLE {
                 AppLog.info("aec", String(format: "linear stage removed only %.1f dB (median of %d far-end seconds, corr %.3f) — no usable echo path, keeping raw mic for echo-by-timing",
                                           linearERLE, blockERLE.count, bestCorr))
-                return (mic, .echoKept, echoDelay, 0)
+                return .done((mic, .echoKept, echoDelay, 0))
             }
         }
+        return .linear(Linear(out: out, framePe: framePe, framePy: framePy, n: n, delay: delay,
+                              echoDelay: echoDelay, searchStart: searchStart, bestCorr: bestCorr))
+    }
 
+    /// Step 3 over a `linearStage` result. With a `guide` from the user's
+    /// voice print, its two rules override the residual test (see
+    /// `VoiceGuide`); without one this is the suppressor as it always was.
+    static func suppress(_ l: Linear, mic: [Float], guide: VoiceGuide? = nil) -> Result {
+        var out = l.out
+        let n = l.n, delay = l.delay, echoDelay = l.echoDelay
+        let framePe = l.framePe, framePy = l.framePy
+        let frames = framePe.count
         // ---- 3. Residual echo suppressor ----
         // The linear filter alone is not enough for ASR. Measured on a real
         // call: 11 dB of echo removed, and Parakeet still transcribed the far
@@ -298,7 +341,11 @@ nonisolated enum EchoCanceller {
         // predict no echo and pass through untouched.
         var gain: Float = 1
         for f in 0..<frames {
-            let target: Float = framePe[f] > nlpNearEndRatio * framePy[f] ? 1 : nlpFloor
+            var target: Float = framePe[f] > nlpNearEndRatio * framePy[f] ? 1 : nlpFloor
+            if let guide {
+                target = guide.target(base: target, at: Double(f * nlpFrame) / 16_000,
+                                      echoPredicted: framePy[f] > 0)
+            }
             // Open fast so the user's first syllable is never clipped, close
             // slower so a gap between words doesn't chop the tail off.
             gain += (target > gain ? 0.6 : 0.5) * (target - gain)
@@ -321,16 +368,16 @@ nonisolated enum EchoCanceller {
         // a long delay, which is enough to trip the do-no-harm guard below
         // and hand back the uncancelled mic — putting the far side into the
         // user's own transcript, the very thing this filter exists to stop.
-        num = 0
-        den = 0
+        var num = 0.0, den = 0.0
         for i in delay..<n {
             num += Double(mic[i] * mic[i])
             den += Double(out[i] * out[i])
         }
 
         let erle = 10 * log10(num / max(den, 1e-12))
-        AppLog.info("aec", String(format: "NLMS done: n=%d, search window @%.0fs, corr %.3f, delay=%d smp (%.0f ms), ERLE %.1f dB",
-                                  n, Double(searchStart) / 16_000.0, bestCorr, delay, Double(delay) / 16.0, erle))
+        AppLog.info("aec", String(format: "NLMS done: n=%d, search window @%.0fs, corr %.3f, delay=%d smp (%.0f ms), ERLE %.1f dB%@",
+                                  n, Double(l.searchStart) / 16_000.0, l.bestCorr, delay, Double(delay) / 16.0, erle,
+                                  guide == nil ? "" : " (voice-print guided)"))
         // Do no harm: if subtraction didn't reduce energy, there was no echo
         // to cancel (post-v1.7 tracks are gate-cleaned at capture) — keep the
         // original rather than inject filter noise.
@@ -339,5 +386,120 @@ nonisolated enum EchoCanceller {
             return (mic, .noEcho, echoDelay, 0)
         }
         return (out, .cancelled, echoDelay, erle)
+    }
+
+    /// `cancelDetailed`, with the suppressor guided by the user's voice
+    /// print when one is enrolled and fits this mic. The print scores the
+    /// subtracted track — the one that still has all of the user's speech —
+    /// so it can vouch for words the residual test alone would mute. Any
+    /// failure to score falls back to the unguided suppressor.
+    ///
+    /// `cacheKey` (the mic track's path) shares the scores between the two
+    /// passes over one meeting: the transcription run scores, and the
+    /// playback-mix rebuild that follows it decodes the same track and
+    /// reuses them instead of scoring it again.
+    @concurrent
+    static func cancelGuided(mic: [Float], ref: [Float], print: Voiceprint?,
+                             cacheKey: String? = nil) async -> Result {
+        switch linearStage(mic: mic, ref: ref) {
+        case .done(let r):
+            return r
+        case .linear(let l):
+            guard let print else { return suppress(l, mic: mic) }
+            let scores: [Float?]
+            if let cacheKey, let cached = VoiceScoreCache.take(cacheKey, sampleCount: mic.count) {
+                scores = cached
+                AppLog.info("aec", "voice print scores reused from the transcription run")
+            } else {
+                do {
+                    scores = try await VoiceEmbedder.shared.scores(l.out, against: print)
+                } catch {
+                    AppLog.warn("aec", "voice print scoring failed, unguided suppressor: \(error.localizedDescription)")
+                    return suppress(l, mic: mic)
+                }
+                if let cacheKey { VoiceScoreCache.put(cacheKey, sampleCount: mic.count, scores: scores) }
+            }
+            let fit = VoiceTimeline.fits(scores)
+            guard fit.0 else {
+                AppLog.info("aec", "voice print does not fit this mic (\(fit.strong) clear windows, \(fit.ambiguous) borderline) — unguided suppressor")
+                return suppress(l, mic: mic)
+            }
+            return suppress(l, mic: mic, guide: VoiceGuide(scores: scores))
+        }
+    }
+}
+
+/// Voice-print rules for the residual echo suppressor, over target-speaker
+/// scores (`VoiceActivity.window` windows every `VoiceActivity.hop`) of the
+/// subtracted mic.
+///
+/// The residual test alone gets it wrong both ways on laptop speakers, where
+/// the linear stage tops out around 13 dB (the speakers' own processing is
+/// not in the reference). It opens on echo the filter failed to predict —
+/// a far-side phrase start played back at full level — and it mutes the
+/// user's sentence starts over the far side. Measured on the 22 Oct speaker
+/// calls and 21 of the user's phrases mixed over real echo (2026-10-27):
+/// audible echo bursts 140 → 76 and 84 → 48, sentence starts losing more
+/// than 6 dB 5 → 4, the typical start −2.3 → 0.0 dB. Chosen by ear over a
+/// looser "it's you" bar (0.35: two fewer clipped starts, but louder echo
+/// let through) and over WebRTC AEC3 and DTLN-aec.
+nonisolated struct VoiceGuide {
+    let scores: [Float?]
+    /// Every window over a frame below this: clearly not the user. Echo
+    /// bursts score 0.01-0.04; the user over loud echo rarely drops this
+    /// low (0.20 muted whole phrases of theirs).
+    static let notYou: Float = 0.10
+    /// The target-speaker threshold the voice timeline uses.
+    static let youOn: Float = VoiceActivity.onThreshold
+    /// A window starting this soon after a frame vouches for it too, so the
+    /// first syllable before a matching window is kept.
+    static let lead = 0.3
+
+    /// Highest score among the windows overlapping [a, b] seconds; silent
+    /// (unscored) windows count as -1.
+    func maxScore(from a: Double, to b: Double) -> Float {
+        let hop = VoiceActivity.hop, window = VoiceActivity.window
+        let lo = max(0, Int(((a - window) / hop).rounded(.down)) + 1)
+        let hi = min(scores.count - 1, Int((b / hop).rounded(.down)))
+        guard lo <= hi else { return -1 }
+        var m: Float = -1
+        for i in lo...hi { if let v = scores[i], v > m { m = v } }
+        return m
+    }
+
+    /// The suppressor's target for the 20 ms frame starting at `t`, given
+    /// the residual test's own verdict `base` (1 open, else muted).
+    func target(base: Float, at t: Double, echoPredicted: Bool) -> Float {
+        // The print says it is the user: never mute.
+        if maxScore(from: t, to: t + Self.lead) >= Self.youOn { return 1 }
+        // The residual test would open while the filter predicts echo, but
+        // every window over the frame says clearly not the user: an echo
+        // burst. Stay muted.
+        if base == 1, echoPredicted, maxScore(from: t, to: t) < Self.notYou { return EchoCanceller.nlpFloor }
+        return base
+    }
+}
+
+/// Voice-print scores of a meeting's subtracted mic, from the transcription
+/// run to the playback-mix rebuild of the same files. One entry per mic
+/// track, taken once; the sample count guards against a different decode.
+nonisolated enum VoiceScoreCache {
+    private static let entries = Mutex<[String: (count: Int, scores: [Float?])]>([:])
+
+    /// An entry nobody takes (auto-transcribe off, a re-run) must not pile up.
+    static let capacity = 4
+
+    static func put(_ key: String, sampleCount: Int, scores: [Float?]) {
+        entries.withLock { e in
+            if e[key] == nil, e.count >= capacity, let any = e.keys.first { e.removeValue(forKey: any) }
+            e[key] = (sampleCount, scores)
+        }
+    }
+
+    static func take(_ key: String, sampleCount: Int) -> [Float?]? {
+        entries.withLock { e in
+            guard let hit = e.removeValue(forKey: key), hit.count == sampleCount else { return nil }
+            return hit.scores
+        }
     }
 }

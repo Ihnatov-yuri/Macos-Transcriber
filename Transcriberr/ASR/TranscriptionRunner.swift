@@ -198,7 +198,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     /// a word read into silence.
     @concurrent
     private static func cancelEchoAndChunk(
-        mic: inout [Float], sys: [Float], decoder: AudioDecoder, keepCleanedMic: Bool = false
+        mic: inout [Float], sys: [Float], decoder: AudioDecoder, keepCleanedMic: Bool = false,
+        voiceprint: Voiceprint? = nil, scoreCacheKey: String? = nil
     ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double, cleanedMic: [Float]?, micHadEcho: Bool,
                 sysSound: [ClosedRange<Double>]) {
         let micChunks: [AudioDecoder.Chunk]
@@ -206,7 +207,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         var keptMic: [Float]?
         let micHadEcho: Bool
         do {
-            let aec = EchoCanceller.cancelDetailed(mic: mic, ref: sys)
+            let aec = await EchoCanceller.cancelGuided(mic: mic, ref: sys, print: voiceprint, cacheKey: scoreCacheKey)
             let cleanedMic = aec.samples
             // The speech timeline only gates a mic that was mostly echo: the
             // recorder misses the user whenever the far side is louder in the
@@ -288,7 +289,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 let micNeeded = prepareTimeline || params.backend.isParakeet
                 let prepared = await Self.cancelEchoAndChunk(
                     mic: &rawMic, sys: sysSamples, decoder: decoder,
-                    keepCleanedMic: micNeeded || voiceprint != nil)
+                    keepCleanedMic: micNeeded || voiceprint != nil, voiceprint: voiceprint,
+                    scoreCacheKey: micURL.path)
                 cleanedMic = prepared.cleanedMic
                 micHadEcho = prepared.micHadEcho
                 sysSound = prepared.sysSound
@@ -296,6 +298,10 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                     continuation.yield(.stage(text: "Finding your voice…", fraction: 0.05))
                     let t0 = Date()
                     do {
+                        // The muted mic, not the canceller's scores of the
+                        // subtracted one: those call a few seconds of loud
+                        // echo "you" at 0.40-0.43 (22 Oct call), and the
+                        // timeline decides whose mic words are kept.
                         voice = try await VoiceTimeline.compute(mic: mic, sys: sysSamples, print: voiceprint) { f in
                             continuation.yield(.stage(text: "Finding your voice… \(Int(f * 100))%", fraction: 0.05 + 0.01 * f))
                         }

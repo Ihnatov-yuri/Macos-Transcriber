@@ -26,13 +26,8 @@ nonisolated enum MeetingMixRebuilder {
     /// the rebuilt file's URL, which the caller must use as the recording's
     /// new `audioPath` when it differs from `mainURL` (the migration case).
     /// The mix the user plays back: the echo-cancelled (or, when the echo is
-    /// beyond the canceller, echo-gated) mic plus the far side.
-    static func playbackMix(mic rawMic: [Float], sys: [Float]) -> [Float] {
-        let (cleanedMic, outcome, echoDelay, _) = EchoCanceller.cancelDetailed(mic: rawMic, ref: sys)
-        return playbackMix(cleanedMic: cleanedMic, outcome: outcome, echoDelay: echoDelay, sys: sys)
-    }
-
-    /// The same from a canceller result already in hand.
+    /// beyond the canceller, echo-gated) mic plus the far side, from a
+    /// canceller result already in hand.
     static func playbackMix(cleanedMic: [Float], outcome: EchoCanceller.Outcome,
                             echoDelay: Int, sys: [Float]) -> [Float] {
         var mic = cleanedMic
@@ -69,7 +64,10 @@ nonisolated enum MeetingMixRebuilder {
             async let sysTask = decoder.decodeAll(file: sysURL)
             let rawMic = try await rawMicTask
             let sys = try await sysTask
-            let mix = playbackMix(mic: rawMic, sys: sys)
+            // The same voice-print guided canceller the transcript gets.
+            let aec = await EchoCanceller.cancelGuided(mic: rawMic, ref: sys, print: VoiceprintStore.load(),
+                                                       cacheKey: micURL.path)
+            let mix = playbackMix(cleanedMic: aec.samples, outcome: aec.outcome, echoDelay: aec.echoDelay, sys: sys)
             guard !mix.isEmpty else { return nil }
 
             guard let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32,

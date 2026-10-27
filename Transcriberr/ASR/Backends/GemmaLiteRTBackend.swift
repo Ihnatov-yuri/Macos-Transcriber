@@ -1,5 +1,5 @@
 import Foundation
-import LiteRTLM
+@preconcurrency import LiteRTLM
 
 /// Gemma 4 via **LiteRT-LM** — Google's own runtime, the same engine and the
 /// same Google-made `.litertlm` model bundles that power the Android
@@ -542,8 +542,8 @@ actor GemmaLiteRTBackend: ASRBackend {
         // TRANSCRIBERR_GEMMA_THINKING=<budget> turns on Gemma 4's thinking
         // mode with that many reasoning tokens (-1 = unbounded). Unset = off,
         // which is how every shipped call runs.
-        let thinking = Self.thinkingBudget.map { ThinkingConfig(enableThinking: true, thinkingTokenBudget: $0) }
         func attempt(_ engine: Engine) async throws -> String {
+            let thinking = Self.thinkingBudget.map { ThinkingConfig(enableThinking: true, thinkingTokenBudget: $0) }
             let sampler = try SamplerConfig(topK: 40, topP: 0.95, temperature: 0.4)
             let conversation = try await engine.createConversation(with: ConversationConfig(
                 systemMessage: Message(systemInstruction),

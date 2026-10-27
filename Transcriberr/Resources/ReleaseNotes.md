@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.0.7
+- The echo filter in meetings is off by default. With the call on the MacBook speakers it could silence your microphone in Teams, so the other people could not hear you, and the recording lost your voice as well. It can still be turned on in Settings, which now says what it can do to the call.
+- When the echo filter is on and you connect AirPods or other headphones during a meeting, it now turns off for the rest of the recording instead of starting again.
+- Transcriberr now builds with Swift's complete concurrency checking and no warnings. Recording, decoding, voice matching and downloads are marked to run off the main thread, so they keep the window responsive.
+
 ## 5.0.6
 - The knowledge base tools (MCP and transcriberrcli kb) now say which calendar meeting a recording was matched to: its title, start and end time, and who else was invited.
 - transcriberrcli keeps its Documents folder permission across updates, so macOS asks once instead of after every new build.

@@ -26,7 +26,7 @@ import CoreAudio
 /// The unit must only exist while recording: while it exists, coreaudiod
 /// turns every other app down (-4 dB at the mildest setting, -15 dB by
 /// default) — the v3.2.1 lesson. `stop()` destroys it.
-final class VoiceProcessedMic: @unchecked Sendable {
+nonisolated final class VoiceProcessedMic: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let lock = NSLock()
     /// Serializes `release` and the route-change restart. Separate from
@@ -45,6 +45,10 @@ final class VoiceProcessedMic: @unchecked Sendable {
     private var lastPush = Date.distantPast
     private var stalled = false
     private var released = false   // under `controlLock`
+    /// Set (under `lock`) once the unit was let go mid-recording because the
+    /// output moved to headphones: `pull` then hands back the raw mic at
+    /// once, without the "stopped delivering" warning.
+    private var retired = false
     private var underruns = 0
     private var dropped = 0
     /// Largest single delivery from the tap, in target-rate samples. The
@@ -147,6 +151,7 @@ final class VoiceProcessedMic: @unchecked Sendable {
     /// caller uses the raw mic for that cycle.
     func pull(_ frames: Int) -> [Float]? {
         lock.lock(); defer { lock.unlock() }
+        if retired { return nil }
         if !primed {
             guard buffered >= cushion + frames else { return nil }
             primed = true
@@ -198,6 +203,11 @@ final class VoiceProcessedMic: @unchecked Sendable {
         // engine again after this — the mic would stay open with nothing
         // reading it.
         controlLock.lock(); defer { controlLock.unlock() }
+        releaseLocked()
+    }
+
+    /// `release` for a caller already holding `controlLock`.
+    private func releaseLocked() {
         released = true
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         configObserver = nil
@@ -219,9 +229,23 @@ final class VoiceProcessedMic: @unchecked Sendable {
     /// start it again; until it is back, `pull` falls back to the raw mic.
     /// Serialized with `release`, so it can never revive a unit that was
     /// already let go.
+    ///
+    /// A switch to headphones (AirPods connected mid-call) lets the unit go
+    /// instead: there is no echo left to remove, and a live unit on the mic
+    /// is what silenced the Teams mic in v4.6-5.0.6 (macOS could not rebuild
+    /// Teams' Voice Isolation chain around it). It used to restart here on
+    /// whatever the new route was, so the filter stayed on for the rest of
+    /// the call although it never starts on headphones.
     private func restartAfterConfigurationChange() {
         controlLock.lock(); defer { controlLock.unlock() }
         guard !released else { return }
+        let route = Self.outputRoute()
+        if route.headphones {
+            releaseLocked()
+            lock.lock(); retired = true; lock.unlock()
+            AppLog.info("meeting", "echo filter off — output switched to '\(route.name)' (headphones), recording the raw mic")
+            return
+        }
         do {
             let rate = try installTap(on: engine.inputNode)
             var startError: Error?

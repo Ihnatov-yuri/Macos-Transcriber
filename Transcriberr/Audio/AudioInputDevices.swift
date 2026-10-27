@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import AVFoundation
 import CoreAudio
+import Synchronization
 
 /// Enumerate and resolve microphones, so capture doesn't have to mean
 /// "whatever macOS currently calls the default input".
@@ -15,7 +16,7 @@ import CoreAudio
 /// a headset cannot send a microphone stream and receive stereo at once.
 /// The only real fix is to capture from something else — which needs a way
 /// to say so.
-enum AudioInputDevices {
+nonisolated enum AudioInputDevices {
 
     struct Device: Identifiable, Hashable, Sendable {
         let id: AudioDeviceID
@@ -114,17 +115,14 @@ enum AudioInputDevices {
     /// first and accepting that the default input is opened in passing;
     /// `Capture` keeps that window as short as it can.
     /// Engines we pointed at a specific device (weakly held).
-    private static let pinnedEngines = NSHashTable<AVAudioEngine>.weakObjects()
-    private static let pinnedLock = NSLock()
+    private static let pinnedEngines = Mutex(NSHashTable<AVAudioEngine>.weakObjects())
 
     private static func wasPinned(_ engine: AVAudioEngine) -> Bool {
-        pinnedLock.lock(); defer { pinnedLock.unlock() }
-        return pinnedEngines.contains(engine)
+        pinnedEngines.withLock { $0.contains(engine) }
     }
 
     private static func setPinned(_ engine: AVAudioEngine, _ pinned: Bool) {
-        pinnedLock.lock(); defer { pinnedLock.unlock() }
-        if pinned { pinnedEngines.add(engine) } else { pinnedEngines.remove(engine) }
+        pinnedEngines.withLock { if pinned { $0.add(engine) } else { $0.remove(engine) } }
     }
 
     @discardableResult

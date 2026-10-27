@@ -9,7 +9,7 @@ import Security
 /// zip ships with a .sig made by scripts/sign-update.sh. An update whose
 /// signature doesn't verify is never installed, so a hijacked GitHub
 /// account alone can't push code to installed copies.
-enum UpdateSignature {
+nonisolated enum UpdateSignature {
     static let publicKey = "dCmBomtsUrKJDHkENGKgsnPkPQ5qixHN/815oU8z6Sc="
 
     /// Binds the version to the zip, so a genuine older zip can't be
@@ -42,7 +42,7 @@ enum UpdateSignature {
 ///
 /// The downloads use UpdateChecker's anonymous session and headers.
 @Observable
-final class UpdateInstaller: @unchecked Sendable {
+nonisolated final class UpdateInstaller: @unchecked Sendable {
 
     enum Phase: Equatable {
         case idle
@@ -70,6 +70,7 @@ final class UpdateInstaller: @unchecked Sendable {
 
     /// `blocker` is asked again right before quitting: a recording started
     /// while the zip downloaded must not be cut off by the relaunch.
+    @concurrent
     func install(_ release: UpdateChecker.Release, currentVersion: String,
                  blocker: @escaping @MainActor @Sendable () -> String? = { nil }) async {
         // Check and claim in one main-actor hop, so a second press can't

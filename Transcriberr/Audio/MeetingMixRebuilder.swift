@@ -19,7 +19,7 @@ import AVFoundation
 /// touches it) and as a one-time backfill over ALREADY-compressed older
 /// recordings (`mainURL` is a `.m4a`; the stale one gets removed once the
 /// rebuilt `.wav` is safely in place — never before).
-enum MeetingMixRebuilder {
+nonisolated enum MeetingMixRebuilder {
     /// `nil` for anything that isn't a meeting recording with both
     /// `.mic`/`.sys` sidecars still on disk, or if the rebuild fails —
     /// callers fall back to `mainURL` unchanged. On success, returns
@@ -56,6 +56,7 @@ enum MeetingMixRebuilder {
         return mix
     }
 
+    @concurrent
     static func rebuildMix(mainURL: URL) async -> URL? {
         guard let micURL = AudioCompressor.sidecarURL(for: mainURL, kind: "mic"),
               let sysURL = AudioCompressor.sidecarURL(for: mainURL, kind: "sys")

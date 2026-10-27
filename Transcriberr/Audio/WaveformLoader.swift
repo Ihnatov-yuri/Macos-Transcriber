@@ -5,10 +5,11 @@ import Accelerate
 /// Extracts a bucketed peak amplitude array from an audio file for display
 /// in the player bar / detail view scrubber. Mirror of the Android app's
 /// 200-bucket waveform extraction.
-enum WaveformLoader {
+nonisolated enum WaveformLoader {
     /// Reads the audio file, downsamples to 16 kHz mono Float32, then groups
     /// samples into `buckets` peak buckets. Returns values in [0, 1]; empty
     /// when the calling task is cancelled (the player loaded another file).
+    @concurrent
     static func extractPeaks(from file: URL, buckets: Int = 200) async -> [Float] {
         do {
             return try await runExtract(file: file, buckets: buckets)

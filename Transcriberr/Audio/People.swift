@@ -9,7 +9,7 @@ import Foundation
 /// kept beside it in ~/Library/Application Support/Transcriberr/voice/, out
 /// of Time Machine and never copied into ~/Documents: they are biometric
 /// data of people who never agreed to be enrolled, and each can be deleted.
-struct Person: Codable, Identifiable, Equatable {
+nonisolated struct Person: Codable, Identifiable, Equatable {
     var id: UUID
     var name: String
     var created: Date
@@ -235,7 +235,7 @@ struct Person: Codable, Identifiable, Equatable {
     static let maxCandidates = 20
 }
 
-struct PeopleStore {
+nonisolated struct PeopleStore {
     let url: URL
     /// The user's own voice, compared against like any saved person's so a
     /// sample of the user is never filed under someone else.
@@ -652,7 +652,7 @@ struct PeopleStore {
 
 /// Which saved person each speaker of a recording is. Pure: embeddings in,
 /// names out, so the rule is tested without audio.
-enum PeopleMatch {
+nonisolated enum PeopleMatch {
     /// Speakers are matched on 3 s clips, the length their voices are
     /// learned from (`VoiceActivity.enrollWindow`). On 1.5 s clips the same
     /// model told two people apart half as well (clip EER 12.5% against
@@ -756,7 +756,7 @@ enum PeopleMatch {
 
 /// The audio side: learn a speaker's voice from a recording, and find saved
 /// people in one.
-enum PeopleVoice {
+nonisolated enum PeopleVoice {
     /// Who speaks when, as one string: taken before a long await and
     /// compared after, it says whether the transcript was replaced meanwhile
     /// (a re-run reuses keys like SPEAKER_00 for whoever it finds).
@@ -859,6 +859,7 @@ enum PeopleVoice {
         return (recording.audioPath, regions)
     }
 
+    @concurrent
     static func learn(speaker key: String, regions: [DiarizationRunner.SpeakerSegment],
                       audioPath: String) async throws -> Voiceprint {
         let samples = try await AudioDecoder().decodeAll(file: URL(fileURLWithPath: audioPath))
@@ -890,6 +891,7 @@ enum PeopleVoice {
     }
 
     /// Each speaker's clip embeddings, as ClusterVoice takes them.
+    @concurrent
     static func clusterEmbeddings(samples: [Float], regions: [DiarizationRunner.SpeakerSegment],
                                   only keys: Set<String>, model: VoiceModel = .current) async throws -> [String: [[Float]]] {
         let floor = VoiceActivity.speechFloor(samples)

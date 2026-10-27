@@ -5,7 +5,7 @@ import Observation
 /// Holds user-editable system prompts + style (vocab, fillers, verbatim, tone).
 /// `render(...)` assembles the final system instruction handed to the backend.
 @Observable
-final class PromptStore: @unchecked Sendable {
+nonisolated final class PromptStore: @unchecked Sendable {
     enum Tone: String, CaseIterable, Sendable {
         case neutral, formal, casual, enthusiastic, technical
     }

@@ -24,7 +24,7 @@ extension MeetingRecorder: LiveChunkSource {
 ///
 /// Thread-safe: chunks are yielded on the recorder's IO queue, subscriptions
 /// come from the main actor, terminations from anywhere.
-final class LiveChunkFeed: @unchecked Sendable {
+nonisolated final class LiveChunkFeed: @unchecked Sendable {
     private let lock = NSLock()
     private var subscribers: [Int: AsyncStream<WavRecorder.Chunk>.Continuation] = [:]
     private var nextId = 0

@@ -5,7 +5,7 @@ import AVFoundation
 /// Mirror of `data/RecordingRepository.kt`.
 /// Speaker-name persistence across re-transcription is preserved via an in-DB
 /// snapshot built before `replaceSegments(...)` and a JSON sidecar.
-final class RecordingRepository: @unchecked Sendable {
+nonisolated final class RecordingRepository: @unchecked Sendable {
     private let context: ModelContext
     private let postProcessTracker: AudioPostProcessTracker
 

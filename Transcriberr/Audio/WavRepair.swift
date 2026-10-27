@@ -12,7 +12,7 @@ import Foundation
 /// Launch-time only. It rewrites headers in place, so it must never run over
 /// a file a recorder has open: the caller snapshots the candidate list before
 /// any capture can start and passes only files that existed then.
-enum WavRepair {
+nonisolated enum WavRepair {
 
     enum Outcome: Equatable {
         /// Sizes already agree with the file. Nothing written.

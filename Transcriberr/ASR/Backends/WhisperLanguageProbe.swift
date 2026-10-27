@@ -1,7 +1,7 @@
 import CoreML
 import os
 import Foundation
-import WhisperKit
+@preconcurrency import WhisperKit
 
 /// Whisper language detection with the whole distribution.
 ///
@@ -12,7 +12,7 @@ import WhisperKit
 /// to Arabic on the alphabetical tie-break — an English meeting was decoded
 /// as Arabic on 2026-10-01. Same steps as WhisperKit's own detection, with a
 /// sampler that keeps the softmax over every language token.
-enum WhisperLanguageProbe {
+nonisolated enum WhisperLanguageProbe {
     struct Result {
         let top: String
         /// Probability per ISO code ("en", "ar", …); sums to 1.
@@ -102,7 +102,7 @@ enum WhisperLanguageProbe {
 /// Chunks where the language Whisper decoded in differs from its own first
 /// guess, counted per run so the finished run can say so in one line.
 /// Super runs are serial (JobManager), so one shared tally is enough.
-enum LanguageOverrideLog {
+nonisolated enum LanguageOverrideLog {
     struct Entry: Equatable { let from: String; let to: String; let count: Int }
 
     private static let tally = OSAllocatedUnfairLock(initialState: [String: Int]())

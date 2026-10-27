@@ -16,7 +16,7 @@ import Foundation
 /// another voice. Pieces carry their own word span, so sorting by start puts
 /// replies after what they answer, and same-speaker pieces still coalesce
 /// into turns downstream.
-enum TurnTiming {
+nonisolated enum TurnTiming {
     /// A silence this long inside one track is a place another track's words
     /// may fall between. Shorter pauses are breathing inside a sentence.
     static let pauseSplitSeconds = 1.0

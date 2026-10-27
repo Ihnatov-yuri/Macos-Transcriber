@@ -1,10 +1,10 @@
 import Foundation
 import os
-import WhisperKit
+@preconcurrency import WhisperKit
 
 /// One native Whisper call's liveness: WhisperKit reports every token it
 /// decodes, so a call that is slow can be told from one that is hung.
-final class WhisperCallProgress: @unchecked Sendable {
+nonisolated final class WhisperCallProgress: @unchecked Sendable {
     private let last = OSAllocatedUnfairLock(initialState: Date())
     let started = Date()
     /// Set when the decode budget ended the call.

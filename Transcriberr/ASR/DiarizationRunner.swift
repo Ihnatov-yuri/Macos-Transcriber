@@ -21,7 +21,7 @@ import FluidAudio
 /// and splits people less. It holds at most 8 voices, so the offline pipeline
 /// stays as the fallback: more than 8 expected, all 8 slots used, more voices
 /// than the user's upper bound, or fewer than an exact count.
-final class DiarizationRunner: @unchecked Sendable {
+nonisolated final class DiarizationRunner: @unchecked Sendable {
     struct SpeakerSegment: Sendable {
         let startSeconds: Double
         let endSeconds: Double
@@ -64,6 +64,7 @@ final class DiarizationRunner: @unchecked Sendable {
     /// Setup for a given expected-speaker count. The count is baked into the
     /// clustering config, so a changed count rebuilds the manager (models are
     /// disk-cached — rebuild costs seconds, not a re-download).
+    @concurrent
     func prepare(numClusters: Int = 0, threshold: Double = 0.6) async throws {
         if manager == nil || configuredClusters != numClusters || configuredThreshold != threshold {
             var cfg = OfflineDiarizerConfig()
@@ -93,6 +94,7 @@ final class DiarizationRunner: @unchecked Sendable {
     /// gentler force than a hard quota: it lets genuinely different voices
     /// split, but never slices one voice into phantoms to fill a quota).
     /// Gives up honestly after three attempts.
+    @concurrent
     func run(
         samples: [Float],
         numClusters: Int = 0,
@@ -151,6 +153,7 @@ final class DiarizationRunner: @unchecked Sendable {
     }
 
     /// Run directly on a file (FluidAudio's memory-mapped streaming path).
+    @concurrent
     func run(file: URL) async throws -> [SpeakerSegment] {
         try await prepare()
         guard let manager else { return [] }

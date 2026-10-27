@@ -15,8 +15,11 @@ import Observation
 /// (drift-compensated) and arrive in a single IO callback. All channels are
 /// downmixed to mono, streamed through AVAudioConverter to 16 kHz, and
 /// written incrementally — same converter discipline as WavRecorder.
+/// No actor isolation on the type (see `WavRecorder`): explicitly
+/// `nonisolated`, since the module default is the main actor. The IO
+/// callback's state lives in `io` and is only touched on `ioQueue`.
 @Observable
-final class MeetingRecorder: @unchecked Sendable {
+nonisolated final class MeetingRecorder: @unchecked Sendable {
 
     enum MeetingError: LocalizedError {
         case coreAudio(String, OSStatus)
@@ -33,36 +36,62 @@ final class MeetingRecorder: @unchecked Sendable {
 
     private let ioQueue = DispatchQueue(label: "meeting.rec.io")
 
+    /// The IO path's state. Only touched on `ioQueue` — the IO proc runs
+    /// there, and every other access sits in an `ioQueue.sync`/`async`
+    /// block — which is what makes the unchecked Sendable true.
+    private nonisolated final class IOState: @unchecked Sendable {
+        var converter: AVAudioConverter?
+        var audioFile: AVAudioFile?
+        /// Raw per-source tracks saved alongside the mix: <base>.mic.wav (you)
+        /// and <base>.sys.wav (everyone else). The mix stays the primary
+        /// recording; the tracks preserve ground truth for split-track
+        /// (re-)transcription — even for meetings recorded before that ships.
+        var micConverter: AVAudioConverter?
+        var micFile: AVAudioFile?
+        var sysConverter: AVAudioConverter?
+        var sysFile: AVAudioFile?
+        var paused = false
+        var framesSeen: Int64 = 0
+        var lastPublishMs: Int64 = 0
+        /// Channel count the system tap was created with — chosen per
+        /// session so it never equals the microphone's (see
+        /// `tapChannelCount`). The IO callback tells the two sources apart
+        /// by it.
+        var tapChannels = 2
+        var warnedPositionalFallback = false
+        var nativeRate: Double = 48_000
+        /// Live-caption chunking (see `appendToChunkBuffer`).
+        var chunkBuffer: [Float] = []
+        var chunkTotal16k: Int64 = 0
+        /// "Me" timeline: intervals where the MIC was louder than the system
+        /// tap. The aggregate delivers mic and tap as separate buffers, so
+        /// before the downmix we know exactly which side the energy came
+        /// from — ground truth no clustering can give. Saved as
+        /// <recording>.me.json; after transcription the best-overlapping
+        /// speaker gets the user's name.
+        var meIntervals: [[Double]] = []
+        var meOpenAt: Double? = nil
+        /// Echo duck: while the system tap is loud and the mic is NOT
+        /// dominant, the mic is mostly hearing the speakers — its
+        /// contribution to the mix (and the mic track) is attenuated.
+        /// Smoothed so it never pumps.
+        var micGain: Float = 1
+        /// Apple's echo filter on the mic while on speakers. When it
+        /// delivers, its cleaned samples replace the raw mic everywhere in
+        /// `handleIO` — gate, me-timeline, mix and the `.mic` track.
+        var voiceMic: VoiceProcessedMic?
+    }
+    @ObservationIgnored private let io = IOState()
+
     private(set) var level: Float = 0
     private(set) var elapsedMs: Int64 = 0
     /// Rolling per-callback peak history, same shape as WavRecorder's so the
     /// Record-screen waveform can render either source.
     private(set) var peakHistory: [Float] = Array(repeating: 0, count: 64)
-    private var lastPublishMs: Int64 = 0
 
     /// Live-caption chunk feed: same one-second 16 kHz chunks WavRecorder
     /// emits, cut from the converted output right before it hits the file.
     let liveFeed = LiveChunkFeed(backlog: MeetingRecorder.liveChunkBacklog)
-    private var chunkBuffer: [Float] = []
-    private var chunkTotal16k: Int64 = 0
-
-    /// "Me" timeline: intervals where the MIC was louder than the system tap.
-    /// The aggregate delivers mic and tap as separate buffers, so before the
-    /// downmix we know exactly which side the energy came from — ground truth
-    /// no clustering can give. Saved as <recording>.me.json; after
-    /// transcription the best-overlapping speaker gets the user's name.
-    private var meIntervals: [[Double]] = []
-    private var meOpenAt: Double? = nil
-
-    /// Echo duck: while the system tap is loud and the mic is NOT dominant,
-    /// the mic is mostly hearing the speakers — its contribution to the mix
-    /// (and the mic track) is attenuated. Smoothed so it never pumps.
-    private var micGain: Float = 1
-
-    /// Apple's echo filter on the mic while on speakers (ioQueue-owned).
-    /// When it delivers, its cleaned samples replace the raw mic everywhere
-    /// below — gate, me-timeline, mix and the `.mic` track.
-    private var voiceMic: VoiceProcessedMic?
 
     init() {}
 
@@ -79,24 +108,6 @@ final class MeetingRecorder: @unchecked Sendable {
     private var aggID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
     private var tapDesc: CATapDescription?
-    private var converter: AVAudioConverter?
-    private var audioFile: AVAudioFile?
-    /// Raw per-source tracks saved alongside the mix: <base>.mic.wav (you)
-    /// and <base>.sys.wav (everyone else). The mix stays the primary
-    /// recording; the tracks preserve ground truth for split-track
-    /// (re-)transcription — even for meetings recorded before that ships.
-    private var micConverter: AVAudioConverter?
-    private var micFile: AVAudioFile?
-    private var sysConverter: AVAudioConverter?
-    private var sysFile: AVAudioFile?
-    private var paused = false
-    private var framesSeen: Int64 = 0
-    /// Channel count the system tap was created with — chosen per session
-    /// so it never equals the microphone's (see `tapChannelCount`). The IO
-    /// callback tells the two sources apart by it.
-    private var tapChannels = 2
-    private var warnedPositionalFallback = false
-    private var nativeRate: Double = 48_000
     private var fileURL: URL?
     /// Exposed read-only so dictation can refuse to open a second input
     /// chain while a meeting is being captured.
@@ -136,6 +147,9 @@ final class MeetingRecorder: @unchecked Sendable {
     /// observable flags (`isStarting`, `isRunning`, `elapsedMs`, the chunk
     /// stream) are claimed and released on the main actor rather than
     /// written from the pool underneath SwiftUI and `publishStats`.
+    /// `@concurrent` keeps it on the pool: a plain nonisolated async function
+    /// now runs on its caller's actor, which for the Record button is main.
+    @concurrent
     func start() async throws {
         let claimed = await MainActor.run { () -> Bool in
             guard !isStarting, !isRunning else { return false }
@@ -175,10 +189,11 @@ final class MeetingRecorder: @unchecked Sendable {
             // an orphan header-only WAV.
             teardownCoreAudio()
             ioQueue.sync {
-                self.converter = nil
-                self.audioFile = nil
-                self.micConverter = nil; self.micFile = nil
-                self.sysConverter = nil; self.sysFile = nil
+                let io = self.io
+                io.converter = nil
+                io.audioFile = nil
+                io.micConverter = nil; io.micFile = nil
+                io.sysConverter = nil; io.sysFile = nil
             }
             // Delete the header-only files this attempt already created.
             // They are real files in ~/Documents/Transcriberr/Recordings —
@@ -196,6 +211,9 @@ final class MeetingRecorder: @unchecked Sendable {
         }
     }
 
+    /// `@concurrent` for the same reason as `start()`: `finishCapture` waits
+    /// for the IO proc to return.
+    @concurrent
     func stop() async throws -> URL? {
         // A stop that lands while start() is still setting up must wait for
         // it: returning nil here let start() finish afterwards and leave a
@@ -234,28 +252,29 @@ final class MeetingRecorder: @unchecked Sendable {
         // Drain any in-flight IO callback, then flush the converter tail.
         var finalMs: Int64 = 0
         ioQueue.sync {
+            let io = self.io
             // Exact elapsed time from the frames actually captured — the
             // published value is throttled (~30 Hz) and can lag the last
             // callback, and the caller saves the recording's duration from it.
-            finalMs = Int64(Double(self.framesSeen) / self.nativeRate * 1000)
+            finalMs = Int64(Double(io.framesSeen) / io.nativeRate * 1000)
             self.flushConverterTail()
-            self.flushTrackTail(converter: self.micConverter, file: self.micFile)
-            self.flushTrackTail(converter: self.sysConverter, file: self.sysFile)
-            self.micConverter = nil; self.micFile = nil
-            self.sysConverter = nil; self.sysFile = nil
-            if let open = self.meOpenAt {
-                self.meIntervals.append([open, Double(self.framesSeen) / self.nativeRate])
-                self.meOpenAt = nil
+            self.flushTrackTail(converter: io.micConverter, file: io.micFile)
+            self.flushTrackTail(converter: io.sysConverter, file: io.sysFile)
+            io.micConverter = nil; io.micFile = nil
+            io.sysConverter = nil; io.sysFile = nil
+            if let open = io.meOpenAt {
+                io.meIntervals.append([open, Double(io.framesSeen) / io.nativeRate])
+                io.meOpenAt = nil
             }
-            if let url = self.fileURL, !self.meIntervals.isEmpty,
-               let data = try? JSONEncoder().encode(self.meIntervals) {
+            if let url = self.fileURL, !io.meIntervals.isEmpty,
+               let data = try? JSONEncoder().encode(io.meIntervals) {
                 let sidecar = url.deletingPathExtension().appendingPathExtension("me.json")
                 try? data.write(to: sidecar)
-                AppLog.info("meeting", "me-timeline: \(self.meIntervals.count) intervals → \(sidecar.lastPathComponent)")
-                self.meIntervals.removeAll()   // written once, even if finish runs twice
+                AppLog.info("meeting", "me-timeline: \(io.meIntervals.count) intervals → \(sidecar.lastPathComponent)")
+                io.meIntervals.removeAll()   // written once, even if finish runs twice
             }
-            self.audioFile = nil
-            self.converter = nil
+            io.audioFile = nil
+            io.converter = nil
         }
         return finalMs
     }
@@ -340,8 +359,8 @@ final class MeetingRecorder: @unchecked Sendable {
         return alive != 0
     }
 
-    func pause()  { ioQueue.async { self.paused = true } }
-    func resume() { ioQueue.async { self.paused = false } }
+    func pause()  { ioQueue.async { self.io.paused = true } }
+    func resume() { ioQueue.async { self.io.paused = false } }
 
     // MARK: - Capture graph
 
@@ -359,7 +378,7 @@ final class MeetingRecorder: @unchecked Sendable {
                 AppLog.info("meeting", "output '\(route.name)' — starting the echo filter")
                 let vp = VoiceProcessedMic()
                 if vp.start(inputUID: RecorderSettings.shared.inputDeviceUID) {
-                    ioQueue.sync { self.voiceMic = vp }
+                    ioQueue.sync { io.voiceMic = vp }
                 }
             }
         }
@@ -374,7 +393,7 @@ final class MeetingRecorder: @unchecked Sendable {
         //    treats both the same.
         let mic = selectedInputDevice()
         let micStreams = mic.map { AudioInputDevices.inputStreamChannelCounts($0.id) } ?? []
-        tapChannels = Self.tapChannelCount(forMicStreams: micStreams)
+        let tapChannels = Self.tapChannelCount(forMicStreams: micStreams)
         let desc = tapChannels == 1
             ? CATapDescription(monoGlobalTapButExcludeProcesses: [])
             : CATapDescription(stereoGlobalTapButExcludeProcesses: [])
@@ -383,7 +402,6 @@ final class MeetingRecorder: @unchecked Sendable {
         desc.muteBehavior = .unmuted
         try check(AudioHardwareCreateProcessTap(desc, &tapID), "System-audio tap")
         tapDesc = desc
-        warnedPositionalFallback = false
 
         // 2. Aggregate device: the chosen mic + the tap, one clock.
         let micUID = try mic?.uid ?? defaultInputUID()
@@ -404,7 +422,7 @@ final class MeetingRecorder: @unchecked Sendable {
         ]
         try check(AudioHardwareCreateAggregateDevice(aggDict as CFDictionary, &aggID), "Aggregate device")
 
-        nativeRate = deviceSampleRate(aggID) ?? 48_000
+        let nativeRate = deviceSampleRate(aggID) ?? 48_000
         let layout = AudioInputDevices.inputStreamChannelCounts(aggID)
         let tapIndex = Self.tapBufferIndex(channelCounts: layout, tapChannels: tapChannels)
         AppLog.info("meeting", "aggregate input streams \(layout) (mic \(micStreams), tap \(tapChannels)ch) → tap buffer \(tapIndex.map(String.init) ?? "by position")")
@@ -449,20 +467,25 @@ final class MeetingRecorder: @unchecked Sendable {
             settings: target.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
 
         ioQueue.sync {
-            self.converter = conv
-            self.audioFile = file
-            self.micConverter = mConv
-            self.micFile = mFile
-            self.sysConverter = sConv
-            self.sysFile = sFile
-            self.paused = false
-            self.framesSeen = 0
-            self.chunkBuffer.removeAll(keepingCapacity: true)
-            self.chunkTotal16k = 0
-            self.meIntervals.removeAll(keepingCapacity: true)
-            self.meOpenAt = nil
-            self.micGain = 1
-            self.voiceMic?.setTargetRate(self.nativeRate)
+            let io = self.io
+            io.converter = conv
+            io.audioFile = file
+            io.micConverter = mConv
+            io.micFile = mFile
+            io.sysConverter = sConv
+            io.sysFile = sFile
+            io.paused = false
+            io.framesSeen = 0
+            io.lastPublishMs = 0
+            io.tapChannels = tapChannels
+            io.warnedPositionalFallback = false
+            io.nativeRate = nativeRate
+            io.chunkBuffer.removeAll(keepingCapacity: true)
+            io.chunkTotal16k = 0
+            io.meIntervals.removeAll(keepingCapacity: true)
+            io.meOpenAt = nil
+            io.micGain = 1
+            io.voiceMic?.setTargetRate(nativeRate)
         }
         await MainActor.run { elapsedMs = 0 }
 
@@ -487,8 +510,8 @@ final class MeetingRecorder: @unchecked Sendable {
         // a mic unplugged mid-meeting — so the unit (and the duck it puts
         // on every other app) never outlives the recording.
         let vp = ioQueue.sync { () -> VoiceProcessedMic? in
-            let v = self.voiceMic
-            self.voiceMic = nil
+            let v = self.io.voiceMic
+            self.io.voiceMic = nil
             return v
         }
         vp?.stop()
@@ -506,7 +529,7 @@ final class MeetingRecorder: @unchecked Sendable {
     // MARK: - IO path (runs on ioQueue)
 
     private func handleIO(_ abl: UnsafePointer<AudioBufferList>) {
-        guard !paused, audioFile != nil else { return }
+        guard !io.paused, io.audioFile != nil else { return }
         let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: abl))
 
         var frames = 0
@@ -530,9 +553,9 @@ final class MeetingRecorder: @unchecked Sendable {
         var micMono = [Float](repeating: 0, count: frames)
         var sysMono = [Float](repeating: 0, count: frames)
         let tapIndex = Self.tapBufferIndex(channelCounts: list.map { Int($0.mNumberChannels) },
-                                           tapChannels: tapChannels)
-        if tapIndex == nil, !warnedPositionalFallback {
-            warnedPositionalFallback = true
+                                           tapChannels: io.tapChannels)
+        if tapIndex == nil, !io.warnedPositionalFallback {
+            io.warnedPositionalFallback = true
             AppLog.warn("meeting", "cannot tell tap from mic by channel count \(list.map(\.mNumberChannels)) — assuming the tap is the last buffer")
         }
         for (bi, b) in list.enumerated() {
@@ -571,7 +594,7 @@ final class MeetingRecorder: @unchecked Sendable {
         // echo already removed. A nil cycle (still priming, or the unit
         // stalled after a route change) keeps the raw mic.
         var filtered = false
-        if let cleaned = voiceMic?.pull(frames) { micMono = cleaned; filtered = true }
+        if let cleaned = io.voiceMic?.pull(frames) { micMono = cleaned; filtered = true }
 
         var micSq: Float = 0
         var sysSq: Float = 0
@@ -583,7 +606,7 @@ final class MeetingRecorder: @unchecked Sendable {
         let tapRMS = (sysSq / Float(frames)).squareRoot()
         // Me-timeline sees RAW energies — the duck must not blind it.
         updateMeTimeline(micRMS: micRMS, tapRMS: tapRMS,
-                         t: Double(framesSeen) / nativeRate)
+                         t: Double(io.framesSeen) / io.nativeRate)
 
         // Duck the mic while the far side is talking and the mic is just
         // hearing the speakers. Fully open when the user speaks or the far
@@ -598,7 +621,7 @@ final class MeetingRecorder: @unchecked Sendable {
         // With the echo filter delivering there is no echo left to gate, and
         // the gate would only cut the user's quieter words over the far side
         // out of the live mix (and the live captions read from it).
-        micGain = filtered ? 1 : Self.gateStep(micRMS: micRMS, tapRMS: tapRMS, currentGain: micGain)
+        io.micGain = filtered ? 1 : Self.gateStep(micRMS: micRMS, tapRMS: tapRMS, currentGain: io.micGain)
         // The ungated mic goes to the .mic.wav track — the offline echo
         // canceller needs unmodified ground truth (it subtracts the echo
         // mathematically). The gate shapes only the playback mix. With the
@@ -606,14 +629,14 @@ final class MeetingRecorder: @unchecked Sendable {
         // no echo path (peak correlation 0.01-0.04 against its 0.1 bar,
         // measured) and leaves it as it is.
         let rawMic = micMono
-        if micGain < 0.999 {
-            for f in 0..<frames { micMono[f] *= micGain }
+        if io.micGain < 0.999 {
+            for f in 0..<frames { micMono[f] *= io.micGain }
         }
 
         var mono = [Float](repeating: 0, count: frames)
         for f in 0..<frames { mono[f] = micMono[f] + sysMono[f] }
-        writeTrack(rawMic, converter: micConverter, file: micFile)
-        writeTrack(sysMono, converter: sysConverter, file: sysFile)
+        writeTrack(rawMic, converter: io.micConverter, file: io.micFile)
+        writeTrack(sysMono, converter: io.sysConverter, file: io.sysFile)
 
         var sumSq: Float = 0
         var peak: Float = 0
@@ -625,14 +648,14 @@ final class MeetingRecorder: @unchecked Sendable {
         let rms = min(1, sqrt(sumSq / Float(frames)) * 6)
 
         convertAndWrite(mono)
-        framesSeen += Int64(frames)
-        let ms = Int64(Double(framesSeen) / nativeRate * 1000)
+        io.framesSeen += Int64(frames)
+        let ms = Int64(Double(io.framesSeen) / io.nativeRate * 1000)
 
         // Publish stats on the main actor (@Observable writes drive SwiftUI),
         // throttled to ~30 Hz so the HAL callback rate doesn't flood renders.
         let now = Int64(Date().timeIntervalSince1970 * 1000)
-        if now - lastPublishMs >= 33 {
-            lastPublishMs = now
+        if now - io.lastPublishMs >= 33 {
+            io.lastPublishMs = now
             Task { @MainActor [weak self] in
                 self?.publishStats(rms: rms, peak: peak, ms: ms)
             }
@@ -650,14 +673,14 @@ final class MeetingRecorder: @unchecked Sendable {
     }
 
     private func convertAndWrite(_ samples: [Float]) {
-        guard let converter, let audioFile else { return }
+        guard let converter = io.converter, let audioFile = io.audioFile else { return }
         guard let inBuf = AVAudioPCMBuffer(pcmFormat: converter.inputFormat,
                                            frameCapacity: AVAudioFrameCount(samples.count)) else { return }
         inBuf.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { src in
             inBuf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
         }
-        let outCap = AVAudioFrameCount(Double(samples.count) * 16_000 / nativeRate) + 64
+        let outCap = AVAudioFrameCount(Double(samples.count) * 16_000 / io.nativeRate) + 64
         guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
                                             frameCapacity: outCap) else { return }
         var fed = false
@@ -685,28 +708,28 @@ final class MeetingRecorder: @unchecked Sendable {
     private func updateMeTimeline(micRMS: Float, tapRMS: Float, t: Double) {
         let micActive = micRMS > 0.004 && micRMS > tapRMS * 1.5
         if micActive {
-            if meOpenAt == nil { meOpenAt = t }
-        } else if let open = meOpenAt {
+            if io.meOpenAt == nil { io.meOpenAt = t }
+        } else if let open = io.meOpenAt {
             if t - open >= 0.3 {
-                if let last = meIntervals.last, open - last[1] < 0.6 {
-                    meIntervals[meIntervals.count - 1][1] = t
+                if let last = io.meIntervals.last, open - last[1] < 0.6 {
+                    io.meIntervals[io.meIntervals.count - 1][1] = t
                 } else {
-                    meIntervals.append([open, t])
+                    io.meIntervals.append([open, t])
                 }
             }
-            meOpenAt = nil
+            io.meOpenAt = nil
         }
     }
 
     /// Mirror of WavRecorder.appendToChunkBuffer — same size, same timing math.
     private func appendToChunkBuffer(_ samples: [Float]) {
-        chunkTotal16k += Int64(samples.count)
-        chunkBuffer.append(contentsOf: samples)
+        io.chunkTotal16k += Int64(samples.count)
+        io.chunkBuffer.append(contentsOf: samples)
         let chunkSize = Int(WavRecorder.chunkSeconds * WavRecorder.sampleRate)
-        while chunkBuffer.count >= chunkSize {
-            let head = Array(chunkBuffer.prefix(chunkSize))
-            chunkBuffer.removeFirst(chunkSize)
-            let startSec = Double(chunkTotal16k - Int64(chunkBuffer.count) - Int64(chunkSize)) / WavRecorder.sampleRate
+        while io.chunkBuffer.count >= chunkSize {
+            let head = Array(io.chunkBuffer.prefix(chunkSize))
+            io.chunkBuffer.removeFirst(chunkSize)
+            let startSec = Double(io.chunkTotal16k - Int64(io.chunkBuffer.count) - Int64(chunkSize)) / WavRecorder.sampleRate
             liveFeed.yield(WavRecorder.Chunk(samples: head, startTimeSeconds: max(0, startSec)))
         }
     }
@@ -721,7 +744,7 @@ final class MeetingRecorder: @unchecked Sendable {
         samples.withUnsafeBufferPointer { src in
             inBuf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
         }
-        let outCap = AVAudioFrameCount(Double(samples.count) * 16_000 / nativeRate) + 64
+        let outCap = AVAudioFrameCount(Double(samples.count) * 16_000 / io.nativeRate) + 64
         guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
                                             frameCapacity: outCap) else { return }
         var fed = false
@@ -748,7 +771,7 @@ final class MeetingRecorder: @unchecked Sendable {
     }
 
     private func flushConverterTail() {
-        guard let converter, let audioFile else { return }
+        guard let converter = io.converter, let audioFile = io.audioFile else { return }
         let outCap: AVAudioFrameCount = 4096
         guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
                                             frameCapacity: outCap) else { return }

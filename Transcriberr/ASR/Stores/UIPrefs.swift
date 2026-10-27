@@ -4,7 +4,7 @@ import Observation
 /// Mirror of `asr/UiPrefs.kt`.
 /// Cross-screen UI prefs (last languages, transcript view toggles, etc.)
 @Observable
-final class UIPrefs: @unchecked Sendable {
+nonisolated final class UIPrefs: @unchecked Sendable {
     private let defaults = UserDefaults.standard
     private enum Key {
         static let languages       = "ui.lastLanguages"

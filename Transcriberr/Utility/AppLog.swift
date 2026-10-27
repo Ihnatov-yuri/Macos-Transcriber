@@ -3,8 +3,9 @@ import OSLog
 
 /// Two-headed logger: writes to Apple's unified log (so `log show` works)
 /// AND appends to `~/Library/Logs/Transcriberr/transcriberr.log` so we can
-/// inspect it after a crash or silent failure.
-enum AppLog {
+/// inspect it after a crash or silent failure. Callable from any thread:
+/// the file state below is only touched on `queue`.
+nonisolated enum AppLog {
     private static let subsystem = "nl.ihnatov.Transcriberr"
     private static let queue = DispatchQueue(label: "AppLog.io")
     private static let osLogger = Logger(subsystem: subsystem, category: "general")
@@ -50,8 +51,8 @@ enum AppLog {
     // MARK: - File I/O
 
     private static let maxFileBytes = 5 * 1024 * 1024
-    private static var didOpenFile = false
-    private static var handle: FileHandle?
+    nonisolated(unsafe) private static var didOpenFile = false
+    nonisolated(unsafe) private static var handle: FileHandle?
 
     private static func write(level: String, category: String, message: String) {
         let line = "\(timestamp()) \(level) [\(category)] \(message)\n"
@@ -86,7 +87,8 @@ enum AppLog {
         }
     }
 
-    private static let formatter: ISO8601DateFormatter = {
+    // ISO8601DateFormatter is thread-safe for formatting once configured.
+    nonisolated(unsafe) private static let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f

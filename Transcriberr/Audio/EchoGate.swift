@@ -25,7 +25,7 @@ import Accelerate
 /// The price is doubletalk: the user talking OVER a loud far side loses
 /// much of what they say (a per-band suppressor kept more but let 10 dB
 /// more echo through).
-enum EchoGate {
+nonisolated enum EchoGate {
     static let frame = 320                 // 20 ms @16 kHz
     /// Frames either side of the delay to take the far-side peak from:
     /// covers the delay estimate's error and its drift over a long call.

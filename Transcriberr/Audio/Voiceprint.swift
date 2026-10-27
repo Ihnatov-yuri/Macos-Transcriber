@@ -2,6 +2,7 @@ import Foundation
 import Accelerate
 import FluidAudio
 @preconcurrency import CoreML
+import Synchronization
 
 /// The user's voice, enrolled once from ~30 s of them reading aloud, and the
 /// target-speaker voice activity built on it: where in a track the USER is
@@ -18,7 +19,7 @@ import FluidAudio
 ///
 /// Embeddings are WeSpeaker v2 (ResNet34, 256-d, L2-normalised) through
 /// FluidAudio's public `DiarizerManager.extractSpeakerEmbedding`, on the ANE.
-struct Voiceprint: Codable, Equatable {
+nonisolated struct Voiceprint: Codable, Equatable {
     static let currentModel = "wespeaker_v2"
 
     var model: String
@@ -49,7 +50,7 @@ struct Voiceprint: Codable, Equatable {
 /// Where the voice print lives: ~/Library/Application Support/Transcriberr/voice/.
 /// The enrollment audio is kept beside it so a future embedding model can
 /// rebuild the print without asking the user to read again.
-enum VoiceprintStore {
+nonisolated enum VoiceprintStore {
     static var directory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Transcriberr/voice", isDirectory: true)
@@ -240,27 +241,27 @@ actor VoiceEmbedder {
             DispatchQueue.global(qos: .userInitiated).async {
                 let models = distinct
                 let batches = (clips.count + Self.slots - 1) / Self.slots
-                var out = [[Float]](repeating: [], count: clips.count)
-                var failure: Error?
-                let lock = NSLock()
+                let state = Mutex<(out: [[Float]], failure: Error?)>(
+                    (out: [[Float]](repeating: [], count: clips.count), failure: nil))
                 DispatchQueue.concurrentPerform(iterations: models.count) { w in
                     var b = w
                     while b < batches {
                         if cancelled.isSet {
-                            lock.lock(); failure = failure ?? CancellationError(); lock.unlock()
+                            state.withLock { $0.failure = $0.failure ?? CancellationError() }
                             return
                         }
                         let lo = b * Self.slots, hi = min(clips.count, lo + Self.slots)
                         do {
                             let e = try Self.predict(models[w], Array(clips[lo..<hi]))
-                            lock.lock(); for (k, v) in e.enumerated() { out[lo + k] = v }; lock.unlock()
+                            state.withLock { for (k, v) in e.enumerated() { $0.out[lo + k] = v } }
                         } catch {
-                            lock.lock(); failure = error; lock.unlock()
+                            state.withLock { $0.failure = error }
                             return
                         }
                         b += models.count
                     }
                 }
+                let (out, failure) = state.withLock { ($0.out, $0.failure) }
                 if let failure { cont.resume(throwing: failure) } else { cont.resume(returning: out) }
             }
             }
@@ -389,7 +390,7 @@ actor VoiceEmbedder {
 /// Where the enrolled voice speaks in a split-track meeting: on the
 /// echo-cancelled mic (the user, whatever the speakers played) and on the
 /// system track (the user's own voice coming back in the call audio).
-struct VoiceTimeline: Equatable {
+nonisolated struct VoiceTimeline: Equatable {
     var mic: [ClosedRange<Double>]
     var sys: [ClosedRange<Double>]
 
@@ -463,7 +464,7 @@ struct VoiceTimeline: Equatable {
 /// non-overlapping `VoiceActivity.window` clips inside its regions, clear of
 /// every other cluster's regions, at most `maxClips` spread over the
 /// recording. An hour of conversation scores in seconds.
-enum ClusterVoice {
+nonisolated enum ClusterVoice {
     static let maxClips = 60
     /// Fewer clean clips than this and the cluster is not scored at all.
     static let minClips = 3
@@ -514,6 +515,7 @@ enum ClusterVoice {
 
     /// Median similarity to the print of each cluster's voiced clips; a
     /// cluster with too little clean speech is left out.
+    @concurrent
     static func compute(samples: [Float], regions: [DiarizationRunner.SpeakerSegment],
                         print: Voiceprint) async throws -> [String: Float] {
         let floor = VoiceActivity.speechFloor(samples)
@@ -552,7 +554,7 @@ enum ClusterVoice {
 
 /// Set from a task's cancellation handler, read by the embedding workers
 /// between batches: they run on dispatch threads, outside any task.
-final class CancelFlag: @unchecked Sendable {
+nonisolated final class CancelFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
     var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
@@ -570,7 +572,7 @@ enum VoiceprintError: LocalizedError {
 
 /// Target-speaker voice activity: pure functions over similarity scores, so
 /// the thresholds are unit-testable without audio or a model.
-enum VoiceActivity {
+nonisolated enum VoiceActivity {
     static let sampleRate = 16_000.0
     /// Scoring window and hop. 1.5 s is enough voice for a stable embedding
     /// and short enough to follow a turn; the hop sets timeline resolution.

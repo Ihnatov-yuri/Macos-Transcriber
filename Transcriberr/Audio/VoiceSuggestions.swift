@@ -8,7 +8,7 @@ import Foundation
 /// Like the saved voices, these are voice prints of people who never
 /// agreed to it: kept in ~/Library/Application Support/Transcriberr/voice/,
 /// out of Time Machine, and deleted with Delete everyone.
-struct UnknownVoiceStore {
+nonisolated struct UnknownVoiceStore {
     let url: URL
 
     static var shared: UnknownVoiceStore {
@@ -84,7 +84,7 @@ struct UnknownVoiceStore {
 /// named by hand in several recordings with no saved voice, and unnamed
 /// voices that come back across the user's meetings. Pure, so the grouping
 /// and the "people I speak a lot with" rule are tested without audio.
-enum VoiceSuggestions {
+nonisolated enum VoiceSuggestions {
     /// Two unnamed speakers are one voice at this centroid similarity.
     /// Stricter than matching a saved person (0.40 on clip medians):
     /// centroids are smoother, and a wrong merge suggests a person who
@@ -188,7 +188,7 @@ enum VoiceSuggestions {
 /// other saved voice, the user's included.
 /// Rejecting a true sample costs a little training; accepting a wrong one
 /// spoils the voice, so the bar sits on the strict side.
-enum VoiceGate {
+nonisolated enum VoiceGate {
     static var sameMin: Float { VoiceModel.current.scale.gateMin }
     static var margin: Float { VoiceModel.current.scale.gateMargin }
 

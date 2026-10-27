@@ -1,20 +1,23 @@
 import Foundation
 @preconcurrency import AVFoundation
 import Observation
+import Synchronization
 
 /// Records from the default input device, converts to 16 kHz mono Float32 PCM,
 /// writes a standards-compliant WAV file, and publishes one-second chunk
 /// events for the live-transcription path.
 ///
 /// All I/O happens on a private serial queue so AVAudioFile writes stay
-/// in-order. Only `level` / `elapsedMs` / `state` are mutated on MainActor.
+/// in-order: the tap path's state lives in `io` and is only touched there.
+/// Only `level` / `elapsedMs` / `state` are mutated on MainActor.
 /// `@MainActor` removed for the same reason as `AppContainer` —
 /// `_SwiftData_SwiftUI` blows up on actor-isolated @Observable types
 /// in macOS 26.5. Mutations happen on MainActor in practice (Tasks hop
 /// into MainActor before writing), but the class declaration must stay
-/// actor-free.
+/// actor-free — explicitly `nonisolated`, since the module default is the
+/// main actor.
 @Observable
-final class WavRecorder: @unchecked Sendable {
+nonisolated final class WavRecorder: @unchecked Sendable {
     struct Chunk: Sendable {
         let samples: [Float]
         let startTimeSeconds: Double
@@ -38,10 +41,10 @@ final class WavRecorder: @unchecked Sendable {
     /// 64 buckets so the Record screen can draw an Android-style bar history.
     private(set) var peakHistory: [Float] = Array(repeating: 0, count: 64)
 
-    static let sampleRate: Double = 16_000
+    nonisolated static let sampleRate: Double = 16_000
     /// Live-caption feed granularity. One second (was 5 until v3.15.10): the
     /// live worker finds phrase ends in the audio itself and needs it fresh.
-    static let chunkSeconds: Double = 1
+    nonisolated static let chunkSeconds: Double = 1
 
     // MARK: - Internals
 
@@ -50,11 +53,22 @@ final class WavRecorder: @unchecked Sendable {
     /// Audio I/O happens off main. `audioFile` and the chunk buffer live here.
     private let ioQueue = DispatchQueue(label: "WavRecorder.io", qos: .userInitiated)
 
-    private var converter: AVAudioConverter?
-    private var audioFile: AVAudioFile?
-    private var chunkBuffer: [Float] = []
-    private var totalSamplesWritten: Int = 0
-    private var inputFormat: AVAudioFormat?
+    /// The tap path's state. Only touched on `ioQueue` — every access below
+    /// sits in an `ioQueue.sync`/`async` block or a function only called from
+    /// one — which is what makes the unchecked Sendable true.
+    private nonisolated final class IOState: @unchecked Sendable {
+        var converter: AVAudioConverter?
+        var audioFile: AVAudioFile?
+        var chunkBuffer: [Float] = []
+        var totalSamplesWritten: Int = 0
+        var inputFormat: AVAudioFormat?
+        /// Pending native-rate input buffers waiting to be resampled. The
+        /// converter pulls from here; we return `.noDataNow` when it's empty
+        /// so the converter keeps its filter state ALIVE across taps
+        /// (continuous streaming resample).
+        var pendingInputs: [AVAudioPCMBuffer] = []
+    }
+    @ObservationIgnored private let io = IOState()
 
     private let targetFormat: AVAudioFormat = {
         AVAudioFormat(
@@ -105,6 +119,9 @@ final class WavRecorder: @unchecked Sendable {
     /// `pausedAccumulatedMs`) is written through a MainActor hop. Writing
     /// them straight from the pool, as this used to, raced the meter and
     /// ticker tasks that write the same fields on the main actor.
+    /// `@concurrent` keeps it there: a plain nonisolated async function now
+    /// runs on its caller's actor, which for the Record button is main.
+    @concurrent
     func start() async throws {
         let alreadyRecording = await MainActor.run { () -> Bool in
             if case .recording = state { return true }
@@ -155,9 +172,9 @@ final class WavRecorder: @unchecked Sendable {
             peakHistory = Array(repeating: 0, count: 64)
         }
         ioQueue.sync {
-            chunkBuffer.removeAll(keepingCapacity: true)
-            pendingInputs.removeAll(keepingCapacity: true)
-            totalSamplesWritten = 0
+            io.chunkBuffer.removeAll(keepingCapacity: true)
+            io.pendingInputs.removeAll(keepingCapacity: true)
+            io.totalSamplesWritten = 0
         }
 
         // ── Engine + tap. Every AVAudioEngine touch below is wrapped in
@@ -297,9 +314,9 @@ final class WavRecorder: @unchecked Sendable {
         }
 
         ioQueue.sync {
-            self.converter = converter
-            self.audioFile = file
-            self.inputFormat = nativeFormat
+            io.converter = converter
+            io.audioFile = file
+            io.inputFormat = nativeFormat
         }
 
         // installTap can also throw NSException on a bad format match.
@@ -372,8 +389,8 @@ final class WavRecorder: @unchecked Sendable {
     /// cleanup MeetingRecorder's `startCapture` does for its three files.
     private func discardPartialFile(_ url: URL) {
         ioQueue.sync {
-            self.audioFile = nil
-            self.converter = nil
+            io.audioFile = nil
+            io.converter = nil
         }
         try? FileManager.default.removeItem(at: url)
     }
@@ -429,8 +446,8 @@ final class WavRecorder: @unchecked Sendable {
             // Whatever the old converter still holds belongs in the file
             // before the rate changes underneath it.
             self.flushConverterTail()
-            self.converter = converter
-            self.inputFormat = nativeFormat
+            io.converter = converter
+            io.inputFormat = nativeFormat
         }
         do {
             try ExceptionTrap.run {
@@ -498,7 +515,10 @@ final class WavRecorder: @unchecked Sendable {
     /// `.failed` transition can't lose track of audio already on disk.
     private var openFileURL: URL?
 
+    /// `@concurrent` for the same reason as `start()`: engine.stop() and the
+    /// voice-processing release block.
     @discardableResult
+    @concurrent
     func stop() async throws -> URL? {
         let session: URL? = await MainActor.run {
             switch state {
@@ -531,10 +551,11 @@ final class WavRecorder: @unchecked Sendable {
         let written: Int = await withCheckedContinuation { cont in
             ioQueue.async {
                 self.flushConverterTail()
-                let w = self.totalSamplesWritten
-                self.pendingInputs.removeAll()
-                self.audioFile = nil
-                self.converter = nil
+                let io = self.io
+                let w = io.totalSamplesWritten
+                io.pendingInputs.removeAll()
+                io.audioFile = nil
+                io.converter = nil
                 cont.resume(returning: w)
             }
         }
@@ -575,12 +596,6 @@ final class WavRecorder: @unchecked Sendable {
     //
     // Runs on AVAudioEngine's internal queue. We hop into our own serial
     // ioQueue immediately to keep AVAudioFile writes ordered.
-
-    /// Pending native-rate input buffers waiting to be resampled. The
-    /// converter pulls from here; we return `.noDataNow` when it's empty so
-    /// the converter keeps its filter state ALIVE across taps (continuous
-    /// streaming resample). Only touched on `ioQueue`.
-    private var pendingInputs: [AVAudioPCMBuffer] = []
 
     nonisolated private func ingest(buffer: AVAudioPCMBuffer) {
         guard buffer.frameLength > 0 else { return }
@@ -638,8 +653,9 @@ final class WavRecorder: @unchecked Sendable {
     /// endOfStream — that's what keeps the resampler's filter continuous and
     /// the output free of per-buffer priming/flush artifacts.
     nonisolated private func enqueueAndDrain(_ input: AVAudioPCMBuffer) {
-        guard let converter = self.converter, let audioFile = self.audioFile else { return }
-        pendingInputs.append(input)
+        let io = self.io
+        guard let converter = io.converter, let audioFile = io.audioFile else { return }
+        io.pendingInputs.append(input)
 
         let ratio = targetFormat.sampleRate / input.format.sampleRate
         while true {
@@ -648,15 +664,16 @@ final class WavRecorder: @unchecked Sendable {
             else { return }
 
             var error: NSError?
-            let status = converter.convert(to: outBuf, error: &error) { [weak self] _, outStatus in
-                guard let self, !self.pendingInputs.isEmpty else {
+            // Called synchronously inside `convert`, so still on ioQueue.
+            let status = converter.convert(to: outBuf, error: &error) { _, outStatus in
+                guard !io.pendingInputs.isEmpty else {
                     // Nothing buffered right now — DON'T end the stream, just
                     // pause. The converter retains its state for the next tap.
                     outStatus.pointee = .noDataNow
                     return nil
                 }
                 outStatus.pointee = .haveData
-                return self.pendingInputs.removeFirst()
+                return io.pendingInputs.removeFirst()
             }
 
             if status == .error {
@@ -674,7 +691,7 @@ final class WavRecorder: @unchecked Sendable {
             }
 
             let samples = Array(UnsafeBufferPointer(start: ptr, count: outFrames))
-            self.totalSamplesWritten += outFrames
+            io.totalSamplesWritten += outFrames
             self.appendToChunkBuffer(samples)
 
             let rms = WavRecorder.rms(samples)
@@ -683,7 +700,7 @@ final class WavRecorder: @unchecked Sendable {
 
             // Stop once the converter has consumed all queued input (it
             // returned fewer frames than capacity AND the queue is empty).
-            if pendingInputs.isEmpty && status == .inputRanDry { break }
+            if io.pendingInputs.isEmpty && status == .inputRanDry { break }
             if outFrames == 0 { break }
         }
     }
@@ -691,7 +708,7 @@ final class WavRecorder: @unchecked Sendable {
     /// On stop, signal end-of-stream once to flush the resampler's filter
     /// delay (the final ~20 ms it was holding) into the file. Called on ioQueue.
     nonisolated private func flushConverterTail() {
-        guard let converter = self.converter, let audioFile = self.audioFile else { return }
+        guard let converter = io.converter, let audioFile = io.audioFile else { return }
         let outBuf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: 8192)
         guard let outBuf else { return }
         var error: NSError?
@@ -702,57 +719,68 @@ final class WavRecorder: @unchecked Sendable {
         let outFrames = Int(outBuf.frameLength)
         guard outFrames > 0, let ptr = outBuf.floatChannelData?[0] else { return }
         try? audioFile.write(from: outBuf)
-        self.totalSamplesWritten += outFrames
+        io.totalSamplesWritten += outFrames
         self.appendToChunkBuffer(Array(UnsafeBufferPointer(start: ptr, count: outFrames)))
     }
 
     /// Meter coalescing state, shared by ioQueue (`coalescePeak`) and the
-    /// main actor (`flushPendingMeter`) — hence the lock. Held for a handful
+    /// main actor (`flushPendingMeter`) — hence the mutex. Held for a handful
     /// of loads and stores, never across the MainActor hop. ioQueue is not
     /// the render thread (the tap callback only enqueues onto it).
-    private let meterLock = NSLock()
-    private var pendingRMS: Float = 0
-    private var pendingPeak: Float = 0
-    private var lastPublishMs: Int64 = 0
-    private var publishScheduled: Bool = false
+    private struct MeterState {
+        var pendingRMS: Float = 0
+        var pendingPeak: Float = 0
+        var lastPublishMs: Int64 = 0
+        var publishScheduled = false
+    }
+    @ObservationIgnored private let meter = Mutex(MeterState())
+
+    /// What `coalescePeak` decided under the mutex; acted on after it.
+    private enum MeterAction { case none, schedule, publish(Float, Float) }
 
     nonisolated private func coalescePeak(rms: Float, peak: Float) {
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         let interval: Int64 = 80          // 12.5 Hz
-        meterLock.lock()
-        // Combine with anything that hasn't been published yet.
-        pendingRMS = max(pendingRMS, rms)
-        pendingPeak = max(pendingPeak, peak)
-        if nowMs - lastPublishMs < interval {
-            let schedule = !publishScheduled
-            publishScheduled = true
-            meterLock.unlock()
-            guard schedule else { return }
+        let action = meter.withLock { m -> MeterAction in
+            // Combine with anything that hasn't been published yet.
+            m.pendingRMS = max(m.pendingRMS, rms)
+            m.pendingPeak = max(m.pendingPeak, peak)
+            if nowMs - m.lastPublishMs < interval {
+                let schedule = !m.publishScheduled
+                m.publishScheduled = true
+                return schedule ? .schedule : .none
+            }
+            m.lastPublishMs = nowMs
+            let r = m.pendingRMS, p = m.pendingPeak
+            m.pendingRMS = 0
+            m.pendingPeak = 0
+            return .publish(r, p)
+        }
+        switch action {
+        case .none:
+            break
+        case .schedule:
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 self?.flushPendingMeter()
             }
-            return
-        }
-        lastPublishMs = nowMs
-        let r = pendingRMS, p = pendingPeak
-        pendingRMS = 0
-        pendingPeak = 0
-        meterLock.unlock()
-        Task { @MainActor [weak self] in
-            self?.publishMeter(rms: r, peak: p)
+        case .publish(let r, let p):
+            Task { @MainActor [weak self] in
+                self?.publishMeter(rms: r, peak: p)
+            }
         }
     }
 
     @MainActor
     private func flushPendingMeter() {
-        meterLock.lock()
-        publishScheduled = false
-        let r = pendingRMS, p = pendingPeak
-        pendingRMS = 0
-        pendingPeak = 0
-        lastPublishMs = Int64(Date().timeIntervalSince1970 * 1000)
-        meterLock.unlock()
+        let (r, p) = meter.withLock { m -> (Float, Float) in
+            m.publishScheduled = false
+            let r = m.pendingRMS, p = m.pendingPeak
+            m.pendingRMS = 0
+            m.pendingPeak = 0
+            m.lastPublishMs = Int64(Date().timeIntervalSince1970 * 1000)
+            return (r, p)
+        }
         publishMeter(rms: r, peak: p)
     }
 
@@ -780,12 +808,13 @@ final class WavRecorder: @unchecked Sendable {
     }
 
     nonisolated private func appendToChunkBuffer(_ samples: [Float]) {
-        chunkBuffer.append(contentsOf: samples)
+        let io = self.io
+        io.chunkBuffer.append(contentsOf: samples)
         let chunkSize = Int(Self.chunkSeconds * Self.sampleRate)
-        while chunkBuffer.count >= chunkSize {
-            let head = Array(chunkBuffer.prefix(chunkSize))
-            chunkBuffer.removeFirst(chunkSize)
-            let startSec = Double(totalSamplesWritten - chunkBuffer.count - chunkSize) / Self.sampleRate
+        while io.chunkBuffer.count >= chunkSize {
+            let head = Array(io.chunkBuffer.prefix(chunkSize))
+            io.chunkBuffer.removeFirst(chunkSize)
+            let startSec = Double(io.totalSamplesWritten - io.chunkBuffer.count - chunkSize) / Self.sampleRate
             liveFeed.yield(Chunk(samples: head, startTimeSeconds: max(0, startSec)))
         }
     }
@@ -836,7 +865,7 @@ final class WavRecorder: @unchecked Sendable {
     }
 }
 
-private extension DateFormatter {
+nonisolated private extension DateFormatter {
     static let fileStamp: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

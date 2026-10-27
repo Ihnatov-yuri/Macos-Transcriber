@@ -202,7 +202,7 @@ struct AppRulesEditor: View {
             .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
     }
 
-    private func update<T>(_ id: UUID, _ change: @escaping (inout DictationSettings.AppRule, T) -> Void) -> (T) -> Void {
+    private func update<T>(_ id: UUID, _ change: @escaping @Sendable (inout DictationSettings.AppRule, T) -> Void) -> @MainActor @Sendable (T) -> Void {
         { value in
             guard let idx = settings.appRules.firstIndex(where: { $0.id == id }) else { return }
             var rule = settings.appRules[idx]

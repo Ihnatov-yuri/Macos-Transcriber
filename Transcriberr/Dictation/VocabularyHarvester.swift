@@ -10,7 +10,7 @@ import NaturalLanguage
 /// Harvested terms feed dictation (vocabulary canonicalization + the smart
 /// pass) automatically and are offered in Settings for promotion into the
 /// permanent vocabulary.
-enum VocabularyHarvester {
+nonisolated enum VocabularyHarvester {
 
     struct Term: Codable, Identifiable, Equatable, Sendable {
         var id: String { key }

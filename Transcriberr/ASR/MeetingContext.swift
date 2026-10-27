@@ -9,7 +9,7 @@ import Foundation
 /// vote settles a split between the engines in their favour, the vocabulary
 /// pass puts the invite's spelling on near misses, and Gemma's arbitration
 /// is told what meeting it is reading.
-struct MeetingContext: Codable, Sendable, Equatable {
+nonisolated struct MeetingContext: Codable, Sendable, Equatable {
     var title: String
     /// Display names of the other attendees (not the user).
     var attendees: [String]
@@ -224,6 +224,7 @@ struct MeetingContext: Codable, Sendable, Equatable {
     /// The invite the recording belongs to: a timed event with other people
     /// in it (or at least a title) that covers most of the recording, or
     /// ten minutes of it. Several candidates → the longest overlap.
+    @concurrent
     static func lookup(start: Date, end: Date, store: EKEventStore = EKEventStore(),
                        ask: Bool = false) async -> MeetingContext? {
         guard end.timeIntervalSince(start) >= 60, await requestAccess(store, ask: ask) else { return nil }

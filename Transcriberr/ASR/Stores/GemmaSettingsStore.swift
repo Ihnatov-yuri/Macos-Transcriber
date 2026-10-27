@@ -5,7 +5,7 @@ import Observation
 /// Compute knobs honored by `Gemma4MLXBackend.load()` and the underlying
 /// MLX `Device` selection.
 @Observable
-final class GemmaSettingsStore: @unchecked Sendable {
+nonisolated final class GemmaSettingsStore: @unchecked Sendable {
     enum ComputeBackend: String, CaseIterable, Sendable {
         case auto, gpu, cpu
 

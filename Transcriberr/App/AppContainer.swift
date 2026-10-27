@@ -14,7 +14,7 @@ import SwiftData
 /// safely — every property below is actually accessed only from MainActor
 /// in practice, but the *type* must not declare actor isolation.
 @Observable
-final class AppContainer: @unchecked Sendable {
+nonisolated final class AppContainer: @unchecked Sendable {
     /// The one live container, for entry points that SwiftUI doesn't hand
     /// an environment to (App Intents).
     nonisolated(unsafe) static weak var shared: AppContainer?
@@ -358,6 +358,7 @@ final class AppContainer: @unchecked Sendable {
         newRecordingRequested &+= 1
     }
 
+    @MainActor
     func requestDeleteRecording() {
         // ⌘⌫ is a menu key equivalent, so it reaches the menu before the
         // focused text field: typing in search, a title or a note and

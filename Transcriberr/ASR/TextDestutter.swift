@@ -14,7 +14,7 @@ import Foundation
 ///    in", "present that present that")
 ///  - nothing collapses across a sentence boundary, so intentional repeats
 ///    like "Yeah. Yeah." and "Thanks. Thanks." survive
-enum TextDestutter {
+nonisolated enum TextDestutter {
 
     static func collapse(_ text: String) -> String {
         text.split(separator: "\n", omittingEmptySubsequences: false)
@@ -127,7 +127,7 @@ enum TextDestutter {
 /// collapsed by `TextDestutter` — for reading, `verbatim` for studying how
 /// someone speaks (tic words, restarts). Chosen in the transcript header,
 /// per call on the MCP tools.
-enum TranscriptStyle: String, CaseIterable, Sendable {
+nonisolated enum TranscriptStyle: String, CaseIterable, Sendable {
     case clean, verbatim
 
     static let defaultsKey = "ui.transcriptStyle"

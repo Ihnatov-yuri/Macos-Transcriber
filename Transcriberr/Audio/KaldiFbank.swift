@@ -11,7 +11,7 @@ import Foundation
 /// power spectrum, mel bands from 20 Hz to Nyquist on 1127·ln(1 + f/700),
 /// and the log floored at Float.ulpOfOne. Checked against the reference
 /// written by scripts/voice-model/convert_simam.py (KaldiFbankTests).
-struct KaldiFbank: Sendable {
+nonisolated struct KaldiFbank: Sendable {
     static let sampleRate = 16_000.0
     static let frameLength = 400
     static let frameShift = 160

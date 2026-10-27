@@ -7,7 +7,7 @@ import Observation
 /// `@MainActor` removed — same `_SwiftData_SwiftUI` interaction as
 /// `AppContainer` / `WavRecorder`.
 @Observable
-final class AudioPlayerController: @unchecked Sendable {
+nonisolated final class AudioPlayerController: @unchecked Sendable {
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?

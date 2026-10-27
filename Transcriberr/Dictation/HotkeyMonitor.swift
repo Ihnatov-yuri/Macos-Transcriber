@@ -41,7 +41,9 @@ final class HotkeyMonitor {
     /// Accessibility trust. `prompt: true` shows the system dialog that
     /// deep-links to Privacy & Security → Accessibility.
     nonisolated static func isTrusted(prompt: Bool = false) -> Bool {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        // The value of kAXTrustedCheckOptionPrompt. The imported constant is a
+        // global `var`, which strict concurrency rejects from nonisolated code.
+        let key = "AXTrustedCheckOptionPrompt"
         return AXIsProcessTrustedWithOptions([key: prompt] as CFDictionary)
     }
 

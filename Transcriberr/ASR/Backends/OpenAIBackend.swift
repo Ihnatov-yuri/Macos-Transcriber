@@ -186,7 +186,7 @@ actor OpenAIBackend: ASRBackend {
     }
 }
 
-private extension Data {
+nonisolated private extension Data {
     mutating func appendString(_ string: String) {
         if let d = string.data(using: .utf8) { append(d) }
     }

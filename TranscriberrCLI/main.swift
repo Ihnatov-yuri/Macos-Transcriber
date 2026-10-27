@@ -3,7 +3,7 @@ import Foundation
 @preconcurrency import AVFoundation
 import FluidAudio
 import WhisperKit
-import LiteRTLM
+@preconcurrency import LiteRTLM
 
 // CLI test harness for the Transcriberr audio pipeline.
 //

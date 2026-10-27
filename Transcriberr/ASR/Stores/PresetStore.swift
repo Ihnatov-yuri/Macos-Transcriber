@@ -4,7 +4,7 @@ import Observation
 /// Mirror of `asr/PresetStore.kt` and `asr/PostProcessingPresets.kt`.
 /// Editable templates for the built-in post-processing presets, plus any
 /// presets the user adds. Each preset is one tab in Detail, in this order.
-struct PostProcessingPreset: Sendable, Identifiable, Codable, Equatable {
+nonisolated struct PostProcessingPreset: Sendable, Identifiable, Codable, Equatable {
     var id: String
     var name: String
     var outputTitle: String
@@ -83,7 +83,7 @@ struct PresetRevision: Codable, Identifiable, Equatable, Sendable {
 }
 
 @Observable
-final class PresetStore: @unchecked Sendable {
+nonisolated final class PresetStore: @unchecked Sendable {
     private let defaults: UserDefaults
     private let key = "presets.v1"
 

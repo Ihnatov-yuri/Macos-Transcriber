@@ -16,7 +16,7 @@ import Accelerate
 ///  3. A residual suppressor mutes the frames the filter could fully
 ///     explain. Subtraction alone leaves the far side attenuated but
 ///     intelligible, and an ASR will happily transcribe that as the user.
-enum EchoCanceller {
+nonisolated enum EchoCanceller {
     static let taps = 1024                 // 64 ms echo tail @16 kHz
     /// NLMS step. 0.5 diverged under heavy crosstalk — measured on a
     /// Ukrainian split-track meeting: the filter's output came out 7.3 dB

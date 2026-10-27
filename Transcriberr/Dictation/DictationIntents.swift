@@ -5,9 +5,9 @@ import AppKit
 /// activating it, so the app in front keeps focus and receives the text —
 /// unlike the URL scheme, which brings Transcriberr forward.
 struct StartDictationIntent: AppIntent {
-    static var title: LocalizedStringResource = "Start Dictation"
-    static var description = IntentDescription("Start listening; the passage is inserted where the cursor is when you stop.")
-    static var openAppWhenRun = false
+    static let title: LocalizedStringResource = "Start Dictation"
+    static let description = IntentDescription("Start listening; the passage is inserted where the cursor is when you stop.")
+    static let openAppWhenRun = false
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -18,9 +18,9 @@ struct StartDictationIntent: AppIntent {
 }
 
 struct StopDictationIntent: AppIntent {
-    static var title: LocalizedStringResource = "Stop Dictation & Insert"
-    static var description = IntentDescription("Stop listening and insert the recognized text.")
-    static var openAppWhenRun = false
+    static let title: LocalizedStringResource = "Stop Dictation & Insert"
+    static let description = IntentDescription("Stop listening and insert the recognized text.")
+    static let openAppWhenRun = false
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -31,9 +31,9 @@ struct StopDictationIntent: AppIntent {
 }
 
 struct ToggleDictationIntent: AppIntent {
-    static var title: LocalizedStringResource = "Toggle Dictation"
-    static var description = IntentDescription("Start dictating, or stop and insert if already listening.")
-    static var openAppWhenRun = false
+    static let title: LocalizedStringResource = "Toggle Dictation"
+    static let description = IntentDescription("Start dictating, or stop and insert if already listening.")
+    static let openAppWhenRun = false
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -44,9 +44,9 @@ struct ToggleDictationIntent: AppIntent {
 }
 
 struct CancelDictationIntent: AppIntent {
-    static var title: LocalizedStringResource = "Cancel Dictation"
-    static var description = IntentDescription("Stop listening and discard the audio.")
-    static var openAppWhenRun = false
+    static let title: LocalizedStringResource = "Cancel Dictation"
+    static let description = IntentDescription("Stop listening and discard the audio.")
+    static let openAppWhenRun = false
 
     @MainActor
     func perform() async throws -> some IntentResult {

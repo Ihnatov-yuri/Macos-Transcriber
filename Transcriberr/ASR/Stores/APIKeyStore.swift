@@ -5,7 +5,7 @@ import Observation
 /// Keychain-backed storage for API keys (OpenAI, Anthropic, Google).
 /// Not present on Android — new path for the Mac build's API backends.
 @Observable
-final class APIKeyStore: @unchecked Sendable {
+nonisolated final class APIKeyStore: @unchecked Sendable {
     enum Provider: String, CaseIterable, Sendable {
         case openAI    = "openai"
         case anthropic = "anthropic"

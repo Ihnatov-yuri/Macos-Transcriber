@@ -14,7 +14,7 @@ import AVFoundation
 /// shouldn't be touched to save disk space. This runs AFTER a WAV is fully
 /// written and closed, and after the Recording row referencing it is
 /// already saved, as a separate, independently-verified step.
-enum AudioCompressor {
+nonisolated enum AudioCompressor {
     private static let aacBitrate = 48_000
     /// Sidecar kinds MeetingRecorder/merge() ever produce alongside a main
     /// mix — the single source of truth other code should read from
@@ -163,6 +163,7 @@ enum AudioCompressor {
         return d.seconds
     }
 
+    @concurrent
     private static func transcode(from src: URL, to dst: URL) async throws {
         if FileManager.default.fileExists(atPath: dst.path) {
             try FileManager.default.removeItem(at: dst)

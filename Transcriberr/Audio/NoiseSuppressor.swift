@@ -8,7 +8,7 @@ import Foundation
 /// log) and silently returned the input. Replaced with deterministic DSP
 /// that cannot fail: a one-pole 80 Hz high-pass (kills rumble/hum the ASR
 /// mistakes for speech onset) + peak normalization.
-enum NoiseSuppressor {
+nonisolated enum NoiseSuppressor {
     static func process(samples: [Float], sampleRate: Double) -> [Float] {
         guard !samples.isEmpty else { return samples }
         // High-pass, fc = 80 Hz.

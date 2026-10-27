@@ -3,7 +3,7 @@ import Foundation
 /// Curated downloadable models.
 /// Mac counterpart to `asr/ModelCatalog.kt` — biases toward bigger / better
 /// since Mac isn't phone-RAM constrained.
-struct ModelEntry: Sendable, Identifiable {
+nonisolated struct ModelEntry: Sendable, Identifiable {
     let id: String
     let name: String
     let backend: BackendFactory.Kind
@@ -18,7 +18,7 @@ struct ModelEntry: Sendable, Identifiable {
     let purpose: String
 }
 
-enum ModelCatalog {
+nonisolated enum ModelCatalog {
     static let entries: [ModelEntry] = [
         // ---------- Gemma 4 (LiteRT-LM — Google's own runtime + bundles) ----------
         // The same .litertlm bundles the Android app uses, where Gemma audio
@@ -70,7 +70,7 @@ enum ModelCatalog {
     }
 }
 
-extension ModelCatalog {
+nonisolated extension ModelCatalog {
     /// Purge-proof model storage. ~/Library/Caches is evicted by macOS under
     /// disk pressure (it silently deleted the 10 GB MLX Gemma) — single-file
     /// bundles we manage ourselves live in Application Support instead.

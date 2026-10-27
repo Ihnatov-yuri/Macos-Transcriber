@@ -6,7 +6,7 @@ import NaturalLanguage
 /// questions they raised that stayed open, and the last thing they said on
 /// each topic. Read from their meetings by the text engine, one meeting at
 /// a time, and cached per meeting so a refresh reads only what is new.
-struct PersonBrief: Codable, Equatable, Sendable {
+nonisolated struct PersonBrief: Codable, Equatable, Sendable {
     struct Item: Codable, Equatable, Hashable, Sendable {
         var text: String
         /// Where in the recording they said it, when the model's time
@@ -25,7 +25,7 @@ struct PersonBrief: Codable, Equatable, Sendable {
     var isEmpty: Bool { commitments.isEmpty && questions.isEmpty && topics.isEmpty && (gist ?? []).isEmpty }
 }
 
-enum PersonBriefBuilder {
+nonisolated enum PersonBriefBuilder {
     /// Bumped when the prompt changes, so cached reads are redone.
     static let promptVersion = 6
     /// Meetings read per brief: everything in the last `recentDays`, and
@@ -303,7 +303,7 @@ enum PersonBriefBuilder {
 /// Briefs per person and meeting, beside the voices in
 /// ~/Library/Application Support/Transcriberr/voice/: they describe people
 /// who never agreed to it, and go when the person is deleted.
-struct PersonBriefStore {
+nonisolated struct PersonBriefStore {
     let url: URL
 
     /// Beside people.json, wherever TRANSCRIBERR_PEOPLE puts it.
@@ -424,7 +424,7 @@ struct PersonBriefStore {
 
 /// First result wins; later ones are dropped. Cancellation can arrive
 /// before the continuation exists, so it is remembered and applied then.
-private final class BoundedClaim: @unchecked Sendable {
+nonisolated private final class BoundedClaim: @unchecked Sendable {
     private let lock = NSLock()
     private var cont: Any?
     private var early: Error?
@@ -460,7 +460,7 @@ private final class BoundedClaim: @unchecked Sendable {
     }
 }
 
-private final class Box<V>: @unchecked Sendable {
+nonisolated private final class Box<V>: @unchecked Sendable {
     private let lock = NSLock()
     private var _value: V?
     var value: V? {

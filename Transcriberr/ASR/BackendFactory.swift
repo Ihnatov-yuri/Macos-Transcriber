@@ -9,7 +9,7 @@ import Foundation
 /// selectable as an experimental audio backend.
 /// `@MainActor` dropped — same _SwiftData_SwiftUI crash story as the
 /// other store classes.
-final class BackendFactory: @unchecked Sendable {
+nonisolated final class BackendFactory: @unchecked Sendable {
     enum Kind: String, CaseIterable, Sendable {
         case parakeet   = "parakeet-v3"
         case parakeetV2 = "parakeet-v2"

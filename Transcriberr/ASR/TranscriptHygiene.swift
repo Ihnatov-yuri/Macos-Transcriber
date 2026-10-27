@@ -10,7 +10,7 @@ import Foundation
 ///     and leaving a fake "Дякую." in the transcript.
 ///   - SEAMS: chunks share a 1 s recap, so the word spoken across a boundary
 ///     is transcribed by both chunks ("…дивувати." / "дивувати. І от…").
-enum TranscriptHygiene {
+nonisolated enum TranscriptHygiene {
 
     static func normWords(_ text: String) -> [String] {
         text.lowercased()

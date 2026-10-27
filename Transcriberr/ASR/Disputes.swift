@@ -9,7 +9,7 @@ import Foundation
 /// the chunk, with at least one of its two kept neighbours beside it. A
 /// dispute that no longer matches anything (the word was ruled away, or the
 /// user edited it) is simply not shown.
-enum DisputeIndex {
+nonisolated enum DisputeIndex {
     struct Hit: Hashable {
         /// Index into the dispute list the hit came from.
         let index: Int
@@ -134,7 +134,7 @@ enum DisputeIndex {
 /// The user's rulings on disputed words, fed back into the vote: once
 /// "Kaico" lost to "Kaiko" by the user's hand, the vote picks "Kaiko"
 /// whenever the engines split between the two again.
-enum DisputeLearning {
+nonisolated enum DisputeLearning {
     static let key = "vocab.learnedChoices"
     static let limit = 2000
     static let lastIgnoredKey = "vocab.lastIgnoredChoice"

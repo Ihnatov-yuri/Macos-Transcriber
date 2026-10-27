@@ -7,7 +7,7 @@ import Accelerate
 /// Decodes any AVAsset-readable file (WAV / MP3 / M4A / AAC / FLAC / OGG-via-AVF)
 /// to 16 kHz mono Float32 PCM, scans for VAD silences, snaps chunk boundaries
 /// to the nearest silence within ±2 s.
-struct AudioDecoder: Sendable {
+nonisolated struct AudioDecoder: Sendable {
     static let sampleRate: Double = 16_000
     static let chunkSeconds: Double = 28
     static let overlapSeconds: Double = 1
@@ -33,6 +33,7 @@ struct AudioDecoder: Sendable {
     /// Read the entire file into a 16 kHz mono Float32 buffer.
     /// Streams via `AVAssetReader` with an `AVAudioConverter` so the entire
     /// raw float buffer never has to live in memory before resampling.
+    @concurrent
     func decodeAll(file: URL) async throws -> [Float] {
         let asset = AVURLAsset(url: file)
         let outSettings: [String: Any] = [
@@ -272,6 +273,7 @@ struct AudioDecoder: Sendable {
         return (slice(samples: samples, cuts: cuts), duration)
     }
 
+    @concurrent
     func decodeAndChunk(file: URL) async throws -> (samples: [Float], chunks: [Chunk], duration: Double) {
         var pcm = try await decodeAll(file: file)
         // Optional Apple-DSP noise suppression for imported files.

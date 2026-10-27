@@ -515,7 +515,7 @@ struct LibraryView: View {
                 // method is MainActor-isolated (it's a View method), so the
                 // copy ran on the main thread and froze the window until it
                 // finished.
-                try await Task.detached(priority: .userInitiated) {
+                try await Task.detached(priority: .userInitiated) { [dest] in
                     try FileManager.default.copyItem(at: src, to: dest)
                 }.value
             }

@@ -19,7 +19,7 @@ import Observation
 /// Installing is a separate, explicit step: UpdateInstaller downloads a
 /// signed zip only when the user presses Update.
 @Observable
-final class UpdateChecker: @unchecked Sendable {
+nonisolated final class UpdateChecker: @unchecked Sendable {
 
     struct Release: Equatable {
         let version: String

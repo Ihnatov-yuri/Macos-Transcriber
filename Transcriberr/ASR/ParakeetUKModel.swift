@@ -20,7 +20,7 @@ import os
 /// A newer version downloads in the background (with the user's update
 /// consent, once a day) next to the one in use, and takes over at the next
 /// launch, before any engine has opened the files.
-enum ParakeetUKModel {
+nonisolated enum ParakeetUKModel {
     static let repo = "ihnatov-yuri/parakeet-tdt-0.6b-v3-uk"
     static let branch = "main"
     static let remoteFolder = "coreml/int8/parakeet-tdt-0.6b-v3"
@@ -28,7 +28,7 @@ enum ParakeetUKModel {
     /// A release larger than this is refused (today's is about 630 MB).
     static let maxTotalBytes: Int64 = 1_500_000_000
 
-    struct File: Codable, Sendable, Equatable {
+    nonisolated struct File: Codable, Sendable, Equatable {
         let path: String
         let size: Int64
         /// LFS files: Hugging Face's SHA-256 of the content.
@@ -242,6 +242,7 @@ enum ParakeetUKModel {
     /// Fetches `m` into `dir` from its commit, every file checked; the
     /// manifest is written last, so a folder with one is complete. Verified
     /// files survive a failed attempt, so the next one only fetches what is missing.
+    @concurrent
     static func download(_ m: Manifest, into dir: URL, progress: (@Sendable (Double) -> Void)? = nil) async throws {
         let fm = FileManager.default
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -279,6 +280,7 @@ enum ParakeetUKModel {
 
     /// Before the engine loads: take over a waiting newer release, and
     /// download the current release when nothing is installed.
+    @concurrent
     static func ensureDownloaded(progress: (@Sendable (Double) -> Void)? = nil) async throws {
         migrateInPlaceInstall()
         applyPendingUpdate()
@@ -324,6 +326,7 @@ enum ParakeetUKModel {
     /// Fetches a newer release next to the one in use, if there is one. Only
     /// for Macs that use Parakeet UK: a missing install is left to the first load.
     @discardableResult
+    @concurrent
     static func checkForUpdate() async -> UpdateResult {
         guard isInstalled() else { return .notInstalled }
         do {
@@ -451,6 +454,6 @@ enum ParakeetUKModel {
     }()
 }
 
-private extension ParakeetUKModel.File {
+nonisolated private extension ParakeetUKModel.File {
     var key: String { "\(path)|\(size)|\(sha256 ?? "")|\(gitBlob ?? "")" }
 }

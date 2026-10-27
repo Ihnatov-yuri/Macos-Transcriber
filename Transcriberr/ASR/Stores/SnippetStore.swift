@@ -10,7 +10,7 @@ struct Snippet: Sendable, Codable, Identifiable, Equatable {
 }
 
 @Observable
-final class SnippetStore: @unchecked Sendable {
+nonisolated final class SnippetStore: @unchecked Sendable {
     private let defaults = UserDefaults.standard
     private let key = "snippets.v1"
 

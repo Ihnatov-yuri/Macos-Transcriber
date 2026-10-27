@@ -12,7 +12,7 @@ import WhisperKit
 /// `id` is the repo folder name, passed to WhisperKit whole: its download
 /// matches `*<variant>/*`, and a bare "large-v3" also matches the turbo,
 /// compressed and distil folders.
-struct WhisperModel: Identifiable, Hashable, Sendable {
+nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let sizeBytes: Int64
@@ -161,7 +161,7 @@ final class WhisperDownloads {
         AppLog.info("whisper", "downloading \(model.id)…")
         tasks[model.id] = Task {
             do {
-                _ = try await WhisperKit.download(variant: model.id) { p in
+                _ = try await WhisperKit.download(variant: model.id) { @Sendable p in
                     let f = p.fractionCompleted
                     Task { @MainActor in self.progress[model.id] = f }
                 }

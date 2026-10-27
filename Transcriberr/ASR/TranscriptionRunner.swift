@@ -21,7 +21,7 @@ import os
 /// dropped. Holding the continuation here (rather than in a bare
 /// first-wins flag) is what lets the cancellation handler, which never sees
 /// the continuation itself, unblock the caller.
-private final class ChunkRace<T: Sendable>: @unchecked Sendable {
+nonisolated private final class ChunkRace<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var cont: CheckedContinuation<T, Error>?
     private var work: Task<Void, Never>?
@@ -72,7 +72,7 @@ private final class ChunkRace<T: Sendable>: @unchecked Sendable {
     }
 }
 
-final class TranscriptionRunner: @unchecked Sendable {
+nonisolated final class TranscriptionRunner: @unchecked Sendable {
     static let chunkTimeoutSeconds: TimeInterval = 120
     /// Wedge recoveries observed in the current run (drives Gemma probation).
     private var runWedgeCount = 0
@@ -196,7 +196,8 @@ final class TranscriptionRunner: @unchecked Sendable {
     /// Also where the call track has sound at all (`sysSound`, see
     /// `VoiceActivity.soundRanges`), for finalize to tell a short reply from
     /// a word read into silence.
-    private nonisolated static func cancelEchoAndChunk(
+    @concurrent
+    private static func cancelEchoAndChunk(
         mic: inout [Float], sys: [Float], decoder: AudioDecoder, keepCleanedMic: Bool = false
     ) async -> (chunks: [AudioDecoder.Chunk], micChunkIndices: Set<Int>, duration: Double, cleanedMic: [Float]?, micHadEcho: Bool,
                 sysSound: [ClosedRange<Double>]) {
@@ -473,7 +474,7 @@ final class TranscriptionRunner: @unchecked Sendable {
         }
         // Two-pass max quality: capture per-chunk agreement + raw A/B texts
         // during the first pass so disputes can be arbitrated afterwards.
-        final class RichBox: @unchecked Sendable {
+        nonisolated final class RichBox: @unchecked Sendable {
             private let lock = NSLock()
             private var map: [Int: EnsembleBackend.RichChunk] = [:]
             func set(_ idx: Int, _ v: EnsembleBackend.RichChunk) { lock.lock(); map[idx] = v; lock.unlock() }
@@ -604,7 +605,7 @@ final class TranscriptionRunner: @unchecked Sendable {
                     let chunk = chunks[idx]
                     let hints = hintsFor(chunk)
                     if ensembleTwoPass, let ens = backend as? EnsembleBackend {
-                        group.addTask { [self] in
+                        group.addTask { [self, micChunkIndices] in
                             let rich = try await richChunkWithRetry(
                                 ens: ens, samples: chunk.samples,
                                 window: prepareTimeline
@@ -1874,7 +1875,7 @@ final class TranscriptionRunner: @unchecked Sendable {
 /// Parts of a run that came back with no text because the engine could not
 /// read them (ran out of time, or hung twice), for the run's note: the
 /// transcript alone shows nothing where they were.
-enum RunGapLog {
+nonisolated enum RunGapLog {
     enum Kind: Sendable { case outOfTime, wedged }
     private static let tally = OSAllocatedUnfairLock(initialState: [Kind: Int]())
 

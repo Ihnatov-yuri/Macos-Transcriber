@@ -11,7 +11,7 @@ import AppKit
 /// not the topic, not that "Мьюз" had been settled as "Muse" half an hour
 /// earlier. The brief is that knowledge, produced once and handed to every
 /// later call: small output, rich input.
-struct MeetingBrief: Codable, Equatable, Sendable {
+nonisolated struct MeetingBrief: Codable, Equatable, Sendable {
     struct Fix: Codable, Equatable, Sendable {
         var from: String
         var to: String
@@ -36,7 +36,7 @@ struct MeetingBrief: Codable, Equatable, Sendable {
     }
 }
 
-enum MeetingBriefBuilder {
+nonisolated enum MeetingBriefBuilder {
 
     static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: "ui.meetingBrief") as? Bool ?? true

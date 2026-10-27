@@ -226,7 +226,7 @@ enum SpeechMeasure {
 
 /// Words that count as fillers and hedges, per language. Only English and
 /// Ukrainian have lists; other languages get no filler or hedge numbers.
-enum SpeechLexicon {
+nonisolated enum SpeechLexicon {
     static let fillers: [String: [String]] = [
         "en": ["um", "umm", "uh", "uhh", "erm", "er", "hmm", "you know", "i mean"],
         "uk": ["е", "ее", "еее", "ееее", "ем", "ну", "типу", "значить", "короче", "як би", "от"],

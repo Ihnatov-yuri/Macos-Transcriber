@@ -11,7 +11,7 @@ import Foundation
 /// clips the built-in WeSpeaker ResNet34 tells two people apart with 6.4%
 /// clip error, SimAM-ResNet100 (VoxBlink2, VoxCeleb fine-tune) with 3.1%,
 /// and with a wider margin on the closest pair (Lana and Iryna).
-enum VoiceModel: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum VoiceModel: String, CaseIterable, Identifiable, Sendable {
     case standard = "wespeaker_v2"
     case simam = "simam_resnet100_vb2_ft"
 
@@ -56,7 +56,7 @@ enum VoiceModel: String, CaseIterable, Identifiable, Sendable {
 /// The scores People decides on, per model: each model has its own scale
 /// (a voice scores higher against itself on one than on another), so each
 /// is calibrated on the same clips.
-struct VoiceScale: Equatable, Sendable {
+nonisolated struct VoiceScale: Equatable, Sendable {
     /// Name a speaker at `on` and `margin` above the next person; ask
     /// "Was this them?" from `off`.
     var on: Float
@@ -83,7 +83,7 @@ struct VoiceScale: Equatable, Sendable {
 /// and hosted on Hugging Face, pinned to one commit and checked file by
 /// file like Parakeet UK: it is parsed by native Core ML code in a process
 /// holding microphone and Accessibility grants.
-enum SimAMModel {
+nonisolated enum SimAMModel {
     static let repo = "ihnatov-yuri/wespeaker-simam-resnet100-voxblink2-coreml"
     static let revision = "1c84dc4c6b4db7abd42a3c63f13131e229062f34"
     static let folder = "SimAMResNet100.mlmodelc"
@@ -129,6 +129,7 @@ enum SimAMModel {
     /// Downloads the model unless it is installed. Each file is checked
     /// against its hash in a staging folder, which moves into place only
     /// when complete; verified files survive a failed attempt.
+    @concurrent
     static func ensureDownloaded(progress: (@Sendable (Double) -> Void)? = nil) async throws {
         if isInstalled() { return }
         let fm = FileManager.default
@@ -268,7 +269,7 @@ actor SimAMEmbedder {
 /// The one way People turns audio into voices, on the model picked in
 /// Settings. A Voiceprint is tagged with the model that made it, and
 /// voices of two models are never compared.
-enum PeopleEmbedder {
+nonisolated enum PeopleEmbedder {
     static func embed(_ clips: [ArraySlice<Float>], model: VoiceModel = .current) async throws -> [[Float]] {
         switch model {
         case .standard: return try await VoiceEmbedder.shared.embed(clips)
@@ -316,6 +317,7 @@ enum PeopleEmbedder {
     }
 
     /// Re-embeds the user's kept enrollment reading with `model`.
+    @concurrent
     static func buildMyVoice(_ model: VoiceModel) async throws {
         // Up to date already: nothing to read again.
         guard model != .standard, let bytes = enrollmentBytes, myVoice(model) == nil else { return }

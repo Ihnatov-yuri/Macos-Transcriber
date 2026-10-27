@@ -102,7 +102,7 @@ struct PlayerBar: View {
     }
 
     /// Small solid triangle for the play state.
-    private struct PlayTriangle: Shape {
+    nonisolated private struct PlayTriangle: Shape {
         func path(in rect: CGRect) -> Path {
             var p = Path()
             p.move(to: CGPoint(x: rect.minX, y: rect.minY))

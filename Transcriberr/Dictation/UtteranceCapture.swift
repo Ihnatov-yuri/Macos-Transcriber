@@ -15,10 +15,11 @@ import Observation
 /// quieter for as long as the app was running.
 ///
 /// Also tracks voice activity so toggle mode can flush a passage at every
-/// pause. No actor isolation on the type (see `WavRecorder`).
+/// pause. No actor isolation on the type (see `WavRecorder`): explicitly
+/// `nonisolated`, since the module default is the main actor.
 @Observable
-final class UtteranceCapture: @unchecked Sendable {
-    static let sampleRate: Double = 16_000
+nonisolated final class UtteranceCapture: @unchecked Sendable {
+    nonisolated static let sampleRate: Double = 16_000
 
     private(set) var isRunning = false
     private(set) var level: Float = 0
@@ -39,12 +40,29 @@ final class UtteranceCapture: @unchecked Sendable {
     /// a Bluetooth headset back its stereo profile after a dictated sentence.
     private var engine = AVAudioEngine()
     private let ioQueue = DispatchQueue(label: "UtteranceCapture.io", qos: .userInitiated)
-    private var converter: AVAudioConverter?
-    private var pendingInputs: [AVAudioPCMBuffer] = []
-    private var samples: [Float] = []
-    private var voicedSinceDrain = false
-    private var lastVoicedSample: Int = 0     // index into samples
-    private var totalSamples: Int = 0
+
+    /// The tap path's state. Only touched on `ioQueue` — every access sits in
+    /// an `ioQueue.sync`/`async` block or a function only called from one —
+    /// which is what makes the unchecked Sendable true.
+    private nonisolated final class IOState: @unchecked Sendable {
+        var converter: AVAudioConverter?
+        var pendingInputs: [AVAudioPCMBuffer] = []
+        var samples: [Float] = []
+        var voicedSinceDrain = false
+        var lastVoicedSample: Int = 0     // index into samples
+        var totalSamples: Int = 0
+        // Diagnostics: how much the tap actually delivered.
+        var tapCalls = 0
+        var tapFrames = 0
+        /// Rolling per-frame RMS history for the adaptive noise floor.
+        var frameRMS: [Float] = []
+        var noiseFloor: Float = 0
+        // Meter coalescing (~12 Hz publishes).
+        var meterRMS: Float = 0
+        var meterPeak: Float = 0
+        var lastMeterPublish: TimeInterval = 0
+    }
+    @ObservationIgnored private let io = IOState()
     private var startedAt: Date = .distantPast
     private var tick: Task<Void, Never>?
     /// Use Apple's voice-processing unit (echo cancellation, noise
@@ -58,9 +76,6 @@ final class UtteranceCapture: @unchecked Sendable {
     /// The audio route changed while idle; the engine's input node still
     /// describes the OLD device format, so the next tap would be refused.
     private var engineStale = false
-    // Diagnostics (ioQueue): how much the tap actually delivered.
-    private var tapCalls = 0
-    private var tapFrames = 0
 
     private let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: UtteranceCapture.sampleRate,
@@ -77,20 +92,16 @@ final class UtteranceCapture: @unchecked Sendable {
         peak > max(0.02, noiseFloor * 6) && rms > max(0.0025, noiseFloor * 3)
     }
 
-    /// Rolling per-frame RMS history (ioQueue) for the adaptive noise floor.
-    private var frameRMS: [Float] = []
-    private var noiseFloor: Float = 0
-
     /// Seconds of silence since the last voiced frame (0 while talking).
     var silenceSeconds: Double {
         ioQueue.sync {
-            guard voicedSinceDrain else { return 0 }
-            return Double(totalSamples - lastVoicedSample) / Self.sampleRate
+            guard io.voicedSinceDrain else { return 0 }
+            return Double(io.totalSamples - io.lastVoicedSample) / Self.sampleRate
         }
     }
     /// Whether anything voiced arrived since the last drain.
-    var hasVoiceSinceDrain: Bool { ioQueue.sync { voicedSinceDrain } }
-    var bufferedSeconds: Double { ioQueue.sync { Double(samples.count) / Self.sampleRate } }
+    var hasVoiceSinceDrain: Bool { ioQueue.sync { io.voicedSinceDrain } }
+    var bufferedSeconds: Double { ioQueue.sync { Double(io.samples.count) / Self.sampleRate } }
 
     // MARK: - Lifecycle
 
@@ -239,7 +250,7 @@ final class UtteranceCapture: @unchecked Sendable {
         }
         converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
         converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
-        ioQueue.sync { self.converter = converter }
+        ioQueue.sync { io.converter = converter }
         do {
             try ExceptionTrap.run {
                 input.removeTap(onBus: 0)
@@ -295,15 +306,15 @@ final class UtteranceCapture: @unchecked Sendable {
         }
 
         ioQueue.sync {
-            samples.removeAll(keepingCapacity: true)
-            pendingInputs.removeAll(keepingCapacity: true)
-            voicedSinceDrain = false
-            lastVoicedSample = 0
-            totalSamples = 0
-            tapCalls = 0
-            tapFrames = 0
-            frameRMS.removeAll(keepingCapacity: true)
-            noiseFloor = 0
+            io.samples.removeAll(keepingCapacity: true)
+            io.pendingInputs.removeAll(keepingCapacity: true)
+            io.voicedSinceDrain = false
+            io.lastVoicedSample = 0
+            io.totalSamples = 0
+            io.tapCalls = 0
+            io.tapFrames = 0
+            io.frameRMS.removeAll(keepingCapacity: true)
+            io.noiseFloor = 0
         }
         level = 0
         peakHistory = Array(repeating: 0, count: 48)
@@ -350,7 +361,7 @@ final class UtteranceCapture: @unchecked Sendable {
         }
         converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
         converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
-        ioQueue.sync { self.converter = converter }
+        ioQueue.sync { io.converter = converter }
 
         do {
             try ExceptionTrap.run {
@@ -371,7 +382,7 @@ final class UtteranceCapture: @unchecked Sendable {
             if let startError { throw startError }
         } catch {
             try? ExceptionTrap.run { input.removeTap(onBus: 0) }
-            ioQueue.sync { self.converter = nil }
+            ioQueue.sync { io.converter = nil }
             throw CaptureError.noInput("Audio engine failed to start: \(error.localizedDescription)")
         }
 
@@ -408,12 +419,12 @@ final class UtteranceCapture: @unchecked Sendable {
         }
         let (out, calls, frames): ([Float], Int, Int) = ioQueue.sync {
             flushConverterTail()
-            let s = samples
-            samples.removeAll()
-            pendingInputs.removeAll()
-            converter = nil
-            voicedSinceDrain = false
-            return (s, tapCalls, tapFrames)
+            let s = io.samples
+            io.samples.removeAll()
+            io.pendingInputs.removeAll()
+            io.converter = nil
+            io.voicedSinceDrain = false
+            return (s, io.tapCalls, io.tapFrames)
         }
         level = 0
         AppLog.info("dictation", String(format: "capture stopped: %.2fs (tap %d calls, %d frames, engine %@)",
@@ -458,15 +469,15 @@ final class UtteranceCapture: @unchecked Sendable {
 
     /// Copy of the audio buffered so far (live preview) — nothing is consumed.
     func snapshot() -> [Float] {
-        ioQueue.sync { samples }
+        ioQueue.sync { io.samples }
     }
 
     /// Take the buffered audio (for a pause flush) and keep capturing.
     func drain() -> [Float] {
         ioQueue.sync {
-            let s = samples
-            samples.removeAll(keepingCapacity: true)
-            voicedSinceDrain = false
+            let s = io.samples
+            io.samples.removeAll(keepingCapacity: true)
+            io.voicedSinceDrain = false
             return s
         }
     }
@@ -479,31 +490,33 @@ final class UtteranceCapture: @unchecked Sendable {
     }
 
     nonisolated private func enqueueAndDrain(_ input: AVAudioPCMBuffer) {
-        tapCalls += 1
-        tapFrames += Int(input.frameLength)
-        if tapCalls == 1 {
+        let io = self.io
+        io.tapCalls += 1
+        io.tapFrames += Int(input.frameLength)
+        if io.tapCalls == 1 {
             Task { @MainActor [weak self] in self?.markAudioArrived() }
         }
-        guard let converter else { return }
-        pendingInputs.append(input)
+        guard let converter = io.converter else { return }
+        io.pendingInputs.append(input)
         let ratio = targetFormat.sampleRate / input.format.sampleRate
         while true {
             let cap = AVAudioFrameCount(Double(input.frameLength) * ratio + 256)
             guard let outBuf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: max(1024, cap)) else { return }
             var error: NSError?
-            let status = converter.convert(to: outBuf, error: &error) { [weak self] _, outStatus in
-                guard let self, !self.pendingInputs.isEmpty else {
+            // Called synchronously inside `convert`, so still on ioQueue.
+            let status = converter.convert(to: outBuf, error: &error) { _, outStatus in
+                guard !io.pendingInputs.isEmpty else {
                     outStatus.pointee = .noDataNow
                     return nil
                 }
                 outStatus.pointee = .haveData
-                return self.pendingInputs.removeFirst()
+                return io.pendingInputs.removeFirst()
             }
             if status == .error { return }
             let n = Int(outBuf.frameLength)
             guard n > 0, let ptr = outBuf.floatChannelData?[0] else { break }
             append(Array(UnsafeBufferPointer(start: ptr, count: n)))
-            if pendingInputs.isEmpty && status == .inputRanDry { break }
+            if io.pendingInputs.isEmpty && status == .inputRanDry { break }
         }
     }
 
@@ -517,7 +530,8 @@ final class UtteranceCapture: @unchecked Sendable {
     }
 
     nonisolated private func flushConverterTail() {
-        guard let converter, let outBuf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: 8192) else { return }
+        guard let converter = io.converter,
+              let outBuf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: 8192) else { return }
         var error: NSError?
         _ = converter.convert(to: outBuf, error: &error) { _, outStatus in
             outStatus.pointee = .endOfStream
@@ -531,8 +545,9 @@ final class UtteranceCapture: @unchecked Sendable {
     /// Runs on ioQueue. Appends, updates the voice-activity clock, and
     /// publishes the meter at ~12 Hz.
     nonisolated private func append(_ chunk: [Float]) {
-        samples.append(contentsOf: chunk)
-        totalSamples += chunk.count
+        let io = self.io
+        io.samples.append(contentsOf: chunk)
+        io.totalSamples += chunk.count
         var sumSq: Float = 0
         var peak: Float = 0
         for s in chunk {
@@ -542,23 +557,23 @@ final class UtteranceCapture: @unchecked Sendable {
         }
         let rms = (sumSq / Float(max(1, chunk.count))).squareRoot()
         // Adaptive floor: the 20th percentile of the last ~4 s of frames.
-        frameRMS.append(rms)
-        if frameRMS.count > 200 { frameRMS.removeFirst(frameRMS.count - 200) }
-        if frameRMS.count >= 20 {
-            let sorted = frameRMS.sorted()
-            noiseFloor = sorted[sorted.count / 5]
+        io.frameRMS.append(rms)
+        if io.frameRMS.count > 200 { io.frameRMS.removeFirst(io.frameRMS.count - 200) }
+        if io.frameRMS.count >= 20 {
+            let sorted = io.frameRMS.sorted()
+            io.noiseFloor = sorted[sorted.count / 5]
         }
-        if Self.isVoiced(rms: rms, peak: peak, noiseFloor: noiseFloor) {
-            voicedSinceDrain = true
-            lastVoicedSample = totalSamples
+        if Self.isVoiced(rms: rms, peak: peak, noiseFloor: io.noiseFloor) {
+            io.voicedSinceDrain = true
+            io.lastVoicedSample = io.totalSamples
         }
-        meterRMS = max(meterRMS, rms)
-        meterPeak = max(meterPeak, peak)
+        io.meterRMS = max(io.meterRMS, rms)
+        io.meterPeak = max(io.meterPeak, peak)
         let now = Date().timeIntervalSince1970
-        if now - lastMeterPublish >= 0.08 {
-            lastMeterPublish = now
-            let r = meterRMS, p = meterPeak
-            meterRMS = 0; meterPeak = 0
+        if now - io.lastMeterPublish >= 0.08 {
+            io.lastMeterPublish = now
+            let r = io.meterRMS, p = io.meterPeak
+            io.meterRMS = 0; io.meterPeak = 0
             Task { @MainActor [weak self] in
                 guard let self, self.isRunning else { return }
                 self.level = max(r, self.level * 0.85)
@@ -569,9 +584,6 @@ final class UtteranceCapture: @unchecked Sendable {
             }
         }
     }
-    private var meterRMS: Float = 0
-    private var meterPeak: Float = 0
-    private var lastMeterPublish: TimeInterval = 0
 
     // MARK: - Gain
 

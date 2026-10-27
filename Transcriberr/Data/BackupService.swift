@@ -9,7 +9,7 @@ import Foundation
 ///
 /// A write failure here must never fail the caller's real operation — every
 /// entry point swallows its own errors and logs a warning.
-enum BackupService {
+nonisolated enum BackupService {
     static let schemaVersion = 1
 
     /// A sibling of the project/recordings folder, not nested inside it —
@@ -145,7 +145,7 @@ enum BackupService {
         }
     }
 
-    private static func write<T: Encodable>(_ value: T, to url: URL) {
+    private static func write<T: Encodable & Sendable>(_ value: T, to url: URL) {
         // Encoding a full transcript and writing it atomically is tens of
         // milliseconds of CPU plus a disk round-trip, and almost every
         // caller is on the main actor — `repository.save` alone runs on

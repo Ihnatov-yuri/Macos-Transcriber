@@ -56,7 +56,7 @@ struct TimedWord: Sendable {
 /// which find the word again in the finished transcript (the text passes
 /// through hygiene, seam trims and turn merging after the vote, so a word
 /// index would not survive). `start`/`end` is the chunk's span.
-struct WordDispute: Codable, Sendable, Hashable {
+nonisolated struct WordDispute: Codable, Sendable, Hashable {
     var chosen: String
     var alternative: String
     var before: String
@@ -79,7 +79,7 @@ protocol DetailedTranscribing: Actor {
     ) async throws -> DetailedTranscription
 }
 
-struct SpeakerHint: Sendable {
+nonisolated struct SpeakerHint: Sendable {
     let startSeconds: Double
     let endSeconds: Double
     let speakerKey: String
@@ -97,7 +97,7 @@ struct SpeakerHint: Sendable {
     }
 }
 
-struct RawSegment: Sendable {
+nonisolated struct RawSegment: Sendable {
     var startSeconds: Double
     var endSeconds: Double
     var text: String

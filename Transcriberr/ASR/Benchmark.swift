@@ -20,7 +20,7 @@ import Foundation
 /// Stored outside the database, next to the transcript backups (a re-run
 /// wipes and re-creates a recording's segments, and a reference must
 /// outlive that). `transcriberrcli bench` reads and scores it.
-struct BenchmarkItem: Codable, Sendable, Identifiable, Equatable {
+nonisolated struct BenchmarkItem: Codable, Sendable, Identifiable, Equatable {
     /// The segment's id at the time it was checked.
     var id: UUID
     var recordingId: UUID
@@ -43,7 +43,7 @@ struct BenchmarkItem: Codable, Sendable, Identifiable, Equatable {
     var clip: String
 }
 
-enum Benchmark {
+nonisolated enum Benchmark {
     static let padding = 0.25
 
     /// "Keep corrected lines as a benchmark" (Settings): on by default.
@@ -142,6 +142,7 @@ enum Benchmark {
     /// machine text is kept, so later edits never turn the user's own words
     /// into "what the engine wrote". The clip is cut once.
     @discardableResult
+    @concurrent
     static func record(_ s: Source, machine: String, in dir: URL = root) async -> BenchmarkItem? {
         let reference = s.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reference.isEmpty, s.end > s.start else { return nil }

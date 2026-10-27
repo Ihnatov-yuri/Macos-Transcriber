@@ -4,14 +4,14 @@ import Observation
 /// Recorder-side preferences. Lives alongside the other store classes but
 /// has process-wide scope (the recorder picks them up at `start()` time).
 @Observable
-final class RecorderSettings: @unchecked Sendable {
+nonisolated final class RecorderSettings: @unchecked Sendable {
     static let shared = RecorderSettings()
 
     /// Microphone sensitivity / input gain applied to audio *before Gemma
     /// transcribes it*. Many Macs capture quiet (-50 dB), which both starves
     /// the model and triggers hallucinations. `.auto` normalizes each voiced
     /// chunk to a target level; the fixed steps apply a constant boost.
-    enum MicSensitivity: String, CaseIterable, Sendable {
+    nonisolated enum MicSensitivity: String, CaseIterable, Sendable {
         case auto, x2, x4, x6
 
         var label: String {
@@ -67,9 +67,12 @@ final class RecorderSettings: @unchecked Sendable {
     }
 
     /// Apple's echo filter on the microphone during meeting recordings,
-    /// unless the output is headphones (see `VoiceProcessedMic`). On by
-    /// default: on laptop speakers it is what keeps the far side from
-    /// playing back twice.
+    /// unless the output is headphones (see `VoiceProcessedMic`). Off by
+    /// default: next to a call app's own voice processing on the same mic
+    /// it went quiet for both, so the call heard nothing of the user and the
+    /// recording lost their voice (every speaker meeting from 24 to 27
+    /// October 2026). The raw mic and the offline `EchoCanceller` are the
+    /// default path again.
     var meetingEchoFilter: Bool {
         didSet { defaults.set(meetingEchoFilter, forKey: Key.meetingEchoFilter) }
     }
@@ -86,7 +89,7 @@ final class RecorderSettings: @unchecked Sendable {
         // config we care about. The setting is opt-in in Settings → Audio Input.
         noiseSuppression = (defaults.object(forKey: Key.noiseSuppression) as? Bool) ?? false
         preprocessImports = (defaults.object(forKey: Key.preprocessImports) as? Bool) ?? false
-        meetingEchoFilter = (defaults.object(forKey: Key.meetingEchoFilter) as? Bool) ?? true
+        meetingEchoFilter = (defaults.object(forKey: Key.meetingEchoFilter) as? Bool) ?? false
         inputDeviceUID = defaults.string(forKey: Key.inputDeviceUID)
         micSensitivity = (defaults.string(forKey: Key.micSensitivity)
             .flatMap(MicSensitivity.init(rawValue:))) ?? .auto

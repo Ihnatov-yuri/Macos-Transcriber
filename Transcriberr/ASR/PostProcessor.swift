@@ -4,7 +4,7 @@ import SwiftData
 
 /// First-wins claim for the generation timeout race (file scope because
 /// Swift forbids type declarations inside generic functions).
-private final class PostProcTimeoutClaim: @unchecked Sendable {
+nonisolated private final class PostProcTimeoutClaim: @unchecked Sendable {
     private let lock = NSLock()
     private var claimed = false
     func take() -> Bool {
@@ -21,7 +21,7 @@ private final class PostProcTimeoutClaim: @unchecked Sendable {
 /// or any user-edited preset) against a backend's `generateText(...)` and
 /// persists the result as an `OutputDoc`.
 @Observable
-final class PostProcessor: @unchecked Sendable {
+nonisolated final class PostProcessor: @unchecked Sendable {
     enum Status: Sendable, Equatable {
         case idle, queued, loading, running, done, failed(String)
     }

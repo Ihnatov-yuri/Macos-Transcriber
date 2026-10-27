@@ -5,7 +5,7 @@ import Observation
 /// Thin coordinator that fronts Gemma4Swift's downloader (and, later,
 /// FluidAudio's). Lets the UI observe per-model progress and trigger cancels.
 @Observable
-final class ModelDownloader: @unchecked Sendable {
+nonisolated final class ModelDownloader: @unchecked Sendable {
     struct ProgressInfo: Sendable, Equatable {
         var bytesDownloaded: Int64
         var totalBytes: Int64
@@ -246,7 +246,7 @@ final class ModelDownloader: @unchecked Sendable {
 /// latter iterates one byte at a time (see the call site), and a download
 /// task rather than an in-memory `data(from:)` because these bundles are
 /// multi-gigabyte.
-private final class StreamingDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+nonisolated private final class StreamingDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let handle: FileHandle
     private let onProgress: @Sendable (Int64, Int64) -> Void
     private let lock = NSLock()
@@ -352,7 +352,7 @@ private final class StreamingDownload: NSObject, URLSessionDataDelegate, @unchec
 
 /// Throttle for download progress reporting — the delegate fires per network
 /// chunk, which is far more often than a progress bar can use.
-private final class ByteCounter: @unchecked Sendable {
+nonisolated private final class ByteCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var last: Int64 = 0
     func shouldReport(_ current: Int64, every step: Int64) -> Bool {

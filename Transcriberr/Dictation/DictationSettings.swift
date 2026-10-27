@@ -8,7 +8,7 @@ import Observation
 /// Declared without actor isolation for the same `_SwiftData_SwiftUI`
 /// reason as every other `@Observable` store in the app.
 @Observable
-final class DictationSettings: @unchecked Sendable {
+nonisolated final class DictationSettings: @unchecked Sendable {
 
     /// Modifier keys that can act as the global dictation key. Modifier-only
     /// hotkeys never collide with an app's own shortcuts, and a *right-hand*

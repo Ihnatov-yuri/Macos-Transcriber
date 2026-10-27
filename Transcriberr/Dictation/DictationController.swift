@@ -11,7 +11,7 @@ import Security
 /// actor isolation on the type — every mutating method is `@MainActor`
 /// individually (same `_SwiftData_SwiftUI` constraint as the other stores).
 @Observable
-final class DictationController: @unchecked Sendable {
+nonisolated final class DictationController: @unchecked Sendable {
 
     enum Phase: Equatable {
         case idle
@@ -1411,7 +1411,7 @@ final class DictationController: @unchecked Sendable {
     }
 
     /// First result wins; the continuation resumes exactly once.
-    private final class TimeoutRace<T: Sendable>: @unchecked Sendable {
+    nonisolated private final class TimeoutRace<T: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<T, Error>?
 

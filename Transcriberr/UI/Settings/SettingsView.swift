@@ -397,7 +397,7 @@ struct RecorderSettingsTab: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Echo filter in meetings")
                         .font(AppFont.text(13, weight: .bold))
-                    Text("When the call plays on speakers, Apple's echo filter keeps the other people from being recorded twice through your mic. Off with headphones. Other apps play about 4 dB quieter while a meeting records. Can silence your mic in Teams or Meet, so the other people can't hear you.")
+                    Text("Not needed for the transcript: Transcriberr removes the echo of the call from your mic itself. Apple's filter can silence your mic in Teams, so the other people can't hear you, and it drops short pieces of the recording. Off with headphones. Other apps play about 4 dB quieter while a meeting records.")
                         .font(AppFont.text(11))
                         .foregroundStyle(AppColor.ink2)
                 }

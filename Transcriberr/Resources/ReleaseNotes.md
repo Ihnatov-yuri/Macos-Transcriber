@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.1.4
+- The echo filter in meetings (Settings → Audio Input) is turned off once, also for those who had it on. Measured over 30 meetings, the transcript has as little echo without it, while every meeting with it lost short pieces of audio and on the MacBook microphone it could silence you, in Teams and in the recording. You can turn it back on, and it stays on.
+
 ## 5.1.3
 - Open a recording the Library search found and the words you searched for are marked in its transcript. It scrolls to the first match, and a bar steps through the matching lines (Previous, Next, Hide).
 - You → How you speak covers all your meetings, not the latest 30, so every language you speak in two meetings or more is in the menu (Ukrainian was missing). Recordings of under 80 words, such as microphone tests, no longer count as meetings.

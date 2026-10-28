@@ -42,6 +42,7 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
         static let inputDeviceUID = "recorder.inputDeviceUID"
         static let meetingEchoFilter = "recorder.meetingEchoFilter"
         static let virtualMicrophone = "recorder.virtualMicrophone"
+        static let echoFilterReset = "recorder.meetingEchoFilterReset1"
     }
 
     /// Input sensitivity for transcription. Default `.auto`.
@@ -73,7 +74,9 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
     /// it went quiet for both, so the call heard nothing of the user and the
     /// recording lost their voice (every speaker meeting from 24 to 27
     /// October 2026). The raw mic and the offline `EchoCanceller` are the
-    /// default path again.
+    /// default path again. Measured over 30 meetings (28 October 2026): the
+    /// transcript's echo is the same without it, and every meeting with it
+    /// dropped audio, so a saved "on" is reset once (`resetEchoFilterOnce`).
     var meetingEchoFilter: Bool {
         didSet { defaults.set(meetingEchoFilter, forKey: Key.meetingEchoFilter) }
     }
@@ -94,7 +97,19 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
         didSet { defaults.set(preprocessImports, forKey: Key.preprocessImports) }
     }
 
+    /// Turns a saved echo filter off, once per Mac. The old default was on,
+    /// so most people who have it on never chose it; the reset is recorded,
+    /// and turning it back on afterwards sticks.
+    static func resetEchoFilterOnce(_ defaults: UserDefaults) {
+        guard !defaults.bool(forKey: Key.echoFilterReset) else { return }
+        if defaults.object(forKey: Key.meetingEchoFilter) != nil {
+            defaults.set(false, forKey: Key.meetingEchoFilter)
+        }
+        defaults.set(true, forKey: Key.echoFilterReset)
+    }
+
     private init() {
+        Self.resetEchoFilterOnce(defaults)
         // Default OFF until we verify voice processing works on every Mac
         // config we care about. The setting is opt-in in Settings → Audio Input.
         noiseSuppression = (defaults.object(forKey: Key.noiseSuppression) as? Bool) ?? false

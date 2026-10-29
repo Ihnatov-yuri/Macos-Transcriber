@@ -1,17 +1,18 @@
 import SwiftUI
 
 /// Whisper models in the Models tab: which are on disk, which language each
-/// picked one serves, and Download / Delete for each. The two picks are made
+/// picked one serves, and Download / Delete for each. The three picks are made
 /// in the Engines tab.
 struct WhisperModelsSection: View {
     @AppStorage(WhisperModel.englishSettingsKey) private var english = WhisperModel.englishDefaultID
+    @AppStorage(WhisperModel.ukrainianSettingsKey) private var ukrainian = WhisperModel.ukrainianDefaultID
     @AppStorage(WhisperModel.settingsKey) private var other = WhisperModel.defaultID
     @State private var downloads = WhisperDownloads.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Whisper").uiLabel(10, color: AppColor.ink2)
-            Text("argmaxinc/whisperkit-coreml · stored in ~/Documents/huggingface · the models in use are picked in the Engines tab")
+            Text("argmaxinc/whisperkit-coreml and ihnatov-yuri/whisper-large-v3-turbo-uk · the models in use are picked in the Engines tab")
                 .uiLabel(9, color: AppColor.ink3)
             VStack(spacing: 0) {
                 ForEach(WhisperModel.all) { model in
@@ -23,10 +24,11 @@ struct WhisperModelsSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// "English", "Other languages", both, or none.
+    /// "English", "Ukrainian", "Other languages", several, or none.
     private func uses(_ m: WhisperModel) -> [String] {
         var u: [String] = []
         if WhisperModel.model(english).id == m.id { u.append("English") }
+        if WhisperModel.model(ukrainian).id == m.id { u.append("Ukrainian") }
         if WhisperModel.model(other).id == m.id { u.append("Other languages") }
         return u
     }

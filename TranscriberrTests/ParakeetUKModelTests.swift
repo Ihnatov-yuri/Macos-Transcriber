@@ -23,7 +23,7 @@ final class ParakeetUKModelTests: XCTestCase {
 
     func testReleaseListParsesAndCoversWhatFluidAudioLoads() throws {
         let m = try ParakeetUKModel.manifest(revision: rev, tree: tree())
-        XCTAssertNoThrow(try m.validate())
+        XCTAssertNoThrow(try ParakeetUKModel.validate(m))
         XCTAssertEqual(m.files.count, 19)
         let weight = try XCTUnwrap(m.files.first { $0.path == "Encoder.mlmodelc/weights/weight.bin" })
         XCTAssertEqual(weight.sha256?.count, 64)
@@ -39,20 +39,20 @@ final class ParakeetUKModelTests: XCTestCase {
 
     func testUnusableReleasesAreRefused() throws {
         // A component FluidAudio needs is missing.
-        XCTAssertThrowsError(try ParakeetUKModel.manifest(revision: rev, tree: tree(skip: "Encoder.mlmodelc/weights/weight.bin")).validate())
+        XCTAssertThrowsError(try ParakeetUKModel.validate(ParakeetUKModel.manifest(revision: rev, tree: tree(skip: "Encoder.mlmodelc/weights/weight.bin"))))
         // A path that would leave the model folder.
         let escape: [String: Any] = ["type": "file", "path": "coreml/int8/parakeet-tdt-0.6b-v3/../../x", "size": 1,
                                      "oid": String(repeating: "c", count: 40)]
-        XCTAssertThrowsError(try ParakeetUKModel.manifest(revision: rev, tree: tree(extra: [escape])).validate())
+        XCTAssertThrowsError(try ParakeetUKModel.validate(ParakeetUKModel.manifest(revision: rev, tree: tree(extra: [escape]))))
         // A file without a checksum.
         let bare: [String: Any] = ["type": "file", "path": "coreml/int8/parakeet-tdt-0.6b-v3/extra.bin", "size": 1]
-        XCTAssertThrowsError(try ParakeetUKModel.manifest(revision: rev, tree: tree(extra: [bare])).validate())
+        XCTAssertThrowsError(try ParakeetUKModel.validate(ParakeetUKModel.manifest(revision: rev, tree: tree(extra: [bare]))))
         // Far larger than a Parakeet release.
         let huge: [String: Any] = ["type": "file", "path": "coreml/int8/parakeet-tdt-0.6b-v3/huge.bin", "size": 3_000_000_000,
                                    "oid": "x", "lfs": ["oid": String(repeating: "d", count: 64)]]
-        XCTAssertThrowsError(try ParakeetUKModel.manifest(revision: rev, tree: tree(extra: [huge])).validate())
+        XCTAssertThrowsError(try ParakeetUKModel.validate(ParakeetUKModel.manifest(revision: rev, tree: tree(extra: [huge]))))
         // Not a commit id.
-        XCTAssertThrowsError(try ParakeetUKModel.manifest(revision: "main", tree: tree()).validate())
+        XCTAssertThrowsError(try ParakeetUKModel.validate(ParakeetUKModel.manifest(revision: "main", tree: tree())))
         // Files outside the Core ML folder are not part of the release.
         let card: [String: Any] = ["type": "file", "path": "README.md", "size": 10, "oid": String(repeating: "e", count: 40)]
         XCTAssertEqual(try ParakeetUKModel.manifest(revision: rev, tree: tree(extra: [card])).files.count, 19)
@@ -92,7 +92,7 @@ final class ParakeetUKModelTests: XCTestCase {
         }
         // 4.7.0 left no manifest: the files FluidAudio needs are enough.
         XCTAssertTrue(ParakeetUKModel.isInstalled(at: dir))
-        try JSONEncoder().encode(m).write(to: dir.appendingPathComponent(ParakeetUKModel.manifestName))
+        try JSONEncoder().encode(m).write(to: dir.appendingPathComponent(HFModelRelease.manifestName))
         XCTAssertEqual(ParakeetUKModel.manifest(at: dir), m)
         XCTAssertTrue(ParakeetUKModel.isInstalled(at: dir))
         // A file at the wrong size means the release is not complete.

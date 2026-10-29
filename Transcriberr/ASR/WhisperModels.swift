@@ -2,12 +2,16 @@ import Foundation
 import Observation
 import WhisperKit
 
-/// The Whisper builds the app offers, all from argmaxinc/whisperkit-coreml.
-/// Two are picked: one for English runs (`whisper.model.english`, default
-/// large-v3 turbo compressed) and one for every other language
-/// (`whisper.model`, default large-v3). The 2026-10-16 sweep of the
-/// reference set found every smaller model ties or beats large-v3 inside
-/// Super in English at 2-4x the speed, and loses 5-15 points in Ukrainian.
+/// The Whisper builds the app offers, from argmaxinc/whisperkit-coreml plus
+/// our own Ukrainian turbo (`WhisperUKModel`). Three are picked: one for
+/// English runs (`whisper.model.english`, default large-v3 turbo
+/// compressed), one for Ukrainian runs (`whisper.model.ukrainian`, default
+/// Whisper UK) and one for every other language (`whisper.model`, default
+/// large-v3). The 2026-10-16 sweep of the reference set found every smaller
+/// model ties or beats large-v3 inside Super in English at 2-4x the speed,
+/// and loses 5-15 points in Ukrainian; the 2026-10-28 run of the Ukrainian
+/// meetings put Super with Whisper UK at 14.8% WER against 17.4% with
+/// large-v3, at a fifth of the time.
 ///
 /// `id` is the repo folder name, passed to WhisperKit whole: its download
 /// matches `*<variant>/*`, and a bare "large-v3" also matches the turbo,
@@ -18,12 +22,18 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
     let sizeBytes: Int64
     let note: String
     var englishOnly = false
+    /// Fine-tuned on Ukrainian: used for Ukrainian runs only, as
+    /// `englishOnly` models are for English ones. Our own build, fetched by
+    /// `WhisperUKModel` rather than WhisperKit.
+    var ukrainianOnly = false
 
     static let defaultID = "openai_whisper-large-v3"
     /// The model for every run that is not English only (auto-detect too).
     static let settingsKey = "whisper.model"
     static let englishDefaultID = "openai_whisper-large-v3-v20240930_626MB"
     static let englishSettingsKey = "whisper.model.english"
+    static let ukrainianDefaultID = WhisperUKModel.id
+    static let ukrainianSettingsKey = "whisper.model.ukrainian"
 
     /// Sizes from the repo listing, 2026-10-15.
     static let all: [WhisperModel] = [
@@ -41,6 +51,9 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
                      note: "The previous generation's middle size, all languages."),
         WhisperModel(id: "openai_whisper-small", name: "small", sizeBytes: 490_000_000,
                      note: "Small and quick; clearly less accurate than the large models."),
+        WhisperModel(id: WhisperUKModel.id, name: "Whisper UK (large-v3 turbo)", sizeBytes: 1_620_000_000,
+                     note: "The turbo build fine-tuned on Ukrainian speech (ihnatov-yuri/whisper-large-v3-turbo-uk): 8.2% WER on the Ukrainian test sets against large-v3's 9.8%.",
+                     ukrainianOnly: true),
     ]
 
     static func model(_ id: String) -> WhisperModel {
@@ -58,14 +71,21 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
         !languages.isEmpty && languages.allSatisfy { $0.lowercased() == "english" }
     }
 
+    static func isUkrainian(_ languages: Set<String>) -> Bool {
+        !languages.isEmpty && languages.allSatisfy { $0.lowercased() == "ukrainian" }
+    }
+
     /// The model a run in these languages would use, without pinning it.
-    static func forRun(_ languages: Set<String>, setting: String? = nil, englishSetting: String? = nil) -> WhisperModel {
+    static func forRun(_ languages: Set<String>, setting: String? = nil, englishSetting: String? = nil,
+                       ukrainianSetting: String? = nil) -> WhisperModel {
         let d = UserDefaults.standard
-        let english = isEnglish(languages)
+        let english = isEnglish(languages), ukrainian = isUkrainian(languages)
         let m = english
             ? model(englishSetting ?? d.string(forKey: englishSettingsKey) ?? englishDefaultID)
+            : ukrainian
+            ? model(ukrainianSetting ?? d.string(forKey: ukrainianSettingsKey) ?? ukrainianDefaultID)
             : model(setting ?? d.string(forKey: settingsKey) ?? defaultID)
-        return m.englishOnly && !english ? model(defaultID) : m
+        return (m.englishOnly && !english) || (m.ukrainianOnly && !ukrainian) ? model(defaultID) : m
     }
 
     /// One-time move to the two settings (v4.4.0). Before, one model served
@@ -94,13 +114,16 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
     nonisolated(unsafe) private static var pinnedID: String?
 
     /// Pins this run's model: the English setting when the run is English
-    /// only, else the other-languages one. An English-only model on a run
-    /// that is not English (distil-large-v3 reading Ukrainian) is replaced
-    /// by the default; a model that is not on disk is still pinned (it
-    /// downloads on load, and falls back there if it cannot).
+    /// only, the Ukrainian one when it is Ukrainian only, else the
+    /// other-languages one. An English-only model on a run that is not
+    /// English (distil-large-v3 reading Ukrainian), or Whisper UK on one that
+    /// is not Ukrainian, is replaced by the default; a model that is not on
+    /// disk is still pinned (it downloads on load, and falls back there if it
+    /// cannot).
     @discardableResult
-    static func pin(for languages: Set<String>, setting: String? = nil, englishSetting: String? = nil) -> WhisperModel {
-        let m = forRun(languages, setting: setting, englishSetting: englishSetting)
+    static func pin(for languages: Set<String>, setting: String? = nil, englishSetting: String? = nil,
+                    ukrainianSetting: String? = nil) -> WhisperModel {
+        let m = forRun(languages, setting: setting, englishSetting: englishSetting, ukrainianSetting: ukrainianSetting)
         pinLock.lock(); pinnedID = m.id; pinLock.unlock()
         return m
     }
@@ -128,11 +151,14 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
             .appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml", isDirectory: true)
     }
 
-    var folder: URL { Self.repoDirectory.appendingPathComponent(id, isDirectory: true) }
+    var folder: URL {
+        id == WhisperUKModel.id ? WhisperUKModel.release.modelDirectory : Self.repoDirectory.appendingPathComponent(id, isDirectory: true)
+    }
 
     /// All three compiled parts on disk. A cancelled download leaves some.
     var isDownloaded: Bool {
-        ["MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc"].allSatisfy {
+        if id == WhisperUKModel.id { return WhisperUKModel.release.isInstalled() }
+        return ["MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc"].allSatisfy {
             FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path)
         }
     }
@@ -161,9 +187,15 @@ final class WhisperDownloads {
         AppLog.info("whisper", "downloading \(model.id)…")
         tasks[model.id] = Task {
             do {
-                _ = try await WhisperKit.download(variant: model.id) { @Sendable p in
-                    let f = p.fractionCompleted
-                    Task { @MainActor in self.progress[model.id] = f }
+                if model.id == WhisperUKModel.id {
+                    try await WhisperUKModel.release.ensureDownloaded { @Sendable f in
+                        Task { @MainActor in self.progress[model.id] = f }
+                    }
+                } else {
+                    _ = try await WhisperKit.download(variant: model.id) { @Sendable p in
+                        let f = p.fractionCompleted
+                        Task { @MainActor in self.progress[model.id] = f }
+                    }
                 }
                 AppLog.info("whisper", "downloaded \(model.id)")
             } catch {

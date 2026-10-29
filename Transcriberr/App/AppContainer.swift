@@ -121,9 +121,10 @@ nonisolated final class AppContainer: @unchecked Sendable {
         // Before UIPrefs / DictationSettings read the engine choices.
         if !Self.isTestHost {
             ParakeetUKModel.adoptMovedEngineChoices()
-            // A newer Parakeet UK release downloaded last session takes over
-            // now, before any engine can open the files.
+            // A newer Parakeet UK or Whisper UK release downloaded last
+            // session takes over now, before any engine can open the files.
             ParakeetUKModel.applyPendingUpdate()
+            WhisperUKModel.release.applyPendingUpdate()
         }
         gemmaSettings = GemmaSettingsStore()
         promptStore   = PromptStore()
@@ -207,9 +208,10 @@ nonisolated final class AppContainer: @unchecked Sendable {
         if !Self.isTestHost {
             updates.start()
             ModelCatalog.excludeModelsFromBackup()
-            // Look for a newer Parakeet UK release (it takes over at the next launch).
+            // Look for newer Parakeet UK and Whisper UK releases (they take over at the next launch).
             let updates = self.updates
             ParakeetUKModel.startUpdateLoop { await MainActor.run { updates.autoCheck } }
+            WhisperUKModel.startUpdateLoop { await MainActor.run { updates.autoCheck } }
         }
 
         // Self-heal transcripts lost to interrupted runs (app updated or

@@ -199,17 +199,27 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         do {
             let where_ = placement ?? .configured
             AppLog.info("whisper", "placement: \(where_.rawValue)")
-            let config = WhisperKitConfig(
-                model: model.id,
-                computeOptions: where_.computeOptions,
-                verbose: false,
-                prewarm: true
-            )
+            let own = model.id == WhisperUKModel.id
+            if own {
+                // Our own build: fetched from its pinned release, checked,
+                // then loaded from the folder (WhisperKit downloads only argmaxinc's).
+                try await WhisperUKModel.release.ensureDownloaded()
+            }
+            let config = own
+                ? WhisperKitConfig(modelFolder: model.folder.path, computeOptions: where_.computeOptions,
+                                   verbose: false, prewarm: true, download: false)
+                : WhisperKitConfig(
+                    model: model.id,
+                    computeOptions: where_.computeOptions,
+                    verbose: false,
+                    prewarm: true
+                )
             kit = try await WhisperKit(config)
             // Load now, once: `prewarm` leaves the models unloaded, and the
             // first transcribe calls — three chunks at once — would each
             // start loading them (see transcribeTimedSegments).
             if kit.modelState != .loaded { try await kit.loadModels() }
+            if own { WhisperUKModel.release.markInUse() }
         } catch {
             AppLog.error("whisper", "load failed: \(error.localizedDescription)")
             throw ASRError.modelLoadFailed(reason: String(describing: error))

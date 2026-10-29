@@ -141,7 +141,7 @@ final class MeetingContextTests: XCTestCase {
 
     func testWhisperModelIsPinnedPerRunAndEnglishOnlyOnlyForEnglish() {
         defer { WhisperModel.unpin() }
-        XCTAssertEqual(WhisperModel.pin(for: ["Ukrainian"], setting: "distil-whisper_distil-large-v3").id, WhisperModel.defaultID)
+        XCTAssertEqual(WhisperModel.pin(for: ["Ukrainian"], ukrainianSetting: "distil-whisper_distil-large-v3").id, WhisperModel.defaultID)
         XCTAssertEqual(WhisperModel.pin(for: ["English"], englishSetting: "distil-whisper_distil-large-v3").id, "distil-whisper_distil-large-v3")
         XCTAssertEqual(WhisperModel.selected.id, "distil-whisper_distil-large-v3")
         XCTAssertEqual(WhisperModel.inUse, "distil-whisper_distil-large-v3")

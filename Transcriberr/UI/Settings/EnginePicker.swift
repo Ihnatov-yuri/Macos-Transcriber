@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// An engine drop-down. Whisper is one entry: its model follows the run's
-/// language (Settings → Engines, "Whisper for English" and "Whisper for
-/// other languages"), so a model per entry would only be right for some
+/// language (Settings → Engines, "Whisper for English", "Whisper for
+/// Ukrainian" and "Whisper for other languages"), so a model per entry would only be right for some
 /// recordings.
 struct EnginePicker: View {
     let title: String
@@ -16,18 +16,23 @@ struct EnginePicker: View {
     }
 }
 
-/// The two Whisper model pickers: English runs and every other run. The
-/// English one offers every model; the other leaves out English-only ones.
+/// The three Whisper model pickers: English runs, Ukrainian runs and every
+/// other run. Each offers the models for its language: English-only ones
+/// only for English, Whisper UK only for Ukrainian.
 struct WhisperModelPickers: View {
     @AppStorage(WhisperModel.englishSettingsKey) private var english = WhisperModel.englishDefaultID
+    @AppStorage(WhisperModel.ukrainianSettingsKey) private var ukrainian = WhisperModel.ukrainianDefaultID
     @AppStorage(WhisperModel.settingsKey) private var other = WhisperModel.defaultID
 
     var body: some View {
         Picker("Whisper for English", selection: $english) {
-            ForEach(WhisperModel.all) { Text(label($0)).tag($0.id) }
+            ForEach(WhisperModel.all.filter { !$0.ukrainianOnly }) { Text(label($0)).tag($0.id) }
+        }
+        Picker("Whisper for Ukrainian", selection: $ukrainian) {
+            ForEach(WhisperModel.all.filter { !$0.englishOnly }) { Text(label($0)).tag($0.id) }
         }
         Picker("Whisper for other languages", selection: $other) {
-            ForEach(WhisperModel.all.filter { !$0.englishOnly }) { Text(label($0)).tag($0.id) }
+            ForEach(WhisperModel.all.filter { !$0.englishOnly && !$0.ukrainianOnly }) { Text(label($0)).tag($0.id) }
         }
     }
 

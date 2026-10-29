@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.2.0
+- Ukrainian recordings use Whisper UK, a Whisper large-v3 turbo trained further on 617 hours of Ukrainian speech, both in the Whisper engine and in Super. On eight real Ukrainian meeting slices Super makes 14.8% word errors instead of 17.4%, and finishes in 11 minutes instead of 55.
+- The model (1.6 GB) is downloaded from Hugging Face the first time a Ukrainian recording needs it, each file checked against its published hash, and updated the same way as Parakeet UK.
+- Settings → Whisper models has a third choice, Ukrainian, next to English and Other languages. Whisper UK only serves Ukrainian; other languages keep Whisper large-v3.
+
 ## 5.1.4
 - The echo filter in meetings (Settings → Audio Input) is turned off once, also for those who had it on. Measured over 30 meetings, the transcript has as little echo without it, while every meeting with it lost short pieces of audio and on the MacBook microphone it could silence you, in Teams and in the recording. You can turn it back on, and it stays on.
 

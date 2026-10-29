@@ -624,6 +624,10 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     }
     let prompts = PromptStore()
     let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
+    // The whole process is one job: as in the app while a job runs, Gemma's
+    // idle release must not fire. It did after 3 quiet minutes and took
+    // Super's engines with it ("Ensemble backend not loaded").
+    factory.liteRTReleaseAllowed = { false }
     let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())
     var params = TranscriptionRunner.Params(
         file: url, backend: kind, modelDirectory: nil,

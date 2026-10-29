@@ -25,16 +25,49 @@ final class WhisperModelsTests: XCTestCase {
         XCTAssertEqual(WhisperModel.selected.id, WhisperModel.defaultID)
     }
 
-    /// English-only runs take the English pick; anything else, auto-detect
-    /// and mixed included, takes the other one.
+    /// English-only runs take the English pick, Ukrainian-only runs the
+    /// Ukrainian one; anything else, auto-detect and mixed included, takes
+    /// the other one.
     func testModelFollowsTheRunsLanguage() {
-        let turbo = WhisperModel.englishDefaultID, large = WhisperModel.defaultID
-        XCTAssertEqual(WhisperModel.forRun(["English"], setting: large, englishSetting: turbo).id, turbo)
-        XCTAssertEqual(WhisperModel.forRun(["english"], setting: large, englishSetting: turbo).id, turbo)
-        XCTAssertEqual(WhisperModel.forRun(["Ukrainian"], setting: large, englishSetting: turbo).id, large)
-        XCTAssertEqual(WhisperModel.forRun(["English", "Ukrainian"], setting: large, englishSetting: turbo).id, large)
-        XCTAssertEqual(WhisperModel.forRun([], setting: large, englishSetting: turbo).id, large)
+        let turbo = WhisperModel.englishDefaultID, large = WhisperModel.defaultID, uk = WhisperModel.ukrainianDefaultID
+        XCTAssertEqual(WhisperModel.forRun(["English"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, turbo)
+        XCTAssertEqual(WhisperModel.forRun(["english"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, turbo)
+        XCTAssertEqual(WhisperModel.forRun(["Ukrainian"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, uk)
+        XCTAssertEqual(WhisperModel.forRun(["Ukrainian"], setting: large, englishSetting: turbo, ukrainianSetting: large).id, large)
+        XCTAssertEqual(WhisperModel.forRun(["English", "Ukrainian"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, large)
+        XCTAssertEqual(WhisperModel.forRun([], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, large)
         XCTAssertTrue(WhisperModel.all.contains { $0.id == WhisperModel.englishDefaultID })
+        XCTAssertTrue(WhisperModel.all.contains { $0.id == WhisperModel.ukrainianDefaultID })
+    }
+
+    /// Whisper UK was trained on Ukrainian: picked for another language it
+    /// gives way to the default, as an English-only model does.
+    func testWhisperUKOnlyServesUkrainianRuns() {
+        let uk = WhisperModel.ukrainianDefaultID
+        XCTAssertEqual(WhisperModel.forRun(["German"], setting: uk).id, WhisperModel.defaultID)
+        XCTAssertEqual(WhisperModel.forRun(["English"], englishSetting: uk).id, WhisperModel.defaultID)
+        XCTAssertEqual(WhisperModel.all.filter(\.ukrainianOnly).map(\.id), [WhisperUKModel.id])
+        XCTAssertEqual(WhisperModel.model(uk).folder, WhisperUKModel.release.modelDirectory)
+    }
+
+    /// The release on Hugging Face must carry every part WhisperKit loads
+    /// from the folder, tokenizer included (loading is offline).
+    func testWhisperUKReleaseNeedsEveryPartAndTheTokenizer() throws {
+        let rel = WhisperUKModel.release
+        var entries: [[String: Any]] = []
+        for p in rel.requiredFiles {
+            var e: [String: Any] = ["type": "file", "path": "\(rel.remoteFolder)/\(p)", "size": 100,
+                                    "oid": String(repeating: "a", count: 40)]
+            if p.hasSuffix(".bin") { e["lfs"] = ["oid": String(repeating: "b", count: 64), "size": 100] }
+            entries.append(e)
+        }
+        let rev = String(repeating: "c", count: 40)
+        XCTAssertNoThrow(try rel.validate(rel.manifest(revision: rev, tree: entries)))
+        XCTAssertThrowsError(try rel.validate(rel.manifest(revision: rev, tree: entries.filter {
+            ($0["path"] as? String)?.hasSuffix("tokenizer.json") != true
+        })))
+        XCTAssertTrue(rel.requiredFiles.contains("AudioEncoder.mlmodelc/weights/weight.bin"))
+        XCTAssertEqual(rel.modelDirectory.lastPathComponent, "whisper-large-v3-turbo-uk")
     }
 
     func testMigrationMovesASmallerPickToEnglish() {

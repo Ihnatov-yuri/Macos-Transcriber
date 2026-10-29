@@ -24,7 +24,30 @@ The Record screen shows the clock, the level and a rough live caption while you 
 
 ![The Record screen during a meeting, with live captions](docs/images/record.jpg)
 
-Meeting mode records the microphone and the system audio on one drift-compensated clock and keeps both tracks. With the call on its own track, every line from your microphone is yours, and the diarizer only has to untangle the other people. When the call plays through the speakers, Apple's own echo filter (the one FaceTime uses) runs on the microphone while the meeting records, and an offline echo canceller and a sentence-level scrub catch what gets through. If the meeting is in your calendar, the invite's attendees become vocabulary for that run and help name the people in it.
+Meeting mode records the microphone and the system audio on one drift-compensated clock and keeps both tracks. With the call on its own track, every line from your microphone is yours, and the diarizer only has to untangle the other people. When the call plays through the speakers, the microphone hears it too. Transcriberr takes that echo out after the meeting, from the two tracks: an offline canceller finds the delay and subtracts the call, your voice print mutes what is left whenever you are not talking, and a sentence-level scrub catches any line that still repeats someone else. The file you play back is rebuilt from the cleaned microphone, and the raw one is kept beside it untouched. If the meeting is in your calendar, the invite's attendees become vocabulary for that run and help name the people in it.
+
+### Echo, measured
+
+Apple's echo filter (the one FaceTime uses) is still in Settings, and since 5.1.4 it is off. I measured it on 30 of my own meetings before deciding. To count echo in a transcript I take the share of words under my name that repeat three or more words someone else said in the previous 20 seconds. On AirPods, where echo cannot happen, that share is 2.4%, which is the chance level for people answering each other.
+
+| Setup | Calls | Words under my name copied from others |
+|---|---|---|
+| Speakers, Apple filter off | 14 | 1.2% |
+| AirPods (no echo possible) | 3 | 2.4% |
+| Speakers, Apple filter on | 6 | 1.4% to 2.5% |
+
+The filter did nothing for the transcript, and it cost a great deal elsewhere. Every call with it on lost pieces of the recording. With the built-in microphone, Teams renegotiated its own voice processing around it and my voice reached the others at -48 dB, so they could not hear me; one call produced 9 words in 15 minutes.
+
+A 20-minute Teams call with six people on 29 October 2026 shows the setup that replaced it: built-in microphone, laptop speakers, Apple filter off.
+
+| What was measured | Result |
+|---|---|
+| My voice as Teams sent it | within 1 to 2 dB of the microphone, every 10 seconds of the call |
+| My voice on the recording | -20 dB, about 32 dB above the room noise |
+| Call echo on the raw microphone | 2 dB louder than the call itself |
+| Echo left in the file you play back | 38 dB below the other people's voices (19 dB in the worst tenth) |
+| My voice in the file you play back | -20.4 dB, the same as the raw microphone |
+| Words under my name copied from others | 2.1%, the chance level |
 
 ## Speech engines
 

@@ -631,7 +631,7 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())
     var params = TranscriptionRunner.Params(
         file: url, backend: kind, modelDirectory: nil,
-        languages: language == "auto" ? [] : [language], translateTo: nil,
+        languages: language == "auto" ? [] : Set(language.split(separator: ",").map(String.init)), translateTo: nil,
         diarize: true, hybridDiarize: false, expectedSpeakers: speakers)
     // A/B for meeting context: TRANSCRIBERR_CONTEXT=<MeetingContext.json>
     // (as `transcriberrcli context` prints it) runs with that invite.

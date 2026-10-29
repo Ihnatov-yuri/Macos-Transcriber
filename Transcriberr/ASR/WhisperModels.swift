@@ -51,7 +51,7 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
                      note: "The previous generation's middle size, all languages."),
         WhisperModel(id: "openai_whisper-small", name: "small", sizeBytes: 490_000_000,
                      note: "Small and quick; clearly less accurate than the large models."),
-        WhisperModel(id: WhisperUKModel.id, name: "Whisper UK (large-v3 turbo)", sizeBytes: 1_620_000_000,
+        WhisperModel(id: WhisperUKModel.id, name: "UK (large-v3 turbo)", sizeBytes: 1_620_000_000,
                      note: "The turbo build fine-tuned on Ukrainian speech (ihnatov-yuri/whisper-large-v3-turbo-uk): 8.2% WER on the Ukrainian test sets against large-v3's 9.8%.",
                      ukrainianOnly: true),
     ]
@@ -71,8 +71,19 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
         !languages.isEmpty && languages.allSatisfy { $0.lowercased() == "english" }
     }
 
+    /// Ukrainian alone, or Ukrainian with English: Whisper UK reads English
+    /// better than large-v3 does (AMI 13.2% against 22.3%) and code-switched
+    /// speech too (39.0% against 43.2%), so a mixed meeting keeps it.
     static func isUkrainian(_ languages: Set<String>) -> Bool {
-        !languages.isEmpty && languages.allSatisfy { $0.lowercased() == "ukrainian" }
+        let l = Set(languages.map { $0.lowercased() })
+        return l.contains("ukrainian") && l.isSubset(of: ["ukrainian", "english"])
+    }
+
+    /// An auto-language run (no languages picked) whose Ukrainian model is
+    /// not the other-languages one: the runner reads the audio's language
+    /// first (`TranscriptionRunner.repinIfUkrainian`).
+    static func needsLanguageProbe(_ languages: Set<String>) -> Bool {
+        languages.isEmpty && forRun(["Ukrainian"]).id != forRun([]).id
     }
 
     /// The model a run in these languages would use, without pinning it.
@@ -114,7 +125,7 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
     nonisolated(unsafe) private static var pinnedID: String?
 
     /// Pins this run's model: the English setting when the run is English
-    /// only, the Ukrainian one when it is Ukrainian only, else the
+    /// only, the Ukrainian one when it is Ukrainian (alone or with English), else the
     /// other-languages one. An English-only model on a run that is not
     /// English (distil-large-v3 reading Ukrainian), or Whisper UK on one that
     /// is not Ukrainian, is replaced by the default; a model that is not on
@@ -129,8 +140,17 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
     }
 
     static func unpin() {
-        pinLock.lock(); pinnedID = nil; pinLock.unlock()
+        pinLock.lock(); lastRun = pinnedID; pinnedID = nil; pinLock.unlock()
     }
+
+    /// The model the last finished run used, for the version it is saved
+    /// under: an auto-language run may have switched to Whisper UK after
+    /// the job took its label.
+    static var lastRunID: String? {
+        pinLock.lock(); defer { pinLock.unlock() }
+        return lastRun
+    }
+    nonisolated(unsafe) private static var lastRun: String?
 
     /// The pinned model's id while a run is in flight.
     static var inUse: String? {

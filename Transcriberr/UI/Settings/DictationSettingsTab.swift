@@ -6,8 +6,6 @@ import SwiftUI
 struct DictationSettingsTab: View {
     @Environment(AppContainer.self) private var container
 
-    private let languageOptions = ["English", "Dutch", "Ukrainian", "German", "French", "Spanish", "Italian", "Portuguese", "Polish", "Arabic"]
-
     var body: some View {
         let s = container.dictationSettings
         let c = container.dictation
@@ -60,7 +58,7 @@ struct DictationSettingsTab: View {
                     set: { s.languages = $0.isEmpty ? [] : [$0] }
                 )) {
                     Text("Auto-detect").tag("")
-                    ForEach(languageOptions, id: \.self) { Text($0).tag($0) }
+                    ForEach(DictationSettings.languageOptions, id: \.self) { Text($0).tag($0) }
                 }
                 Toggle("Spoken commands (“new paragraph”, “comma”, “scratch that”… — also Dutch, German, Ukrainian)",
                        isOn: Binding(get: { s.spokenCommands }, set: { s.spokenCommands = $0 }))

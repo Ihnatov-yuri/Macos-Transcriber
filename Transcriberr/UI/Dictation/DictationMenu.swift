@@ -38,6 +38,13 @@ struct DictationMenu: View {
         Picker("Mode", selection: Binding(get: { s.mode }, set: { s.mode = $0 })) {
             ForEach(DictationSettings.Mode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
         }
+        Picker("Language", selection: Binding(
+            get: { s.languages.sorted().first ?? "" },
+            set: { s.languages = $0.isEmpty ? [] : [$0] }
+        )) {
+            Text("Auto-detect").tag("")
+            ForEach(DictationSettings.languageOptions, id: \.self) { Text($0).tag($0) }
+        }
         Picker("Default formatting", selection: Binding(get: { s.defaultMode }, set: { s.defaultMode = $0 })) {
             ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
         }

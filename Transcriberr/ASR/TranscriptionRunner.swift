@@ -230,6 +230,57 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         )
     }
 
+    /// Whisper alone, or Super with Whisper in its pair.
+    private func usesWhisper(_ kind: BackendFactory.Kind) -> Bool {
+        guard kind == .ensemble else { return kind == .whisper }
+        let (a, b) = EnsembleBackend.resolvePair(
+            EnsembleBackend.storedKind("ensemble.engineA", fallback: EnsembleBackend.defaultEngineA),
+            EnsembleBackend.storedKind("ensemble.engineB", fallback: EnsembleBackend.defaultEngineB),
+            languages: [])
+        return a == .whisper || b == .whisper
+    }
+
+    /// An auto-language run is pinned to the other-languages model (large-v3)
+    /// before any audio is read, so a Ukrainian meeting recorded without a
+    /// language never reached Whisper UK. Reads the language of the loudest
+    /// 30 s windows with that model, which an auto run loads anyway, and pins
+    /// the Ukrainian model when at least half of them are Ukrainian. Costs a
+    /// second model load only then; on any failure the run keeps its model.
+    private func repinIfUkrainian(tracks: [[Float]]) async {
+        let loudest = await Task.detached { Self.loudestWindows(tracks) }.value
+        guard !loudest.isEmpty, let whisper = factory.backend(for: .whisper) as? WhisperBackend else { return }
+        do {
+            try await whisper.load(modelPath: nil)
+            var codes: [String] = []
+            for w in loudest { codes.append(try await whisper.detectLanguage(samples: w).code) }
+            // large-v3 labels some Ukrainian windows "ru" (2 of 5 on a
+            // Ukrainian meeting slice); the app reads no such language.
+            let uk = codes.filter { $0 == "uk" || $0 == "ru" }.count
+            AppLog.info("runner", "auto language: \(codes.joined(separator: " ")) (\(uk) of \(codes.count) Ukrainian)")
+            guard uk * 2 >= codes.count else { return }
+            let m = WhisperModel.pin(for: ["Ukrainian"])
+            AppLog.info("runner", "Whisper model for this run: \(m.name) (the speech is Ukrainian)")
+        } catch {
+            AppLog.warn("runner", "auto language check failed, keeping \(WhisperModel.selected.name): \(error.localizedDescription)")
+        }
+    }
+
+    /// Up to `count` of the loudest 30 s windows across the tracks (a
+    /// trailing window of at least 15 s counts), leaving out near-silence.
+    nonisolated static func loudestWindows(_ tracks: [[Float]], count: Int = 5) -> [[Float]] {
+        let window = 480_000
+        var candidates: [(rms: Float, samples: ArraySlice<Float>)] = []
+        for track in tracks {
+            var start = 0
+            while start + window / 2 <= track.count {
+                let slice = track[start..<min(start + window, track.count)]
+                candidates.append((sqrt(slice.reduce(0) { $0 + $1 * $1 } / Float(slice.count)), slice))
+                start += window
+            }
+        }
+        return candidates.filter { $0.rms > 0.003 }.sorted { $0.rms > $1.rms }.prefix(count).map { Array($0.samples) }
+    }
+
     @MainActor
     private func runImpl(
         _ params: Params,
@@ -394,6 +445,9 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
 
         // ---------- load backend ----------
         continuation.yield(.stage(text: "Loading model…", fraction: 0.14))
+        if WhisperModel.needsLanguageProbe(params.languages), usesWhisper(params.backend) {
+            await repinIfUkrainian(tracks: [samples] + (cleanedMic.map { [$0] } ?? []))
+        }
         let backend = factory.backend(for: params.backend)
         await (backend as? EnsembleBackend)?.setRunLanguages(params.languages)
         // Set on every run, nil included: the backend is shared, and the

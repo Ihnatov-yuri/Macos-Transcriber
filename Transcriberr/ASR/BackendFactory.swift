@@ -45,6 +45,12 @@ nonisolated final class BackendFactory: @unchecked Sendable {
             self == .whisper ? Self.whisperLabel(WhisperModel.forRun(languages)) : displayName
         }
 
+        /// The label once the run is over, from the model it actually used (still pinned while the job saves its result, else the last run's).
+        func finishedRunLabel(_ started: String) -> String {
+            guard self == .whisper, let id = WhisperModel.inUse ?? WhisperModel.lastRunID else { return started }
+            return Self.whisperLabel(WhisperModel.model(id))
+        }
+
         private static func whisperLabel(_ m: WhisperModel) -> String { "Whisper \(m.name) (local, CoreML)" }
 
         /// Name of the Parakeet v3 weights in FluidAudio's model folder. A fine-tune installed in place of the

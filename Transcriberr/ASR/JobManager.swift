@@ -602,7 +602,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         try repository.snapshotVersion(
                             of: recording,
                             engineId: params.backend.rawValue,
-                            engineLabel: engineLabel
+                            engineLabel: params.backend.finishedRunLabel(engineLabel)
                         )
                     } catch {
                         AppLog.warn("job", "version snapshot failed: \(error.localizedDescription)")

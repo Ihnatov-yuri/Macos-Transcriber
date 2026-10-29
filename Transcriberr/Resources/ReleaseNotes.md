@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.2.1
+- Recordings with no language picked use Whisper UK when the speech is Ukrainian. Before the run, Whisper reads the language of the five loudest 30-second stretches; when at least half are Ukrainian, the run switches to Whisper UK.
+- Recordings set to Ukrainian and English use Whisper UK too. It reads English better than Whisper large-v3 on the meeting test set, and mixed Ukrainian-English speech as well.
+- The menu bar's dictation menu has a Language choice (Auto-detect or one language), the same as Settings → Dictation.
+- Settings → Models shows "Whisper UK (large-v3 turbo)" instead of "Whisper Whisper UK", and a recording's saved versions name the Whisper model the run actually used.
+
 ## 5.2.0
 - Ukrainian recordings use Whisper UK, a Whisper large-v3 turbo trained further on 617 hours of Ukrainian speech, both in the Whisper engine and in Super. On eight real Ukrainian meeting slices Super makes 14.8% word errors instead of 17.4%, and finishes in 11 minutes instead of 55.
 - The model (1.6 GB) is downloaded from Hugging Face the first time a Ukrainian recording needs it, each file checked against its published hash, and updated the same way as Parakeet UK.

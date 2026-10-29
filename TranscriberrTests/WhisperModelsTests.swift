@@ -25,16 +25,17 @@ final class WhisperModelsTests: XCTestCase {
         XCTAssertEqual(WhisperModel.selected.id, WhisperModel.defaultID)
     }
 
-    /// English-only runs take the English pick, Ukrainian-only runs the
-    /// Ukrainian one; anything else, auto-detect and mixed included, takes
-    /// the other one.
+    /// English-only runs take the English pick, Ukrainian runs (alone or
+    /// with English) the Ukrainian one; anything else, auto-detect included,
+    /// takes the other one.
     func testModelFollowsTheRunsLanguage() {
         let turbo = WhisperModel.englishDefaultID, large = WhisperModel.defaultID, uk = WhisperModel.ukrainianDefaultID
         XCTAssertEqual(WhisperModel.forRun(["English"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, turbo)
         XCTAssertEqual(WhisperModel.forRun(["english"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, turbo)
         XCTAssertEqual(WhisperModel.forRun(["Ukrainian"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, uk)
         XCTAssertEqual(WhisperModel.forRun(["Ukrainian"], setting: large, englishSetting: turbo, ukrainianSetting: large).id, large)
-        XCTAssertEqual(WhisperModel.forRun(["English", "Ukrainian"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, large)
+        XCTAssertEqual(WhisperModel.forRun(["English", "Ukrainian"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, uk)
+        XCTAssertEqual(WhisperModel.forRun(["German", "Ukrainian"], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, large)
         XCTAssertEqual(WhisperModel.forRun([], setting: large, englishSetting: turbo, ukrainianSetting: uk).id, large)
         XCTAssertTrue(WhisperModel.all.contains { $0.id == WhisperModel.englishDefaultID })
         XCTAssertTrue(WhisperModel.all.contains { $0.id == WhisperModel.ukrainianDefaultID })
@@ -99,6 +100,41 @@ final class WhisperModelsTests: XCTestCase {
         XCTAssertNil(WhisperModel.inUse)
         XCTAssertEqual(BackendFactory.Kind.parakeet.runLabel(languages: ["English"]),
                        BackendFactory.Kind.parakeet.displayName)
+    }
+
+    /// A Whisper run that switched to Whisper UK after the job took its
+    /// label is saved under the model it used.
+    func testFinishedRunLabelNamesTheModelUsed() {
+        let started = BackendFactory.Kind.whisper.runLabel(languages: [])
+        WhisperModel.pin(for: [])
+        WhisperModel.pin(for: ["Ukrainian"], ukrainianSetting: WhisperUKModel.id)
+        let uk = "Whisper \(WhisperModel.model(WhisperUKModel.id).name) (local, CoreML)"
+        XCTAssertEqual(BackendFactory.Kind.whisper.finishedRunLabel(started), uk)
+        WhisperModel.unpin()
+        XCTAssertEqual(BackendFactory.Kind.whisper.finishedRunLabel(started), uk)
+        XCTAssertEqual(BackendFactory.Kind.parakeet.finishedRunLabel("Parakeet v3"), "Parakeet v3")
+        XCTAssertFalse(uk.contains("Whisper Whisper"))
+    }
+
+    /// Only auto-language runs are probed.
+    func testOnlyAutoLanguageRunsAreProbed() {
+        XCTAssertFalse(WhisperModel.needsLanguageProbe(["Ukrainian"]))
+        XCTAssertFalse(WhisperModel.needsLanguageProbe(["English"]))
+        XCTAssertFalse(WhisperModel.needsLanguageProbe(["English", "Ukrainian"]))
+    }
+
+    /// The probe reads the loudest speech, never silence, at most five
+    /// windows of 30 s, from either track.
+    func testLanguageProbeTakesTheLoudestWindows() {
+        let w = 480_000
+        let quiet = [Float](repeating: 0, count: w)
+        let soft = [Float](repeating: 0.01, count: w), loud = [Float](repeating: 0.2, count: w)
+        let picked = TranscriptionRunner.loudestWindows([quiet + soft + loud, loud + quiet], count: 2)
+        XCTAssertEqual(picked.count, 2)
+        XCTAssertTrue(picked.allSatisfy { $0.count == w && $0[0] == 0.2 })
+        XCTAssertEqual(TranscriptionRunner.loudestWindows([quiet + quiet]).count, 0)
+        XCTAssertEqual(TranscriptionRunner.loudestWindows([[Float](repeating: 0.1, count: w / 4)]).count, 0)
+        XCTAssertEqual(TranscriptionRunner.loudestWindows([[Float](repeating: 0.1, count: w * 8)]).count, 5)
     }
 
     func testOnlyDistilIsEnglishOnly() {

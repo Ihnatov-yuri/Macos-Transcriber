@@ -202,6 +202,8 @@ nonisolated final class DictationSettings: @unchecked Sendable {
     var engine: BackendFactory.Kind { didSet { defaults.set(engine.rawValue, forKey: Key.engine) } }
     /// Empty = auto-detect.
     var languages: Set<String> { didSet { defaults.set(Array(languages), forKey: Key.languages) } }
+    /// The languages Settings and the menu bar menu offer, after Auto-detect.
+    static let languageOptions = ["English", "Dutch", "Ukrainian", "German", "French", "Spanish", "Italian", "Portuguese", "Polish", "Arabic"]
     /// Run the utterance through the text engine (Gemma) before inserting.
     /// Off by default: it costs seconds and can rewrite.
     var polish: Bool { didSet { defaults.set(polish, forKey: Key.polish) } }

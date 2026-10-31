@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.2.2
+- Super no longer pads a short line with earlier parts of the conversation. When the combined reading comes out much longer than either engine's reading, Super keeps the better engine's text instead.
+
 ## 5.2.1
 - Recordings with no language picked use Whisper UK when the speech is Ukrainian. Before the run, Whisper reads the language of the five loudest 30-second stretches; when at least half are Ukrainian, the run switches to Whisper UK.
 - Recordings set to Ukrainian and English use Whisper UK too. It reads English better than Whisper large-v3 on the meeting test set, and mixed Ukrainian-English speech as well.

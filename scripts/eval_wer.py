@@ -20,11 +20,22 @@ NUMBERS = {w: str(i) for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
     "fifteen sixteen seventeen eighteen nineteen twenty".split())}
 NUMBERS.update({"thirty": "30", "forty": "40", "fifty": "50", "hundred": "100"})
+# "100%" scores the same as "100 percent" / "100 відсотків".
+NUMBERS.update({w: "percent" for w in ("відсотків", "відсотки", "відсоток", "відсотка", "процентів")})
+
+def spoken(w):
+    """Ukrainian infinitives as spoken score the same as written: "внідрять" = "внідряти",
+    "виділятись" = "виділятися"."""
+    if len(w) >= 5 and w.endswith("тися"):
+        return w[:-4] + "тись"
+    if len(w) >= 5 and w.endswith("ти"):
+        return w[:-2] + "ть"
+    return w
 
 def words(text):
-    text = text.lower().replace("’", "'").replace("ʼ", "'")
+    text = text.lower().replace("’", "'").replace("ʼ", "'").replace("%", " percent ")
     ws = re.findall(r"[^\W_]+(?:'[^\W_]+)*", text)  # hyphens split: "A-B" = "A/B", "man-hours" = "man hours"
-    return [NUMBERS.get(w, w) for w in ws if w not in FILLERS]
+    return [spoken(NUMBERS.get(w, w)) for w in ws if w not in FILLERS]
 
 def align(ref, hyp):
     n, m = len(ref), len(hyp)

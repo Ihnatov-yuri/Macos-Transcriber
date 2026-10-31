@@ -216,6 +216,16 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertEqual(EnsembleBackend.votePrior(for: .parakeet, languages: []), 1)
     }
 
+    func testMergeLongerThanItsSourcesIsRejected() {
+        let a = "So that's fine.", b = "So that's fine, yes."
+        XCTAssertTrue(EnsembleBackend.mergeLengthPlausible("So that's fine, yes.", a, b))
+        // A short line padded with the preceding context, as Gemma did once.
+        let padded = "We talked about the rollout plan for next quarter and the budget. " + b
+        XCTAssertFalse(EnsembleBackend.mergeLengthPlausible(padded, a, b))
+        // A merge may join what each side caught alone.
+        XCTAssertTrue(EnsembleBackend.mergeLengthPlausible("one two three four five six", "one two three", "four five six"))
+    }
+
     // MARK: - PostProcessor windowing
 
     func testWindowsRespectMaxAndSplitOversized() {

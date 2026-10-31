@@ -1177,11 +1177,23 @@ actor EnsembleBackend: ASRBackend {
             )
             let cleaned = merged.trimmingCharacters(in: .whitespacesAndNewlines)
             AppLog.info("ensemble", "gemma merge: A=\(textA.count)ch B=\(textB.count)ch → \(cleaned.count)ch")
+            guard Self.mergeLengthPlausible(cleaned, textA, textB) else {
+                AppLog.warn("ensemble", "gemma merge rejected: longer than its sources — using the preferred engine's text")
+                return fallback
+            }
             return cleaned.isEmpty ? fallback : cleaned
         } catch {
             AppLog.warn("ensemble", "arbiter merge failed (\(error.localizedDescription)) — using the preferred engine's text")
             return fallback
         }
+    }
+
+    /// A merge can't honestly be much longer than the longer reading. The
+    /// 160-token floor lets Gemma copy the context block into a short line
+    /// (15 + 18 chars → 357 chars seen on an English call); of 360 logged
+    /// merges, only that one breaks 1.5× the longer input + 20 chars.
+    static func mergeLengthPlausible(_ merged: String, _ textA: String, _ textB: String) -> Bool {
+        Double(merged.count) <= 1.5 * Double(max(textA.count, textB.count)) + 20
     }
 
     /// Dice coefficient over normalized word tokens (case/punctuation

@@ -35,6 +35,14 @@ nonisolated enum ParakeetUKModel {
     static var parentDirectory: URL { release.parentDirectory }
     static var modelDirectory: URL { release.modelDirectory }
     static var pendingDirectory: URL { release.pendingDirectory }
+    /// A local Core ML build to load instead, for side-by-side tests of a new
+    /// version from the CLI (`TRANSCRIBERR_PARAKEET_UK_DIR`). Never downloaded,
+    /// updated or removed: point it at a copy, since FluidAudio may delete a
+    /// folder that fails to load.
+    static var testOverride: URL? {
+        ProcessInfo.processInfo.environment["TRANSCRIBERR_PARAKEET_UK_DIR"]
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+    }
 
     /// Stock Parakeet v3, where FluidAudio downloads it.
     static var stockDirectory: URL {

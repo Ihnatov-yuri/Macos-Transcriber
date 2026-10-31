@@ -84,7 +84,10 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
                 if shouldLog { AppLog.info("parakeet", "model download/load \(pct)%") }
             }
             let models: AsrModels
-            if ukFineTune {
+            if ukFineTune, let dir = ParakeetUKModel.testOverride {
+                AppLog.info("parakeet", "Parakeet UK from \(dir.path) (TRANSCRIBERR_PARAKEET_UK_DIR)")
+                models = try await AsrModels.load(from: dir, version: .v3)
+            } else if ukFineTune {
                 try await ParakeetUKModel.ensureDownloaded(progress: logProgress)
                 models = try await AsrModels.load(from: ParakeetUKModel.modelDirectory, version: .v3)
                 // From here the files are open: a newer release waits for the next launch.

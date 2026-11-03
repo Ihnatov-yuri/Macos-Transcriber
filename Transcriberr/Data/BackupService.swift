@@ -154,14 +154,19 @@ nonisolated enum BackupService {
         // can leave the caller's thread.
         ioQueue.async {
             do {
+                // Owner-only, like the briefs and voice files: these are
+                // full transcripts, and the default umask left them
+                // world-readable (0644) wherever the backup root points.
                 try FileManager.default.createDirectory(
-                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
                 let data = try encoder.encode(value)
                 // Atomic: a crash mid-write must never leave a half-written,
                 // unparseable backup file behind.
                 try data.write(to: url, options: .atomic)
+                try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             } catch {
                 AppLog.warn("backup", "write failed for \(url.lastPathComponent): \(error.localizedDescription)")
             }

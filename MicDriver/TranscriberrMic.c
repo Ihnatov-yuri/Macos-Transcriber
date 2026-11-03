@@ -92,6 +92,10 @@ static UInt64 gTimestampCount = 0;
 static Float32 gRing[16384];
 static _Atomic Float64 gWrittenEnd = 0;
 static _Atomic bool gFeedLive = false;
+/// First sample time the current feed session wrote, or -1 before its first
+/// write. Ring slots older than it hold the previous session's audio from a
+/// ring period earlier, which the microphone must never replay.
+static _Atomic Float64 gFeedStart = -1;
 
 // MARK: - Helpers
 
@@ -554,7 +558,10 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID id, UInt32 c
         gMicIOCount++;
     } else {
         gFeedGeneration++;
-        if (gFeedIOCount++ == 0) feedStarted = true;
+        if (gFeedIOCount++ == 0) {
+            feedStarted = true;
+            atomic_store(&gFeedStart, -1);
+        }
         atomic_store(&gFeedLive, true);
     }
     bool micRunningChanged = id == kObjectID_Mic && gMicIOCount == 1;
@@ -632,8 +639,11 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID id, Au
 
     if (id == kObjectID_Feed && op == kAudioServerPlugInIOOperationWriteMix) {
         Float64 start = info->mOutputTime.mSampleTime;
+        // A negative (or NaN) time converted to UInt64 is undefined in C.
+        if (!(start >= 0)) return noErr;
         UInt64 t0 = (UInt64)start;
         for (UInt32 i = 0; i < frames; i++) gRing[(t0 + i) % kRingFrames] = buf[i];
+        if (atomic_load(&gFeedStart) < 0) atomic_store(&gFeedStart, start);
         Float64 end = start + frames;
         if (end > atomic_load(&gWrittenEnd)) atomic_store(&gWrittenEnd, end);
         return noErr;
@@ -643,13 +653,18 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID id, Au
         Float64 start = info->mInputTime.mSampleTime;
         Float64 written = atomic_load(&gWrittenEnd);
         bool live = atomic_load(&gFeedLive);
-        UInt64 t0 = (UInt64)(start < 0 ? 0 : start);
+        Float64 feedStart = atomic_load(&gFeedStart);
         for (UInt32 i = 0; i < frames; i++) {
             Float64 t = start + i;
-            // Silence for what the feed has not written yet, and for what it
-            // wrote more than a ring ago (it would have been overwritten).
-            bool valid = live && t >= 0 && t < written && t >= written - kRingFrames;
-            buf[i] = valid ? gRing[(t0 + i) % kRingFrames] : 0.0f;
+            // Silence for what the feed has not written yet, for what it
+            // wrote more than a ring ago (it would have been overwritten),
+            // and for anything before this feed session's first write (the
+            // slot still holds an earlier session's audio).
+            bool valid = live && feedStart >= 0 && t >= feedStart
+                && t < written && t >= written - kRingFrames;
+            // Indexed by t itself: the old start-clamped base put a negative
+            // start's samples into the wrong slots.
+            buf[i] = valid ? gRing[(UInt64)t % kRingFrames] : 0.0f;
         }
         return noErr;
     }

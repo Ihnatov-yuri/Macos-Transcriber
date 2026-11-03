@@ -70,10 +70,17 @@ actor AnthropicBackend: ASRBackend {
             throw ASRError.backendUnavailable(reason: "Anthropic HTTP \(code): \(body.prefix(300))")
         }
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let content = json?["content"] as? [[String: Any]],
-           let first = content.first,
-           let text = first["text"] as? String {
-            return text
+        // A reply cut at max_tokens is not a finished output (as for OpenAI
+        // and Gemini): it used to be saved as a whole summary.
+        if json?["stop_reason"] as? String == "max_tokens" {
+            throw ASRError.backendUnavailable(reason: "Claude's answer was cut off at its length limit.")
+        }
+        // Text blocks only, all of them: the first block is not always text.
+        if let content = json?["content"] as? [[String: Any]] {
+            let text = content.filter { ($0["type"] as? String ?? "text") == "text" }
+                .compactMap { $0["text"] as? String }
+                .joined()
+            if !text.isEmpty { return text }
         }
         throw ASRError.backendUnavailable(reason: "Anthropic returned unexpected payload.")
     }

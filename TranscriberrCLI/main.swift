@@ -63,6 +63,24 @@ func usage() {
                                             (silent; quit Transcriberr first)
       transcriberrcli help                 this message
 
+    DIAGNOSTICS
+      transcriberrcli run <file> [speakers] [backend] [engineA] [engineB] [Language]
+                                            the app's whole pipeline headlessly; TSV of segments
+      transcriberrcli whisper <file> [Language]   Whisper ASR on a file
+      transcriberrcli langid <file> [window-sec]  language of each window
+      transcriberrcli aec <base>           offline echo cancellation of <base>.mic/.sys tracks
+      transcriberrcli superdiar <file>     Super-mode diarization on a file
+      transcriberrcli refinalize <file>    rerun the finalize pass on a saved run dump
+      transcriberrcli brief <file>         the meeting brief for a transcript
+      transcriberrcli litert <file>        run Gemma (LiteRT-LM) on a prompt file
+      transcriberrcli gentest              Gemma generation smoke test
+      transcriberrcli thinkab <out> [titles] [people] [maxLines]
+                                            A/B of Gemma thinking on library samples
+      transcriberrcli whisperbench <placement> <Language> <files…>
+                                            Whisper compute placement benchmark
+      transcriberrcli whisperloop <meeting.m4a> <seconds> <model-id> [fallbacks]
+                                            Whisper word-loop check at one moment of a meeting
+
     Each command exits 0 on success, non-zero on failure.
     """)
 }

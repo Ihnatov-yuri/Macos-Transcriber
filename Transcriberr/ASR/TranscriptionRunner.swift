@@ -1588,6 +1588,14 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 AppLog.error("runner", "Whisper ran out of time on the same part twice; it has no text")
                 RunGapLog.record(.outOfTime)
                 return ""
+            } catch ASRError.chunkTimeout {
+                // The retry hung instead: thrown from here it skipped the
+                // wedge ladder below and ended the whole run over one part.
+                AppLog.error("runner", "chunk wedged on its retry — skipping it, recovering engine for the rest")
+                RunGapLog.record(.wedged)
+                await noteWedge(backend: backend, continuation: continuation)
+                try? await backend.recoverWedge(modelPath: params.modelDirectory)
+                return ""
             }
         } catch ASRError.chunkTimeout {
             // Surgical: rebuild only the wedged engine. A full ensemble

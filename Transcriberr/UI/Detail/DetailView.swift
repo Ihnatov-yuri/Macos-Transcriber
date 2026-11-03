@@ -1451,7 +1451,7 @@ struct TranscriptPane: View {
                     nearBottom = isNear
                 }
                 .task(id: disputeKey(segs)) { disputeRows = disputeHits(in: sortedSegments) }
-                .task(id: SearchKey(query: activeQuery, texts: disputeKey(segs).texts)) {
+                .task(id: SearchKey(query: activeQuery, style: style, texts: disputeKey(segs).texts)) {
                     let q = activeQuery
                     let segs = sortedSegments
                     let hits = q.isEmpty ? [] : segs.filter { SearchHighlight.matches(q, style.apply($0.text)) }.map(\.id)
@@ -1461,6 +1461,9 @@ struct TranscriptPane: View {
                     if first {
                         searchPosition = 0
                         searchTarget = hits.first
+                    } else if searchPosition >= hits.count {
+                        // Fewer hits after an edit or a new chunk: "5 of 3".
+                        searchPosition = max(0, hits.count - 1)
                     }
                 }
                 .onChange(of: searchTarget) { _, target in
@@ -1634,7 +1637,10 @@ struct TranscriptPane: View {
         .background(AppColor.base)
     }
 
-    private struct SearchKey: Hashable { let query: String; let texts: [Int] }
+    /// The style too: hits are found in the styled text, so switching
+    /// Clean/Verbatim must re-run the search (the "only in words the Clean
+    /// view leaves out" bar stayed up after turning Clean off).
+    private struct SearchKey: Hashable { let query: String; let style: TranscriptStyle; let texts: [Int] }
 
     private func searchBar(_ query: String) -> some View {
         let count = searchHits.count
@@ -1671,7 +1677,10 @@ struct TranscriptPane: View {
         searchPosition = (searchPosition + (forward ? 1 : n - 1)) % n
         // Re-set even when unchanged, so the same line scrolls back into view.
         searchTarget = nil
-        DispatchQueue.main.async { searchTarget = searchHits[searchPosition] }
+        DispatchQueue.main.async {
+            guard searchHits.indices.contains(searchPosition) else { return }
+            searchTarget = searchHits[searchPosition]
+        }
     }
 
     private func jump(in starts: [Double], forward: Bool) {

@@ -12,8 +12,10 @@ struct VoiceprintSection: View {
     @State private var phase: Phase = .idle
     @State private var error: String?
     @State private var ticker: Task<Void, Never>?
+    /// Closed or cancelled while the mic was starting: the start stops it.
+    @State private var abandoned = false
 
-    enum Phase: Equatable { case idle, recording, learning }
+    enum Phase: Equatable { case idle, starting, recording, learning }
 
     static let targetSeconds = 30.0
     static let minimumSeconds = 15.0
@@ -64,6 +66,12 @@ struct VoiceprintSection: View {
                             LitButtonChrome(.ghost, compact: true) { Text("Forget my voice") }
                         }
                     }
+                case .starting:
+                    ProgressView().controlSize(.small)
+                    Text("Starting…").font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
+                    TapButton(action: cancelRecording) {
+                        LitButtonChrome(.ghost, compact: true) { Text("Cancel") }
+                    }
                 case .recording:
                     TapButton(action: finishRecording) {
                         LitButtonChrome(.accent, compact: true) {
@@ -87,7 +95,10 @@ struct VoiceprintSection: View {
                     .frame(maxWidth: 520, alignment: .leading)
             }
         }
-        .onDisappear { if phase == .recording { cancelRecording() } }
+        .onDisappear {
+            abandoned = true
+            if phase == .recording { cancelRecording() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: VoiceprintStore.didChange)) { _ in
             voiceprint = VoiceprintStore.load()
         }
@@ -97,7 +108,7 @@ struct VoiceprintSection: View {
 
     private var status: String {
         switch phase {
-        case .recording:
+        case .starting, .recording:
             return "Read the passage aloud at your normal meeting volume, in whatever language you use. It stops by itself after \(Int(Self.targetSeconds)) seconds."
         case .learning:
             return "Learning your voice…"
@@ -117,13 +128,24 @@ struct VoiceprintSection: View {
     }
 
     private func startRecording() {
+        // A second click while the mic starts must not start it twice.
+        guard phase == .idle else { return }
         error = nil
+        abandoned = false
+        phase = .starting
         Task { @MainActor in
             do {
                 let capture = self.capture ?? UtteranceCapture()
                 self.capture = capture
                 capture.voiceProcessing = false
                 try await capture.start()
+                // Settings closed or Cancel pressed while starting: nothing
+                // else would stop the mic (or the 30 s auto-finish).
+                guard !abandoned else {
+                    _ = capture.stop()
+                    phase = .idle
+                    return
+                }
                 phase = .recording
                 ticker = Task { @MainActor in
                     while !Task.isCancelled, phase == .recording {
@@ -132,7 +154,7 @@ struct VoiceprintSection: View {
                     }
                 }
             } catch {
-                self.error = error.localizedDescription
+                if !abandoned { self.error = error.localizedDescription }
                 phase = .idle
             }
         }
@@ -158,6 +180,8 @@ struct VoiceprintSection: View {
     }
 
     private func cancelRecording() {
+        // Still starting: the start sees this and stops the mic itself.
+        if phase == .starting { abandoned = true; return }
         ticker?.cancel()
         _ = capture?.stop()
         phase = .idle

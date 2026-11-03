@@ -148,4 +148,52 @@ final class MeetingContextTests: XCTestCase {
         WhisperModel.unpin()
         XCTAssertNil(WhisperModel.inUse)
     }
+
+    // MARK: - Which overlapping invite
+
+    private func cand(_ startMin: Double, _ endMin: Double, accepted: Bool = true, people: Bool = true)
+        -> MeetingContext.Candidate {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        return .init(start: t0.addingTimeInterval(startMin * 60), end: t0.addingTimeInterval(endMin * 60),
+                     accepted: accepted, hasPeople: people)
+    }
+
+    private func pick(_ c: [MeetingContext.Candidate], _ startMin: Double, _ endMin: Double) -> Int? {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        return MeetingContext.bestCandidate(c, start: t0.addingTimeInterval(startMin * 60),
+                                            end: t0.addingTimeInterval(endMin * 60))
+    }
+
+    /// A three-hour block around a half-hour call used to win on raw overlap.
+    func testTheCallBeatsALongBlockAroundIt() {
+        XCTAssertEqual(pick([cand(-60, 120), cand(0, 30)], 1, 29), 1)
+    }
+
+    /// Double-booked: the accepted invite wins over the unanswered one,
+    /// whichever comes first in the calendar.
+    func testDoubleBookedPrefersTheAcceptedInvite() {
+        XCTAssertEqual(pick([cand(0, 30, accepted: false), cand(0, 30)], 0, 30), 1)
+        XCTAssertEqual(pick([cand(0, 30), cand(0, 30, accepted: false)], 0, 30), 0)
+    }
+
+    /// Same slot, both accepted: the invite with people beats a bare block.
+    func testDoubleBookedPrefersTheInviteWithPeople() {
+        XCTAssertEqual(pick([cand(0, 30, people: false), cand(0, 30)], 0, 30), 1)
+    }
+
+    /// Back to back: the meeting the recording mostly sits in.
+    func testBackToBackPicksTheMeetingMostlyRecorded() {
+        XCTAssertEqual(pick([cand(0, 30), cand(30, 60)], 22, 58), 1)
+    }
+
+    /// A clearly better time match is not overturned by acceptance.
+    func testTimeMatchOutweighsAcceptance() {
+        XCTAssertEqual(pick([cand(-90, 90), cand(0, 30, accepted: false)], 0, 30), 1)
+    }
+
+    /// Too little overlap: no invite at all.
+    func testNoInviteWhenNothingCoversTheRecording() {
+        XCTAssertNil(pick([cand(55, 90)], 0, 60))
+        XCTAssertNil(pick([], 0, 60))
+    }
 }

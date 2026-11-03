@@ -85,8 +85,15 @@ jobs:
             echo "::group::Why it failed"
             # xcodebuild's summary ("Testing failed:", indented reasons) has
             # no "error:" prefix, so print it and the log's tail as well.
-            grep -nE "error|Testing failed|failed|Failing tests|XCTAssert|Fatal|crash" app-test.log \
-              | grep -v "warning:" | tail -150 || true
+            grep -nE "error:|Testing failed|Failing tests|XCTAssert|Fatal error|failed \(" app-test.log \
+              | grep -v "warning:" | cut -c1-600 | tail -150 || true
+            echo "----- compiler crash -----"
+            # A frontend crash prints the declaration it was in and a stack
+            # dump before "Please submit a bug report".
+            grep -n -B60 -A30 "Please submit a bug report" app-test.log | cut -c1-600 | head -200 || true
+            grep -nE "^[0-9]+\.\s+(While|Program arguments|Compiling with)" app-test.log | cut -c1-600 | head -40 || true
+            echo "----- errors with context -----"
+            grep -n -B3 -A8 " error: " app-test.log | cut -c1-600 | head -200 || true
             echo "----- tail -----"
             tail -120 app-test.log
             echo "::endgroup::"

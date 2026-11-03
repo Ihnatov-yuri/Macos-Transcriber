@@ -150,7 +150,7 @@ struct AppRulesEditor: View {
                     .frame(minWidth: 160, alignment: .leading)
                     Picker("", selection: Binding(
                         get: { rule.mode },
-                        set: update(rule.id) { $0.mode = $1 }
+                        set: { mode in update(rule.id) { $0.mode = mode } }
                     )) {
                         ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
                     }
@@ -158,7 +158,7 @@ struct AppRulesEditor: View {
                     .frame(width: 210)
                     Picker("", selection: Binding(
                         get: { rule.tone },
-                        set: update(rule.id) { $0.tone = $1 }
+                        set: { tone in update(rule.id) { $0.tone = tone } }
                     )) {
                         ForEach(DictationSettings.Tone.allCases, id: \.rawValue) { Text($0.label).tag($0) }
                     }
@@ -202,12 +202,13 @@ struct AppRulesEditor: View {
             .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
     }
 
-    private func update<T>(_ id: UUID, _ change: @escaping @Sendable (inout DictationSettings.AppRule, T) -> Void) -> @MainActor @Sendable (T) -> Void {
-        { value in
-            guard let idx = settings.appRules.firstIndex(where: { $0.id == id }) else { return }
-            var rule = settings.appRules[idx]
-            change(&rule, value)
-            settings.appRules[idx] = rule
-        }
+    /// Plain closures at the call sites: a generic helper returning a
+    /// `@MainActor @Sendable (T) -> Void` for `Binding.set` crashed the
+    /// Swift 6.3 compiler in Swift 6 mode (IRGen of its reabstraction thunk).
+    private func update(_ id: UUID, _ change: (inout DictationSettings.AppRule) -> Void) {
+        guard let idx = settings.appRules.firstIndex(where: { $0.id == id }) else { return }
+        var rule = settings.appRules[idx]
+        change(&rule)
+        settings.appRules[idx] = rule
     }
 }

@@ -4,6 +4,24 @@ import Foundation
 import Observation
 import Security
 
+/// Toggle-mode passes still queued or running, per dictation session.
+nonisolated struct PendingPassCounter: Sendable, Equatable {
+    private(set) var bySession: [Int: Int] = [:]
+
+    var total: Int { bySession.values.reduce(0, +) }
+
+    mutating func add(session: Int) { bySession[session, default: 0] += 1 }
+
+    /// A pass ended. One of a cancelled session was already dropped.
+    mutating func finish(session: Int) {
+        guard let n = bySession[session] else { return }
+        bySession[session] = n > 1 ? n - 1 : nil
+    }
+
+    /// The session was cancelled: its queued passes are dropped unrun.
+    mutating func cancel(session: Int) { bySession[session] = nil }
+}
+
 /// Dictation state machine: hotkey → capture → recognize → clean → insert.
 ///
 /// App-lifetime (owned by `AppContainer`) so a session started from the
@@ -37,6 +55,8 @@ nonisolated final class DictationController: @unchecked Sendable {
     private(set) var lastText = ""
     /// Number of background passes still running in toggle mode.
     private(set) var pendingPasses = 0
+    /// The same passes by session, so a cancel only drops its own.
+    @ObservationIgnored private var pendingCounter = PendingPassCounter()
     /// In-app editor buffer.
     var paneText = ""
     private(set) var accessibilityTrusted = false
@@ -747,7 +767,11 @@ nonisolated final class DictationController: @unchecked Sendable {
             await start?.value
             self?.capture.stop()
         }
-        pendingPasses = 0
+        // Only this session's queued passes: an earlier session's passage
+        // still being recognized keeps "writing…" until it lands (a reset
+        // to 0 hid it, then its own decrements were clamped away).
+        pendingCounter.cancel(session: sessionID)
+        pendingPasses = pendingCounter.total
         if quiet {
             phase = .idle
             updateHUD()
@@ -844,11 +868,22 @@ nonisolated final class DictationController: @unchecked Sendable {
     private func enqueue(_ samples: [Float], final: Bool, passage: Passage) {
         let session = passage.session
         let prior = pipelineTail
-        if final { flushedSessions.remove(session) } else { pendingPasses += 1; flushedSessions.insert(session) }
+        if final {
+            flushedSessions.remove(session)
+        } else {
+            pendingCounter.add(session: session)
+            pendingPasses = pendingCounter.total
+            flushedSessions.insert(session)
+        }
         pipelineTail = Task { @MainActor [weak self] in
             await prior?.value
             guard let self else { return }
-            defer { if !final { self.pendingPasses = max(0, self.pendingPasses - 1) } }
+            defer {
+                if !final {
+                    self.pendingCounter.finish(session: session)
+                    self.pendingPasses = self.pendingCounter.total
+                }
+            }
             guard !self.cancelledSessions.contains(session) else { return }
             await self.processUtterance(samples, final: final, passage: passage)
         }
@@ -902,7 +937,7 @@ nonisolated final class DictationController: @unchecked Sendable {
             if settings.spokenCommands, passage.mode != .verbatim, DictationText.isScratchOnly(recognized),
                !cancelledSessions.contains(passage.session) {
                 if !final { deliveredSessions.insert(passage.session) }
-                scratchLastInsertion(final: final)
+                await scratchLastInsertion(final: final)
                 return
             }
             var cleaned: String
@@ -1068,7 +1103,22 @@ nonisolated final class DictationController: @unchecked Sendable {
 
     /// "Scratch that" as a whole passage: take back the previous one.
     @MainActor
-    private func scratchLastInsertion(final: Bool) {
+    private func scratchLastInsertion(final: Bool) async {
+        // The passage to take back may still be queued behind an earlier
+        // ⌘V (or not yet read by the app): Backspace now deleted the text
+        // BEFORE it, and the paste then landed anyway. Wait for it.
+        if lastInsertion?.target == .frontmostApp {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while TextInserter.isPasteInFlight, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            if TextInserter.isPasteInFlight {
+                AppLog.warn("dictation", "scratch that → the paste is still pending, not removing")
+                lastText = ""
+                if final { finalMessage("Couldn't remove the last passage") }
+                return
+            }
+        }
         guard let last = lastInsertion, Date().timeIntervalSince(last.at) < 180 else {
             if final { finalMessage("Nothing to scratch") }
             return
@@ -1216,13 +1266,28 @@ nonisolated final class DictationController: @unchecked Sendable {
             try? FileManager.default.removeItem(at: url)
             throw error
         }
-        let segment = Segment(startSeconds: 0, endSeconds: seconds, text: text)
-        try repository.appendSegments([segment], to: recording)
-        let folder = try repository.folders().first(where: \.isDictation)
-            ?? (try repository.createFolder(named: Folder.dictationName, allowReserved: true))
-        try repository.move(recording, to: folder)
-        try repository.snapshotVersion(
-            of: recording, engineId: settings.engine.rawValue, engineLabel: versionLabel)
+        do {
+            let segment = Segment(startSeconds: 0, endSeconds: seconds, text: text)
+            try repository.appendSegments([segment], to: recording)
+            let folder = try repository.folders().first(where: \.isDictation)
+                ?? (try repository.createFolder(named: Folder.dictationName, allowReserved: true))
+            try repository.move(recording, to: folder)
+        } catch {
+            // Saved already: a failure here left a row with no transcript,
+            // or one outside the Dictation folder (in All, among meetings).
+            // Take the whole entry back.
+            try? repository.delete(recording)
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
+        // The entry is complete by now; a missing version row is not worth
+        // losing the dictation over.
+        do {
+            try repository.snapshotVersion(
+                of: recording, engineId: settings.engine.rawValue, engineLabel: versionLabel)
+        } catch {
+            AppLog.warn("dictation", "history version snapshot failed: \(error.localizedDescription)")
+        }
     }
 
     private static func writeWav(_ samples: [Float]) throws -> URL {

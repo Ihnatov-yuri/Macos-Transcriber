@@ -226,6 +226,23 @@ nonisolated struct HFModelRelease: Sendable {
         return false
     }
 
+    /// Deletes every file under `dir` that is not one of `m`'s (left by an
+    /// earlier, interrupted download of another release), including an old
+    /// manifest. Returns the relative paths removed. A missing `dir` is fine.
+    @discardableResult
+    static func removeFiles(in dir: URL, notListedIn m: Manifest) -> [String] {
+        let fm = FileManager.default
+        guard let walk = fm.enumerator(atPath: dir.path) else { return [] }
+        let keep = Set(m.files.map(\.path))
+        var stale: [String] = []
+        while let rel = walk.nextObject() as? String {
+            guard (walk.fileAttributes?[.type] as? FileAttributeType) != .typeDirectory else { continue }
+            if !keep.contains(rel) { stale.append(rel) }
+        }
+        for rel in stale { try? fm.removeItem(at: dir.appendingPathComponent(rel)) }
+        return stale.sorted()
+    }
+
     // MARK: - Download
 
     /// Fetches `m` into `dir` from its commit, every file checked; the
@@ -274,6 +291,7 @@ nonisolated struct HFModelRelease: Sendable {
         applyPendingUpdate()
         if isInstalled() { return }
         let m = try await fetchLatest()
+        Self.removeFiles(in: stagingDirectory, notListedIn: m)
         try await download(m, into: stagingDirectory, progress: progress)
         let fm = FileManager.default
         if fm.fileExists(atPath: modelDirectory.path) { try fm.removeItem(at: modelDirectory) }
@@ -338,9 +356,10 @@ nonisolated struct HFModelRelease: Sendable {
                 return .downloaded(latest.revision)
             }
             // Files of an older half-finished update are not this release's.
-            if let partial = manifest(at: updateStagingDirectory), partial.revision != latest.revision {
-                try? fm.removeItem(at: updateStagingDirectory)
-            }
+            // That folder has no manifest (it is written last), so the old
+            // "different revision" check never fired: prune by file list.
+            // Same-named files stay; `download` re-checks their checksums.
+            Self.removeFiles(in: updateStagingDirectory, notListedIn: latest)
             try await download(latest, into: updateStagingDirectory)
             try? fm.removeItem(at: pendingDirectory)
             try fm.moveItem(at: updateStagingDirectory, to: pendingDirectory)

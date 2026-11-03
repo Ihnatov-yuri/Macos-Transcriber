@@ -403,7 +403,18 @@ final class LiveTranscriber: @unchecked Sendable {
     ) async throws -> T {
         let claimed = OSAllocatedUnfairLock(initialState: false)
         @Sendable func claim() -> Bool { claimed.withLock { done in defer { done = true }; return !done } }
+        let workRef = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+            // The deadline goes first so the work can cancel it: every live
+            // read otherwise left a task asleep for the full deadline.
+            let deadline = Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                if claim() {
+                    workRef.withLock { $0 }?.cancel()
+                    cont.resume(throwing: ReadTimeout())
+                }
+            }
             let work = Task {
                 do {
                     let value = try await op()
@@ -411,14 +422,9 @@ final class LiveTranscriber: @unchecked Sendable {
                 } catch {
                     if claim() { cont.resume(throwing: error) }
                 }
+                deadline.cancel()
             }
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                if claim() {
-                    work.cancel()
-                    cont.resume(throwing: ReadTimeout())
-                }
-            }
+            workRef.withLock { $0 = work }
         }
     }
 

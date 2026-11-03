@@ -394,14 +394,13 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     /// for a second). `remove: true` takes it out again. Returns an error
     /// message, or nil on success.
     static func install(remove: Bool = false) async -> String? {
-        let dest = installedURL.path
-        var script = "/bin/rm -rf \(shellQuoted(dest))"
-        if !remove {
+        let script: String
+        if remove {
+            script = "/bin/rm -rf \(shellQuoted(installedURL.path)) && /usr/bin/killall coreaudiod"
+        } else {
             guard let source = bundledDriverURL?.path else { return "The plug-in is missing from this copy of Transcriberr." }
-            script += " && /usr/bin/ditto \(shellQuoted(source)) \(shellQuoted(dest))"
-                + " && /usr/sbin/chown -R root:wheel \(shellQuoted(dest))"
+            script = installScript(source: source, dest: installedURL.path)
         }
-        script += " && /usr/bin/killall coreaudiod"
         let apple = "do shell script \"\(appleScriptEscaped(script))\" with administrator privileges"
         return await Task.detached {
             let p = Process()
@@ -421,6 +420,30 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
             AppLog.info("virtual-mic", remove ? "driver removed" : "driver installed")
             return nil
         }.value
+    }
+
+    /// The bundle identifier the plug-in is signed with (MicDriver/Info.plist).
+    static let driverIdentifier = "nl.ihnatov.Transcriberr.MicDriver"
+
+    /// Runs as root. The source sits in a user-writable app bundle, so it is
+    /// first copied into a fresh root-owned directory (mktemp: mode 700,
+    /// nothing else can touch it), made root:wheel and not group/world
+    /// writable, and its signature checked THERE — after which nobody but
+    /// root can change what gets moved into /Library. A failed copy or
+    /// signature check leaves the installed plug-in and coreaudiod as they
+    /// were; the staging directory is removed either way.
+    static func installScript(source: String, dest: String) -> String {
+        let staged = "\"$T\"/TranscriberrMic.driver"
+        let requirement = shellQuoted("=identifier \"\(driverIdentifier)\"")
+        return "T=$(/usr/bin/mktemp -d /private/var/tmp/TranscriberrMic.XXXXXX) || exit 1; "
+            + "/usr/bin/ditto \(shellQuoted(source)) \(staged)"
+            + " && /usr/sbin/chown -R root:wheel \"$T\""
+            + " && /bin/chmod -R go-w \(staged)"
+            + " && /usr/bin/codesign --verify --strict -R \(requirement) \(staged)"
+            + " && /bin/rm -rf \(shellQuoted(dest))"
+            + " && /bin/mv \(staged) \(shellQuoted(dest)); "
+            + "S=$?; /bin/rm -rf \"$T\"; [ $S -eq 0 ] || exit $S; "
+            + "/usr/bin/killall coreaudiod"
     }
 
     static func shellQuoted(_ s: String) -> String {

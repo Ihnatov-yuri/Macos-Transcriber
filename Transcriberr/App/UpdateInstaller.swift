@@ -158,14 +158,48 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
         return sig
     }
 
+    /// Streamed to disk with the size cap enforced as it arrives: a whole
+    /// download first and the check after let a hostile or broken server
+    /// fill the disk before anything looked. A declared Content-Length over
+    /// the cap is refused before a byte is read.
     private static func download(_ url: URL, into stage: URL) async throws -> URL {
-        let (tmp, response) = try await UpdateChecker.session.download(for: UpdateChecker.request(for: url, timeout: 60))
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Failure("The download failed") }
+        let (bytes, response) = try await UpdateChecker.session.bytes(for: UpdateChecker.request(for: url, timeout: 60))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            bytes.task.cancel()
+            throw Failure("The download failed")
+        }
+        guard declaredSizeAllowed(response.expectedContentLength) else {
+            bytes.task.cancel()
+            throw Failure("The download has the wrong size")
+        }
         let dest = stage.appendingPathComponent("update.zip")
-        try FileManager.default.moveItem(at: tmp, to: dest)
-        let size = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-        guard size > 0, size < maxZipBytes else { throw Failure("The download has the wrong size") }
+        guard FileManager.default.createFile(atPath: dest.path, contents: nil) else { throw Failure("The download failed") }
+        let handle = try FileHandle(forWritingTo: dest)
+        defer { try? handle.close() }
+        var pending = Data()
+        pending.reserveCapacity(1 << 20)
+        var total = 0
+        for try await byte in bytes {
+            pending.append(byte)
+            if pending.count >= 1 << 20 {
+                total += pending.count
+                guard total < maxZipBytes else {
+                    bytes.task.cancel()
+                    throw Failure("The download has the wrong size")
+                }
+                try handle.write(contentsOf: pending)
+                pending.removeAll(keepingCapacity: true)
+            }
+        }
+        total += pending.count
+        guard total > 0, total < maxZipBytes else { throw Failure("The download has the wrong size") }
+        try handle.write(contentsOf: pending)
         return dest
+    }
+
+    /// A Content-Length the cap allows; -1 (not sent) is checked while streaming.
+    static func declaredSizeAllowed(_ expected: Int64) -> Bool {
+        expected < 0 || (expected > 0 && expected < Int64(maxZipBytes))
     }
 
     private static func unpack(_ zip: URL, into stage: URL) throws -> URL {

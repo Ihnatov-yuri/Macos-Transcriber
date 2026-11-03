@@ -54,6 +54,10 @@ enum {
 #define kFeedName         "Transcriberr Mic Feed"
 #define kFeedUID          "nl.ihnatov.Transcriberr.MicFeed"
 #define kModelUID         "nl.ihnatov.Transcriberr.MicModel"
+/// The only processes allowed to play into the feed: the app, and the CLI's
+/// `virtual-mic` test command.
+#define kAppBundleID      "nl.ihnatov.Transcriberr"
+#define kCLIBundleID      "nl.ihnatov.TranscriberrCLI"
 
 static const Float64 kSampleRate       = 48000.0;
 static const UInt32  kChannels         = 1;
@@ -96,6 +100,20 @@ static _Atomic bool gFeedLive = false;
 /// write. Ring slots older than it hold the previous session's audio from a
 /// ring period earlier, which the microphone must never replay.
 static _Atomic Float64 gFeedStart = -1;
+
+/// Transcriberr's own clients of the feed, recorded in AddDeviceClient by
+/// bundle ID (under gStateMutex; never touched on the IO thread). Any other
+/// process could otherwise open the hidden feed by UID and speak into the
+/// call as the user's microphone: its StartIO is refused, so the HAL never
+/// runs its IO proc or mixes it into WriteMix. `io` counts the client's
+/// running StartIOs, so a client removed while running still stops.
+#define kMaxFeedClients 8
+typedef struct {
+    bool used;
+    UInt32 client;
+    UInt32 io;
+} FeedClient;
+static FeedClient gFeedClients[kMaxFeedClients];
 
 // MARK: - Helpers
 
@@ -160,6 +178,22 @@ static OSStatus WriteCFString(const char* s, UInt32 inSize, UInt32* outSize, voi
 #define WRITE_SCALAR(type, value) \
     do { if (inDataSize < sizeof(type)) return kAudioHardwareBadPropertySizeError; \
          *(type*)outData = (value); *outDataSize = sizeof(type); return noErr; } while (0)
+
+// MARK: - Feed clients
+
+static bool IsTranscriberrBundle(CFStringRef bundle) {
+    if (bundle == NULL) return false;
+    return CFStringCompare(bundle, CFSTR(kAppBundleID), 0) == kCFCompareEqualTo
+        || CFStringCompare(bundle, CFSTR(kCLIBundleID), 0) == kCFCompareEqualTo;
+}
+
+/// Called with gStateMutex held.
+static FeedClient* FeedClientLocked(UInt32 client) {
+    for (int i = 0; i < kMaxFeedClients; i++) {
+        if (gFeedClients[i].used && gFeedClients[i].client == client) return &gFeedClients[i];
+    }
+    return NULL;
+}
 
 // MARK: - Publishing the microphone
 
@@ -283,15 +317,54 @@ static OSStatus DestroyDevice(AudioServerPlugInDriverRef d, AudioObjectID id) {
 }
 
 static OSStatus AddDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID id, const AudioServerPlugInClientInfo* c) {
-    (void)c;
     if (d != gDriverRef) return kAudioHardwareBadObjectError;
-    return IsDevice(id) ? noErr : kAudioHardwareBadObjectError;
+    if (!IsDevice(id)) return kAudioHardwareBadObjectError;
+    if (id != kObjectID_Feed || c == NULL) return noErr;
+    if (!IsTranscriberrBundle(c->mBundleID)) {
+        os_log(gLog, "feed client pid %d is not Transcriberr: its IO will be refused", (int)c->mProcessID);
+        return noErr;
+    }
+    bool full = false;
+    pthread_mutex_lock(&gStateMutex);
+    if (FeedClientLocked(c->mClientID) == NULL) {
+        FeedClient* slot = NULL;
+        for (int i = 0; i < kMaxFeedClients && slot == NULL; i++) {
+            if (!gFeedClients[i].used) slot = &gFeedClients[i];
+        }
+        if (slot != NULL) {
+            slot->used = true;
+            slot->client = c->mClientID;
+            slot->io = 0;
+        } else {
+            full = true;
+        }
+    }
+    pthread_mutex_unlock(&gStateMutex);
+    if (full) os_log_error(gLog, "too many feed clients; pid %d refused", (int)c->mProcessID);
+    return noErr;
 }
 
+static void FeedStoppedLocked(void);
+
 static OSStatus RemoveDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID id, const AudioServerPlugInClientInfo* c) {
-    (void)c;
     if (d != gDriverRef) return kAudioHardwareBadObjectError;
-    return IsDevice(id) ? noErr : kAudioHardwareBadObjectError;
+    if (!IsDevice(id)) return kAudioHardwareBadObjectError;
+    if (id != kObjectID_Feed || c == NULL) return noErr;
+    bool stopped = false;
+    pthread_mutex_lock(&gStateMutex);
+    FeedClient* slot = FeedClientLocked(c->mClientID);
+    if (slot != NULL) {
+        // Gone without its StopIO: count it out, as StopIO would have.
+        while (slot->io > 0) {
+            slot->io--;
+            FeedStoppedLocked();
+            stopped = true;
+        }
+        slot->used = false;
+    }
+    pthread_mutex_unlock(&gStateMutex);
+    if (stopped) Notify(kObjectID_Feed, kAudioDevicePropertyDeviceIsRunning);
+    return noErr;
 }
 
 static OSStatus PerformDeviceConfigurationChange(AudioServerPlugInDriverRef d, AudioObjectID id, UInt64 a, void* i) {
@@ -545,10 +618,18 @@ static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID id, 
 // MARK: - IO
 
 static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID id, UInt32 client) {
-    (void)client;
     if (d != gDriverRef || !IsKnown(id) || !IsDevice(id)) return kAudioHardwareBadObjectError;
     bool feedStarted = false;
     pthread_mutex_lock(&gStateMutex);
+    if (id == kObjectID_Feed) {
+        FeedClient* slot = FeedClientLocked(client);
+        if (slot == NULL) {
+            pthread_mutex_unlock(&gStateMutex);
+            os_log(gLog, "feed IO refused for client %u (not Transcriberr)", (unsigned)client);
+            return kAudioHardwareIllegalOperationError;
+        }
+        slot->io++;
+    }
     if (gMicIOCount == 0 && gFeedIOCount == 0) {
         gAnchorHostTime = mach_absolute_time();
         gTimestampCount = 0;
@@ -572,18 +653,29 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID id, UInt32 c
     return noErr;
 }
 
+/// One running feed StartIO ended. Called with gStateMutex held.
+static void FeedStoppedLocked(void) {
+    if (gFeedIOCount == 0) return;
+    gFeedGeneration++;
+    if (--gFeedIOCount == 0) {
+        atomic_store(&gFeedLive, false);
+        os_log(gLog, "feed stopped");
+        ScheduleUnpublishLocked();
+    }
+}
+
 static OSStatus StopIO(AudioServerPlugInDriverRef d, AudioObjectID id, UInt32 client) {
-    (void)client;
     if (d != gDriverRef || !IsDevice(id)) return kAudioHardwareBadObjectError;
     pthread_mutex_lock(&gStateMutex);
     if (id == kObjectID_Mic) {
         if (gMicIOCount > 0) gMicIOCount--;
-    } else if (gFeedIOCount > 0) {
-        gFeedGeneration++;
-        if (--gFeedIOCount == 0) {
-            atomic_store(&gFeedLive, false);
-            os_log(gLog, "feed stopped");
-            ScheduleUnpublishLocked();
+    } else {
+        // Only a client whose StartIO was let through may stop the feed: a
+        // refused one must not count Transcriberr's own IO out.
+        FeedClient* slot = FeedClientLocked(client);
+        if (slot != NULL && slot->io > 0) {
+            slot->io--;
+            FeedStoppedLocked();
         }
     }
     pthread_mutex_unlock(&gStateMutex);
@@ -638,6 +730,9 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID id, Au
     Float32* buf = (Float32*)main;
 
     if (id == kObjectID_Feed && op == kAudioServerPlugInIOOperationWriteMix) {
+        // The mix of all running clients (not per client): only Transcriberr's
+        // can be running, see StartIO. Nothing is written while none is.
+        if (!atomic_load(&gFeedLive)) return noErr;
         Float64 start = info->mOutputTime.mSampleTime;
         // A negative (or NaN) time converted to UInt64 is undefined in C.
         if (!(start >= 0)) return noErr;

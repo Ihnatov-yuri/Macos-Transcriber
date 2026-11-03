@@ -448,6 +448,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             // Whatever the old converter still holds belongs in the file
             // before the rate changes underneath it.
             self.flushConverterTail()
+            io.pendingInputs.removeAll()
             io.converter = converter
             io.inputFormat = nativeFormat
         }
@@ -657,6 +658,18 @@ nonisolated final class WavRecorder: @unchecked Sendable {
     nonisolated private func enqueueAndDrain(_ input: AVAudioPCMBuffer) {
         let io = self.io
         guard let converter = io.converter, let audioFile = io.audioFile else { return }
+        // A route change swaps the converter for one at the new rate, but
+        // tap buffers from the old route can still be queued behind it on
+        // ioQueue: fed to the new converter they came out at the wrong
+        // speed and pitch. Those few milliseconds are dropped instead.
+        let rate = converter.inputFormat.sampleRate
+        if !io.pendingInputs.isEmpty {
+            io.pendingInputs = Self.buffers(io.pendingInputs, matchingRate: rate)
+        }
+        guard Self.buffers([input], matchingRate: rate).count == 1 else {
+            AppLog.warn("recorder", "dropping a \(Int(input.format.sampleRate)) Hz buffer queued before the input changed to \(Int(rate)) Hz")
+            return
+        }
         io.pendingInputs.append(input)
 
         let ratio = targetFormat.sampleRate / input.format.sampleRate
@@ -705,6 +718,12 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             if io.pendingInputs.isEmpty && status == .inputRanDry { break }
             if outFrames == 0 { break }
         }
+    }
+
+    /// The buffers recorded at `rate`: anything else was captured before a
+    /// route change and does not belong to the current converter.
+    nonisolated static func buffers(_ buffers: [AVAudioPCMBuffer], matchingRate rate: Double) -> [AVAudioPCMBuffer] {
+        buffers.filter { abs($0.format.sampleRate - rate) < 0.5 }
     }
 
     /// On stop, signal end-of-stream once to flush the resampler's filter

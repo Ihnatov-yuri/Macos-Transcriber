@@ -805,8 +805,10 @@ struct SnippetsSettingsTab: View {
                 .foregroundStyle(AppColor.ink2)
             }
             Section("Your snippets") {
-                ForEach(container.snippetStore.snippets.indices, id: \.self) { idx in
-                    snippetRow(idx)
+                // By the snippet's own identity, not its index: after a
+                // Delete, the field still focused edited the NEXT snippet.
+                ForEach(container.snippetStore.snippets, id: \.uid) { snippet in
+                    snippetRow(snippet.uid)
                 }
                 TapButton {
                     var s = container.snippetStore.snippets
@@ -825,16 +827,16 @@ struct SnippetsSettingsTab: View {
     }
 
     @ViewBuilder
-    private func snippetRow(_ idx: Int) -> some View {
+    private func snippetRow(_ uid: UUID) -> some View {
         let snippets = container.snippetStore.snippets
-        if idx < snippets.count {
+        if let current = snippets.first(where: { $0.uid == uid }) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
                     TextField("name", text: Binding(
-                        get: { container.snippetStore.snippets[safe: idx]?.name ?? "" },
+                        get: { container.snippetStore.snippets.first(where: { $0.uid == uid })?.name ?? "" },
                         set: { v in
                             var s = container.snippetStore.snippets
-                            guard idx < s.count else { return }
+                            guard let idx = s.firstIndex(where: { $0.uid == uid }) else { return }
                             s[idx].name = v.replacingOccurrences(of: " ", with: "-")
                             container.snippetStore.snippets = s
                         }
@@ -844,14 +846,14 @@ struct SnippetsSettingsTab: View {
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 170)
-                    Text("use as {snippet:\(snippets[idx].name)}")
+                    Text("use as {snippet:\(current.name)}")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(AppColor.ink2)
                         .textSelection(.enabled)
                     Spacer()
                     TapButton {
                         var s = container.snippetStore.snippets
-                        guard idx < s.count else { return }
+                        guard let idx = s.firstIndex(where: { $0.uid == uid }) else { return }
                         s.remove(at: idx)
                         container.snippetStore.snippets = s
                     } label: {
@@ -859,10 +861,10 @@ struct SnippetsSettingsTab: View {
                     }
                 }
                 TextField("snippet text (what replaces the placeholder)", text: Binding(
-                    get: { container.snippetStore.snippets[safe: idx]?.body ?? "" },
+                    get: { container.snippetStore.snippets.first(where: { $0.uid == uid })?.body ?? "" },
                     set: { v in
                         var s = container.snippetStore.snippets
-                        guard idx < s.count else { return }
+                        guard let idx = s.firstIndex(where: { $0.uid == uid }) else { return }
                         s[idx].body = v
                         container.snippetStore.snippets = s
                     }

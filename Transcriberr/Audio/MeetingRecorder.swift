@@ -107,11 +107,14 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// is never reached in normal use.
     static let liveChunkBacklog = 40
 
-    private var tapID = AudioObjectID(kAudioObjectUnknown)
-    private var aggID = AudioObjectID(kAudioObjectUnknown)
-    private var procID: AudioDeviceIOProcID?
-    private var tapDesc: CATapDescription?
-    private var fileURL: URL?
+    // The capture graph's handles. Written by `startCapture` /
+    // `teardownCoreAudio` on the pool, never shown: kept out of observation
+    // so those writes don't run SwiftUI's registrar off the main actor.
+    @ObservationIgnored private var tapID = AudioObjectID(kAudioObjectUnknown)
+    @ObservationIgnored private var aggID = AudioObjectID(kAudioObjectUnknown)
+    @ObservationIgnored private var procID: AudioDeviceIOProcID?
+    @ObservationIgnored private var tapDesc: CATapDescription?
+    @ObservationIgnored private var fileURL: URL?
     /// Exposed read-only so dictation can refuse to open a second input
     /// chain while a meeting is being captured.
     private(set) var isRunning = false
@@ -138,6 +141,8 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// are reset by teardown while a listener callback may be queued).
     @ObservationIgnored private var watchedMic = AudioObjectID(kAudioObjectUnknown)
     @ObservationIgnored private var watchedAggregate = AudioObjectID(kAudioObjectUnknown)
+    /// The rate the converters were built for (main-actor copy).
+    @ObservationIgnored private var watchedRate: Double = 0
     @ObservationIgnored private var deviceListeners: [(object: AudioObjectID, address: AudioObjectPropertyAddress,
                                    block: AudioObjectPropertyListenerBlock)] = []
     /// Serializes `finishCapture` — an interruption and a Stop can both
@@ -294,6 +299,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         defer { captureLock.unlock() }
         watchedMic = micDeviceID
         watchedAggregate = aggID
+        watchedRate = ioQueue.sync { io.nativeRate }
         func listen(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) {
             guard object != kAudioObjectUnknown else { return }
             var address = AudioObjectPropertyAddress(
@@ -309,6 +315,11 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         }
         listen(watchedMic, kAudioDevicePropertyDeviceIsAlive)
         listen(watchedAggregate, kAudioDevicePropertyDeviceIsAlive)
+        // A rate change (Audio MIDI Setup, another app, a Bluetooth profile
+        // switch) left the converters resampling from the old rate: the
+        // file sped up or slowed down with no sign of it.
+        listen(watchedMic, kAudioDevicePropertyNominalSampleRate)
+        listen(watchedAggregate, kAudioDevicePropertyNominalSampleRate)
         listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
     }
 
@@ -333,6 +344,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             reason = "The microphone was disconnected"
         } else if !Self.isAlive(watchedAggregate) {
             reason = "The meeting audio device stopped"
+        } else if Self.rateChanged(capture: watchedRate, now: deviceSampleRate(watchedAggregate)) {
+            AppLog.warn("meeting", "aggregate rate moved from \(Int(watchedRate)) Hz to \(Int(deviceSampleRate(watchedAggregate) ?? 0)) Hz")
+            reason = "The audio device changed its sample rate"
         } else {
             return
         }
@@ -346,6 +360,14 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             await MainActor.run { if ms > 0, self.interruption != nil { self.elapsedMs = ms } }
         }
         onInterrupted?(message)
+    }
+
+    /// The device now runs at a rate other than the one capture was set up
+    /// for. An unreadable rate is not a change (the is-alive check covers a
+    /// device that went away).
+    nonisolated static func rateChanged(capture: Double, now: Double?) -> Bool {
+        guard capture > 0, let now, now > 0 else { return false }
+        return abs(now - capture) >= 1
     }
 
     /// Whether a device still exists and runs. An unknown ID (nothing to

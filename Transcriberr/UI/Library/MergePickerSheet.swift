@@ -112,7 +112,15 @@ struct MergePickerSheet: View {
                     TapButton { onCancel() } label: {
                         LitButtonChrome(.ghost) { Text("Cancel") }
                     }
-                    .keyboardShortcut(.cancelAction)
+                    // A tap gesture takes no keyboard shortcut: Esc goes
+                    // through a real, invisible Button instead.
+                    .background {
+                        Button("Cancel") { onCancel() }
+                            .keyboardShortcut(.cancelAction)
+                            .opacity(0)
+                            .frame(width: 0, height: 0)
+                            .accessibilityHidden(true)
+                    }
                     Spacer()
                     TapButton { mergeSelected() } label: {
                         LitButtonChrome(.primary) { Text("Merge") }

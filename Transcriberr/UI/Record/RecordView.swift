@@ -20,6 +20,13 @@ struct RecordView: View {
             .onChange(of: container.newRecordingRequested) { _, _ in
                 Task { @MainActor in await consumePendingNewRecording() }
             }
+            // "Starting…" ends once the recorder runs, not when
+            // `toggleRecord()` returns: that also waits for the live model
+            // to load, and a Stop in that window went back to idle with
+            // the footer still on "Starting…" and no action.
+            .onChange(of: model.uiState) { _, state in
+                if state != .idle { starting = false }
+            }
     }
 
     /// ⌘N while already on this screen (onChange) or arriving here because

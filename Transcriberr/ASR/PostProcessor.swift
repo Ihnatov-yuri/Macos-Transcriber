@@ -7,11 +7,22 @@ import SwiftData
 nonisolated private final class PostProcTimeoutClaim: @unchecked Sendable {
     private let lock = NSLock()
     private var claimed = false
+    private var work: Task<Void, Never>?
     func take() -> Bool {
         lock.lock(); defer { lock.unlock() }
         if claimed { return false }
         claimed = true
         return true
+    }
+    func setWork(_ task: Task<Void, Never>) {
+        lock.lock(); defer { lock.unlock() }
+        work = task
+    }
+    func cancelWork() {
+        lock.lock()
+        let w = work
+        lock.unlock()
+        w?.cancel()
     }
 }
 
@@ -417,6 +428,17 @@ nonisolated final class PostProcessor: @unchecked Sendable {
     ) async throws -> T {
         let claim = PostProcTimeoutClaim()
         return try await withCheckedThrowingContinuation { cont in
+            // The deadline goes first so the work can cancel it: a preset
+            // that finished in seconds left a task asleep for the whole
+            // timeout (minutes), once per preset run.
+            let deadline = Task.detached(priority: .utility) {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                if claim.take() {
+                    claim.cancelWork()
+                    cont.resume(throwing: ASRError.chunkTimeout)
+                }
+            }
             let work = Task.detached(priority: .userInitiated) {
                 do {
                     let v = try await op()
@@ -424,14 +446,9 @@ nonisolated final class PostProcessor: @unchecked Sendable {
                 } catch {
                     if claim.take() { cont.resume(throwing: error) }
                 }
+                deadline.cancel()
             }
-            Task.detached(priority: .utility) {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                if claim.take() {
-                    work.cancel()
-                    cont.resume(throwing: ASRError.chunkTimeout)
-                }
-            }
+            claim.setWork(work)
         }
     }
 

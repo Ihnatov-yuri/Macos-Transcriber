@@ -748,9 +748,10 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
     /// relaunch) mid-queue doesn't silently forget the runs still waiting.
     /// One row per recording — `recordingId` is unique — so re-queuing the
     /// same recording replaces its row.
-    func savePendingTask(for recording: Recording, params: TranscriptionRunner.Params) {
+    @discardableResult
+    func savePendingTask(for recording: Recording, params: TranscriptionRunner.Params) -> Bool {
         removePendingTask(recording.id, save: false)
-        context.insert(PendingTask(
+        let task = PendingTask(
             recordingId: recording.id,
             backend: params.backend.rawValue,
             languages: params.languages.sorted().joined(separator: ","),
@@ -760,15 +761,41 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             hybridDiarize: params.hybridDiarize,
             // nil, not false, for an ordinary run: same as a pre-column row.
             keepVisibleUntilDone: params.keepVisibleUntilDone ? true : nil
-        ))
-        try? context.save()
+        )
+        context.insert(task)
+        do {
+            try context.save()
+            return true
+        } catch {
+            // The run itself goes on from memory; it just won't resume after
+            // a quit. The unsaved row is taken back out of the context so it
+            // can't fail every later save of anything else.
+            AppLog.error("repo", "queued run for '\(recording.title)' not persisted: \(error.localizedDescription)")
+            context.delete(task)
+            return false
+        }
     }
 
     func removePendingTask(_ recordingId: UUID, save: Bool = true) {
         let descriptor = FetchDescriptor<PendingTask>(predicate: #Predicate { $0.recordingId == recordingId })
-        guard let rows = try? context.fetch(descriptor), !rows.isEmpty else { return }
+        let rows: [PendingTask]
+        do {
+            rows = try context.fetch(descriptor)
+        } catch {
+            AppLog.error("repo", "queued run lookup failed: \(error.localizedDescription)")
+            return
+        }
+        guard !rows.isEmpty else { return }
         rows.forEach(context.delete)
-        if save { try? context.save() }
+        guard save else { return }
+        do {
+            try context.save()
+        } catch {
+            // The rows stay deleted in the context and go with its next
+            // save; a stale one surviving a quit resumes a run whose
+            // recording is checked again at launch.
+            AppLog.error("repo", "removing queued run not persisted: \(error.localizedDescription)")
+        }
     }
 
     /// Oldest first — the order they were queued in.
@@ -1162,8 +1189,16 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             guard let url = Self.healedAudioURL(for: rec.audioPath,
                                                 fileExists: FileManager.default.fileExists(atPath:))
             else { continue }
-            AppLog.info("repo", "repointed '\(rec.title)' at \(url.lastPathComponent) — \(URL(fileURLWithPath: rec.audioPath).lastPathComponent) is gone")
-            try? updateAudioPath(url, for: rec)
+            let gone = URL(fileURLWithPath: rec.audioPath).lastPathComponent
+            do {
+                try updateAudioPath(url, for: rec)
+            } catch {
+                AppLog.error("repo", "could not repoint '\(rec.title)' at \(url.lastPathComponent): \(error.localizedDescription)")
+                continue
+            }
+            // updateAudioPath returns without a change for a deleted row.
+            guard rec.modelContext != nil, rec.audioPath == url.path else { continue }
+            AppLog.info("repo", "repointed '\(rec.title)' at \(url.lastPathComponent) — \(gone) is gone")
             healed += 1
         }
         return healed

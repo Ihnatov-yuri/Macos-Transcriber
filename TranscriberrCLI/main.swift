@@ -462,11 +462,19 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
 /// Gemma via Google's LiteRT-LM runtime — the Android-proven stack.
 @MainActor
 func cmdLitert(path: String) async -> Int32 {
-    let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Transcriberr/models/litert-community/gemma-4-E2B-it-litert-lm")
-    guard let model = (try? FileManager.default.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil))?
-        .first(where: { $0.pathExtension == "litertlm" }) else {
-        print("[litert] ❌ no .litertlm bundle in \(modelDir.path)"); return 1
+    // Every LiteRT Gemma the app can download (E2B, E4B, …), in catalog
+    // order: the E2B folder alone missed a Mac that only has E4B.
+    let modelDirs = ModelCatalog.entries
+        .filter { $0.backend == .gemmaLiteRT }
+        .compactMap { ModelCatalog.cachedRepoDirectory(huggingFaceID: $0.huggingFaceID) }
+    let found = modelDirs.lazy.compactMap { dir in
+        (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+            .first(where: { $0.pathExtension == "litertlm" })
+    }.first
+    guard let model = found else {
+        let searched = ModelCatalog.entries.filter { $0.backend == .gemmaLiteRT }.compactMap(\.huggingFaceID)
+        print("[litert] ❌ no .litertlm bundle in \(ModelCatalog.durableModelsDirectory().path) (looked for \(searched.joined(separator: ", ")))")
+        return 1
     }
     let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
     let decoder = AudioDecoder()

@@ -12,6 +12,9 @@ struct DetailView: View {
     /// The Library search that found this recording: its words are marked
     /// in the transcript.
     var searchQuery: String = ""
+    /// A Library merge is reading this recording: not deletable or
+    /// splittable until it is done.
+    var isMerging: Bool = false
     @State private var focus: String?
     @Environment(AppContainer.self) private var container
     @Query(sort: \Folder.sortOrder) private var allFolders: [Folder]
@@ -90,6 +93,8 @@ struct DetailView: View {
         }
         .confirmationDialog("Delete “\(recording.title)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
+                // A merge reading this recording would lose its source.
+                guard !isMerging else { return }
                 // Same reasoning as the library's Delete: a run still
                 // streaming into this recording must not outlive it.
                 container.jobManager.cancel(recording.id)
@@ -602,12 +607,13 @@ struct DetailView: View {
                 Button("Split recording…") {
                     showingSplit = true
                 }
-                .disabled(model?.isRunning ?? false)
+                .disabled((model?.isRunning ?? false) || isMerging)
                 Divider()
                 Button("Rename recording…") {
                     renameRecordingPrompt()
                 }
                 Button("Delete recording…", role: .destructive) { confirmingDelete = true }
+                    .disabled(isMerging)
             } label: {
                 Text("More ⋯").uiLabel(11, color: AppColor.ink2)
             }

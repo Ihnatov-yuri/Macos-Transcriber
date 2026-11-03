@@ -618,7 +618,11 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 }
                 deduped.append(seg)
             }
-            parsed = deduped
+            parsed = deduped.map { seg in
+                var s = seg
+                s.chunkIndex = idx
+                return s
+            }
             perChunkParsed[idx] = parsed
             allSegments.append(contentsOf: parsed)
             // Build the cross-chunk continuation tail from the *parsed* text,
@@ -855,7 +859,11 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                         return s
                     }
                 }
-                perChunkParsed[idx] = seamTrimmed(parsed, idx: idx)
+                perChunkParsed[idx] = seamTrimmed(parsed, idx: idx).map { seg in
+                    var s = seg
+                    s.chunkIndex = idx
+                    return s
+                }
             }
             if !disputes.isEmpty {
                 // Rebuild in chunk order (already time-sorted across tracks)
@@ -1436,16 +1444,16 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             AppLog.info("runner", "refine chunk \(entry.idx + 1) improved \(String(format: "%.2f", firstConf.score)) → \(String(format: "%.2f", retryConf.score))")
 
             // Splice replacement into allSegments + tell JobManager to do the
-            // same in SwiftData.
-            allSegments.removeAll { seg in
-                guard seg.startSeconds >= entry.chunk.startSeconds,
-                      seg.endSeconds <= entry.chunk.endSeconds else { return false }
-                // Same-track only: mic and sys chunks share one timeline —
-                // splicing by time alone deleted the OTHER track's segments.
-                if splitTracks {
-                    return isMicChunk ? seg.speakerKey == "ME" : seg.speakerKey != "ME"
-                }
-                return true
+            // same in SwiftData (its splice is a preview: `.done` reconciles
+            // the store to this list).
+            parsed = parsed.map { seg in
+                var s = seg
+                s.chunkIndex = entry.idx
+                return s
+            }
+            allSegments.removeAll {
+                Self.refinementRemoves($0, chunkIndex: entry.idx, chunk: entry.chunk,
+                                       splitTracks: splitTracks, isMicChunk: isMicChunk)
             }
             allSegments.append(contentsOf: parsed)
             allSegments.sort { $0.startSeconds < $1.startSeconds }
@@ -1456,6 +1464,22 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             ))
         }
         return allSegments
+    }
+
+    /// Whether a refinement of chunk `chunkIndex` replaces `seg`. By origin
+    /// when the segment knows its chunk: chunks overlap by a 1 s recap, and
+    /// the time-window rule removed the NEIGHBOUR's segments lying in it.
+    /// Untagged segments fall back to that rule: fully inside the window,
+    /// and same-track only (mic and sys chunks share one timeline).
+    static func refinementRemoves(_ seg: RawSegment, chunkIndex: Int, chunk: AudioDecoder.Chunk,
+                                  splitTracks: Bool, isMicChunk: Bool) -> Bool {
+        if let origin = seg.chunkIndex { return origin == chunkIndex }
+        guard seg.startSeconds >= chunk.startSeconds,
+              seg.endSeconds <= chunk.endSeconds else { return false }
+        if splitTracks {
+            return isMicChunk ? seg.speakerKey == "ME" : seg.speakerKey != "ME"
+        }
+        return true
     }
 
     /// Build a context block for the refinement pass from the segments

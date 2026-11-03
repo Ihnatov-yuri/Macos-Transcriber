@@ -1027,7 +1027,22 @@ nonisolated final class DictationController: @unchecked Sendable {
         // the spacing rule appended a space (or capitalized the first
         // letter), so the dictated password no longer matched. And it is
         // never left on the clipboard for the next ⌘V anywhere.
-        let preceding = settings.spacing == .auto && !secret ? FocusedTextContext.textBeforeCaret() : nil
+        // A passage right behind the previous one (a toggle-mode pause
+        // flush, then the stop) read the field before the previous ⌘V had
+        // landed, so it was spaced and capitalized against the text from
+        // BEFORE that passage: "…first passage.Second passage". What will
+        // sit left of the caret by then is the passage still in flight.
+        let preceding: String?
+        if settings.spacing == .auto && !secret {
+            if TextInserter.isPasteInFlight, let last = lastInsertion, last.target == .frontmostApp, !last.secret,
+               last.app != nil, last.app == NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+                preceding = last.inserted
+            } else {
+                preceding = FocusedTextContext.textBeforeCaret()
+            }
+        } else {
+            preceding = nil
+        }
         let payload = secret ? text : DictationText.forInsertion(text, spacing: settings.spacing, preceding: preceding)
         switch TextInserter.insert(payload, restoreClipboard: settings.restoreClipboard || secret) {
         case .pasted:
@@ -1184,7 +1199,16 @@ nonisolated final class DictationController: @unchecked Sendable {
         )
         recording.runBackend = settings.engine.rawValue
         recording.runLanguages = settings.languages.sorted().joined(separator: ",")
-        try repository.save(recording)
+        do {
+            try repository.save(recording)
+        } catch {
+            // Inserted before the failing save: left in the main context it
+            // was written by the next save of anything — an untitled-looking
+            // row with no transcript, outside the Dictation folder.
+            try? repository.delete(recording)
+            try? FileManager.default.removeItem(at: url)
+            throw error
+        }
         let segment = Segment(startSeconds: 0, endSeconds: seconds, text: text)
         try repository.appendSegments([segment], to: recording)
         let folder = try repository.folders().first(where: \.isDictation)

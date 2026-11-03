@@ -298,7 +298,10 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         do {
             try save(merged)
         } catch {
-            rollbackMerge(nil, at: url)
+            // `save` inserted the row before the failing save: left in the
+            // context it would be written by the NEXT successful save of
+            // anything — a library row over the audio deleted below.
+            rollbackMerge(merged, at: url)
             throw error
         }
 
@@ -390,8 +393,10 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
     /// original error is what the caller sees.
     private func rollbackMerge(_ merged: Recording?, at url: URL) {
         if let merged {
+            // The id before the delete: a deleted, saved model is not read.
+            let id = merged.id
             try? delete(merged)
-            BackupService.removeBackups(for: merged.id)
+            BackupService.removeBackups(for: id)
         }
         for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
             try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension(ext))
@@ -681,15 +686,16 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             AppLog.info("repo", "split '\(recording.title)' at \(cutSeconds)s → "
                 + "\(first.title) (\(segsA.count) segs) + \(second.title) (\(segsB.count) segs)")
         } catch {
-            await postProcessTracker.markIdle(first.id)
-            await postProcessTracker.markIdle(second.id)
+            let firstID = first.id, secondID = second.id
+            await postProcessTracker.markIdle(firstID)
+            await postProcessTracker.markIdle(secondID)
             try? delete(first)
             try? delete(second)
             // Both halves were saved, so both have backup files; without
             // this `restore-backups` brought them back as empty rows over
             // deleted audio (merge's rollback got the same fix in v3.2.6).
-            BackupService.removeBackups(for: first.id)
-            BackupService.removeBackups(for: second.id)
+            BackupService.removeBackups(for: firstID)
+            BackupService.removeBackups(for: secondID)
             for url in [urlA, urlB] {
                 for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
                     try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension(ext))

@@ -71,22 +71,37 @@ enum TextInserter {
     /// one — and reports the outcome the paste will have: without
     /// Accessibility trust it would only have been copied anyway.
     static func insert(_ text: String, restoreClipboard: Bool) -> Outcome {
-        let windowOpen = lastPasteAt.map { ContinuousClock.now - $0 < pasteWindow } ?? false
-        guard queuedDeliveries > 0 || windowOpen else {
+        guard isPasteInFlight else {
             return deliver(text, restoreClipboard: restoreClipboard)
         }
         queuedDeliveries += 1
         let previous = deliveryChain
+        // The caller checked the front app NOW; the ⌘V goes out up to a
+        // paste window later. A ⌘-Tab in between sent the passage into
+        // whatever came forward (a terminal, someone else's chat).
+        let targetApp = NSWorkspace.shared.frontmostApplication?.processIdentifier
         deliveryChain = Task { @MainActor in
             await previous?.value
             if let last = lastPasteAt {
                 let wait = pasteWindow - (ContinuousClock.now - last)
                 if wait > .zero { try? await Task.sleep(for: wait) }
             }
-            _ = deliver(text, restoreClipboard: restoreClipboard)
+            if let targetApp, NSWorkspace.shared.frontmostApplication?.processIdentifier != targetApp {
+                AppLog.warn("dictation", "front app changed while a paste waited — text left on the clipboard")
+                copyOnly(text)
+            } else {
+                _ = deliver(text, restoreClipboard: restoreClipboard)
+            }
             queuedDeliveries -= 1
         }
         return HotkeyMonitor.isTrusted() ? .pasted : .copiedOnly
+    }
+
+    /// True while an earlier ⌘V may not have reached the target app yet (or
+    /// a delivery is still queued behind one): reading the field now shows
+    /// it as it was BEFORE that passage.
+    static var isPasteInFlight: Bool {
+        queuedDeliveries > 0 || (lastPasteAt.map { ContinuousClock.now - $0 < pasteWindow } ?? false)
     }
 
     private static func deliver(_ text: String, restoreClipboard: Bool) -> Outcome {

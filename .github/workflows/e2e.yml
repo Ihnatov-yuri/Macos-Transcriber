@@ -9,7 +9,7 @@ name: E2E
 
 on:
   push:
-    branches: [main, "claude/**"]
+    branches: ["**"]
   workflow_dispatch:
     inputs:
       whisper:

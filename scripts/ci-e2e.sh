@@ -127,7 +127,10 @@ rc_reason() {
     if [ "$TIMED_OUT" -eq 1 ]; then
         printf 'timed out after %ss' "$STEP_SECS"
     else
-        printf 'exit %s after %ss, see logs/%s.{out,err}' "$RC" "$STEP_SECS" "$1"
+        # The last output line says why, in the CI log itself.
+        local why
+        why="$(cat "$LOGS/$1.out" "$LOGS/$1.err" 2> /dev/null | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-200)"
+        printf 'exit %s after %ss: %s (logs/%s.{out,err})' "$RC" "$STEP_SECS" "${why:-no output}" "$1"
     fi
 }
 

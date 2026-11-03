@@ -134,27 +134,20 @@ nonisolated struct AudioDecoder: Sendable {
         }
         var out: [Float] = []
         out.reserveCapacity(Int(Double(f.length) * Self.sampleRate / f.processingFormat.sampleRate) + 1024)
-        var reachedEOF = false
+        let feed = ConverterInput(reading: f, into: inBuf)
         var draining = true
         while draining {
             let outCap = AVAudioFrameCount(Double(inCap) * Self.sampleRate / f.processingFormat.sampleRate) + 512
             guard let outBuf = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: outCap) else { break }
             var convErr: NSError?
-            let status = converter.convert(to: outBuf, error: &convErr) { _, inStatus in
-                do {
-                    try f.read(into: inBuf)
-                    if inBuf.frameLength == 0 { reachedEOF = true; inStatus.pointee = .endOfStream; return nil }
-                    inStatus.pointee = .haveData
-                    return inBuf
-                } catch { reachedEOF = true; inStatus.pointee = .endOfStream; return nil }
-            }
+            let status = converter.convert(to: outBuf, error: &convErr) { _, inStatus in feed.next(inStatus) }
             if status == .error { throw DecoderError.readerFailed(convErr?.localizedDescription ?? "convert failed") }
             if let p = outBuf.floatChannelData?[0], outBuf.frameLength > 0 {
                 out.append(contentsOf: UnsafeBufferPointer(start: p, count: Int(outBuf.frameLength)))
             }
             // Keep draining until the converter itself says end-of-stream —
             // breaking on our EOF flag dropped its buffered filter tail.
-            if status == .endOfStream || (reachedEOF && outBuf.frameLength == 0) {
+            if status == .endOfStream || (feed.reachedEOF && outBuf.frameLength == 0) {
                 draining = false
             }
         }
@@ -327,5 +320,47 @@ nonisolated struct AudioDecoder: Sendable {
             case .readerFailed(let m):        return "AVAssetReader failed: \(m)"
             }
         }
+    }
+}
+
+/// Feeds `AVAudioConverter.convert(to:error:withInputFrom:)`. The SDK marks
+/// that input block `@Sendable`, but the converter calls it synchronously,
+/// on the calling thread, before `convert` returns, so the state it touches
+/// is never shared. This box says so once (`@unchecked Sendable`), instead
+/// of every call site capturing a `var` and a non-Sendable buffer, which the
+/// Swift 6 checker flags.
+nonisolated final class ConverterInput: @unchecked Sendable {
+    private let buffer: AVAudioPCMBuffer?
+    private let file: AVAudioFile?
+    private let whenDone: AVAudioConverterInputStatus
+    private var fed = false
+    /// The file ran out (or failed to read) while feeding.
+    private(set) var reachedEOF = false
+
+    /// One buffer, then `whenDone` (`.noDataNow` for a stream that goes on,
+    /// `.endOfStream` for the last one).
+    init(once buffer: AVAudioPCMBuffer, whenDone: AVAudioConverterInputStatus) {
+        self.buffer = buffer; self.file = nil; self.whenDone = whenDone
+    }
+
+    /// Reads `file` into `buffer` on every call until the file ends.
+    init(reading file: AVAudioFile, into buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer; self.file = file; self.whenDone = .endOfStream
+    }
+
+    func next(_ status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
+        guard let buffer else { status.pointee = .endOfStream; return nil }
+        if let file {
+            do {
+                try file.read(into: buffer)
+                if buffer.frameLength == 0 { reachedEOF = true; status.pointee = .endOfStream; return nil }
+                status.pointee = .haveData
+                return buffer
+            } catch { reachedEOF = true; status.pointee = .endOfStream; return nil }
+        }
+        if fed { status.pointee = whenDone; return nil }
+        fed = true
+        status.pointee = .haveData
+        return buffer
     }
 }

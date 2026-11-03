@@ -426,14 +426,9 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
         else { return [] }
         inBuf.frameLength = AVAudioFrameCount(samples.count)
         inBuf.floatChannelData![0].update(from: samples.baseAddress!, count: samples.count)
-        var fed = false
+        let feed = ConverterInput(once: inBuf, whenDone: .noDataNow)
         var err: NSError?
-        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in
-            if fed { outStatus.pointee = .noDataNow; return nil }
-            fed = true
-            outStatus.pointee = .haveData
-            return inBuf
-        }
+        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in feed.next(outStatus) }
         guard status != .error, let p = outBuf.floatChannelData?[0] else { return [] }
         return Array(UnsafeBufferPointer(start: p, count: Int(outBuf.frameLength)))
     }

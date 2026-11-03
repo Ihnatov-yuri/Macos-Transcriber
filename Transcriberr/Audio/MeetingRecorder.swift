@@ -735,14 +735,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         let outCap = AVAudioFrameCount(Double(samples.count) * 16_000 / io.nativeRate) + 64
         guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
                                             frameCapacity: outCap) else { return }
-        var fed = false
+        let feed = ConverterInput(once: inBuf, whenDone: .noDataNow)
         var err: NSError?
-        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in
-            if fed { outStatus.pointee = .noDataNow; return nil }
-            fed = true
-            outStatus.pointee = .haveData
-            return inBuf
-        }
+        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in feed.next(outStatus) }
         if status == .error {
             AppLog.error("meeting", "convert failed: \(err?.localizedDescription ?? "?")")
             return
@@ -799,14 +794,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         let outCap = AVAudioFrameCount(Double(samples.count) * 16_000 / io.nativeRate) + 64
         guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
                                             frameCapacity: outCap) else { return }
-        var fed = false
+        let feed = ConverterInput(once: inBuf, whenDone: .noDataNow)
         var err: NSError?
-        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in
-            if fed { outStatus.pointee = .noDataNow; return nil }
-            fed = true
-            outStatus.pointee = .haveData
-            return inBuf
-        }
+        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in feed.next(outStatus) }
         if status != .error, outBuf.frameLength > 0 { try? file.write(from: outBuf) }
     }
 

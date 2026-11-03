@@ -122,6 +122,12 @@ nonisolated struct AudioDecoder: Sendable {
               let converter = AVAudioConverter(from: f.processingFormat, to: target) else {
             throw DecoderError.readerFailed("AVAudioConverter setup failed")
         }
+        // Without this a 2 → 1 conversion REMAPS: it keeps the left channel
+        // and drops the right, so a stereo import with a voice panned right
+        // (one side of a call per channel) decoded as silence there. The
+        // AVAssetReader path above mixes down; this path must too. Stereo
+        // only: wider files with no channel layout are left to the remap.
+        if f.processingFormat.channelCount == 2 { converter.downmix = true }
         let inCap: AVAudioFrameCount = 1 << 16
         guard let inBuf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: inCap) else {
             throw DecoderError.readerFailed("input buffer alloc failed")

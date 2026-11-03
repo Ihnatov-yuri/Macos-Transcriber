@@ -170,8 +170,23 @@ enum RecordingFolderExporter {
         return out.sorted { $0.path < $1.path }
     }
 
-    private static func write(_ text: String, to url: URL) throws {
-        try text.write(to: url, atomically: true, encoding: .utf8)
+    /// The export folder is always fresh, so a file already at `url` was
+    /// written by this export: two outputs whose titles `safe()` makes
+    /// equal ("Notes" and "Notes" from two presets, "A/B" and "A:B"), or two
+    /// earlier versions stamped in the same second. The second one used to
+    /// replace the first, so the export silently lacked it. It gets a
+    /// number instead.
+    static func write(_ text: String, to url: URL) throws {
+        let fm = FileManager.default
+        var target = url
+        var n = 2
+        while fm.fileExists(atPath: target.path) {
+            let stem = url.deletingPathExtension().lastPathComponent
+            target = url.deletingLastPathComponent()
+                .appendingPathComponent("\(stem) \(n)").appendingPathExtension(url.pathExtension)
+            n += 1
+        }
+        try text.write(to: target, atomically: true, encoding: .utf8)
     }
 
     /// A file name from any title: no slashes or colons, not hidden, short.

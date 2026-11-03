@@ -128,7 +128,8 @@ private struct KBEnvelope<T: Encodable>: Encodable {
 
 enum KBRender {
     static func timestamp(_ seconds: Double) -> String {
-        let total = Int(seconds)
+        // Int(NaN) and Int(inf) trap: a corrupt duration must not crash `kb`.
+        let total = seconds.isFinite ? Int(max(0, seconds)) : 0
         let h = total / 3600
         let m = (total % 3600) / 60
         let s = total % 60

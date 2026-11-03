@@ -1720,19 +1720,23 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
                 race.attach(cont)
+                // The deadline goes first so the work can cancel it: a 0.3 s
+                // chunk used to leave a task asleep for the full two minutes.
+                let deadline = Task.detached(priority: .utility) {
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    guard !Task.isCancelled else { return }
+                    race.cancelWork()
+                    race.settle(.failure(ASRError.chunkTimeout))
+                }
                 let work = Task.detached(priority: .userInitiated) {
                     do {
                         race.settle(.success(try await op()))
                     } catch {
                         race.settle(.failure(error))
                     }
+                    deadline.cancel()
                 }
                 race.setWork(work)
-                Task.detached(priority: .utility) {
-                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    race.cancelWork()
-                    race.settle(.failure(ASRError.chunkTimeout))
-                }
             }
         } onCancel: {
             race.cancelWork()

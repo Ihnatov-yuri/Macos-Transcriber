@@ -198,7 +198,8 @@ nonisolated struct MeetingContext: Codable, Sendable, Equatable {
     /// say when they were made in the library, not when anyone spoke.
     static func recordedInterval(audioPath: String, createdAtMillis: Int64, duration: Double) -> DateInterval? {
         let name = URL(fileURLWithPath: audioPath).lastPathComponent
-        let length = max(duration, 1)
+        // max(NaN, 1) is NaN, and DateInterval traps on a NaN duration.
+        let length = duration.isFinite ? max(duration, 1) : 1
         if name.hasPrefix("meeting_") {
             let parts = name.split(separator: "_")
             guard parts.count >= 2, let ms = Double(parts[1]), ms > 1_000_000_000_000 else { return nil }

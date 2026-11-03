@@ -35,6 +35,15 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
     /// Named recordings tried with nothing learnable in them (too little
     /// clean speech), so "Learn from" does not offer them again.
     var triedFrom: [UUID]? = nil
+    /// Speakers named after this person only because the calendar invite
+    /// said they were there (PeopleNamer's last-invitee fill), as
+    /// `Hearing.key` ids. Nil in older files.
+    var invited: [String]? = nil
+    /// Speakers PeopleNamer named after this person on a voice match, as
+    /// `Hearing.key` ids. Kept apart from `matches`, which is a capped track
+    /// record that also logs speakers already carrying the name. Nil in
+    /// older files: there `matches` is the only evidence.
+    var autoNamed: [String]? = nil
 
     /// For a person saved before 5.0.0: the last training then. Named
     /// recordings up to it are taken as learned (their source was not kept).
@@ -233,6 +242,74 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
     static let minPerSample = 8
     static let maxMatches = 50
     static let maxCandidates = 20
+    /// How many invite fills and automatic namings are remembered.
+    static let maxNamed = 500
+
+    /// Who said a speaker of `recording` is this person: see `Provenance`.
+    func provenance(of key: String, in recording: UUID) -> Provenance {
+        if key.hasPrefix(RecordingRepository.taggedKeyPrefix) { return .typed }
+        let id = Hearing.key(recording, key)
+        if (settled ?? []).contains(id) { return .confirmed }
+        let match = (matches ?? []).last { $0.id == id }
+        if match == nil, (invited ?? []).contains(id) { return .invite }
+        if match != nil || (autoNamed ?? []).contains(id) { return .auto(score: match?.score) }
+        return .typed
+    }
+
+    /// The strongest provenance among a meeting's speakers carrying their
+    /// name. A meeting with no key (none should exist) reads as typed.
+    func provenance(in recording: UUID, keys: Set<String>) -> Provenance {
+        keys.map { provenance(of: $0, in: recording) }.max { $0.rank < $1.rank } ?? .typed
+    }
+}
+
+/// How a speaker of a recording came to carry a saved person's name.
+nonisolated enum Provenance: Equatable, Sendable {
+    /// The user answered Yes to "Was this them?".
+    case confirmed
+    /// Named by hand: a speaker renamed or a line tagged in the transcript,
+    /// or learned from with Remember this voice. Also what an automatic
+    /// naming from before 5.0 reads as once its match has aged out.
+    case typed
+    /// Named by a voice match; the score when the match is still logged.
+    case auto(score: Float?)
+    /// Named only because the calendar invite left one person unaccounted for.
+    case invite
+
+    /// Counted by People → Confirmed only.
+    var isConfirmed: Bool {
+        switch self {
+        case .confirmed, .typed: return true
+        case .auto, .invite: return false
+        }
+    }
+
+    var rank: Int {
+        switch self {
+        case .confirmed: return 3
+        case .typed: return 2
+        case .auto: return 1
+        case .invite: return 0
+        }
+    }
+
+    /// The small tag on a meeting row; nil for a name the user gave.
+    var tag: String? {
+        switch self {
+        case .confirmed, .typed: return nil
+        case .auto(let score): return score.map { String(format: "auto %.2f", $0) } ?? "auto"
+        case .invite: return "from invite"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .confirmed: return "You confirmed this speaker."
+        case .typed: return "Named by hand."
+        case .auto: return "Named by a voice match, not confirmed by you."
+        case .invite: return "Named only because the calendar invite left them as the one person unaccounted for."
+        }
+    }
 }
 
 nonisolated struct PeopleStore {
@@ -512,6 +589,22 @@ nonisolated struct PeopleStore {
         try write(people)
     }
 
+    /// Remembers who gave speakers their names (PeopleNamer): a voice match,
+    /// or the invite alone. One write for a whole recording.
+    func noteNamed(_ items: [(hearing: String, person: UUID, invited: Bool)]) throws {
+        guard !items.isEmpty else { return }
+        var people = try read()
+        for item in items {
+            guard let i = people.firstIndex(where: { $0.id == item.person }) else { continue }
+            var auto = (people[i].autoNamed ?? []).filter { $0 != item.hearing }
+            var invite = (people[i].invited ?? []).filter { $0 != item.hearing }
+            if item.invited { invite.append(item.hearing) } else { auto.append(item.hearing) }
+            people[i].autoNamed = Array(auto.suffix(Person.maxNamed))
+            people[i].invited = Array(invite.suffix(Person.maxNamed))
+        }
+        try write(people)
+    }
+
     /// A rebuilt voice replaces the person's samples (Improve on their page):
     /// one per item, in order, then trimmed to the cap. The caller has
     /// already checked that it scores better. `snapshot` is the person the
@@ -519,6 +612,16 @@ nonisolated struct PeopleStore {
     /// learning, Save voice) are kept after the items, not dropped. A voice
     /// model changed meanwhile writes nothing.
     func replaceVoice(of id: UUID, with items: [(recordingId: UUID?, earlier: Bool?, date: Date, print: Voiceprint)],
+                      basedOn snapshot: Person? = nil, now: Date = Date()) throws {
+        let full: [(recordingId: UUID?, earlier: Bool?, date: Date, print: Voiceprint, speakers: String?)] = items.map {
+            (recordingId: $0.recordingId, earlier: $0.earlier, date: $0.date, print: $0.print, speakers: nil)
+        }
+        try replaceVoice(of: id, samples: full, basedOn: snapshot, now: now)
+    }
+
+    /// The same, keeping each item's speaker keys on its sample, so a later
+    /// voice model switch rebuilds it from the same speakers.
+    func replaceVoice(of id: UUID, samples items: [(recordingId: UUID?, earlier: Bool?, date: Date, print: Voiceprint, speakers: String?)],
                       basedOn snapshot: Person? = nil, now: Date = Date()) throws {
         var people = try read()
         guard let i = people.firstIndex(where: { $0.id == id }), !items.isEmpty else { throw PeopleError.missing }
@@ -545,7 +648,8 @@ nonisolated struct PeopleStore {
                              embeddings: rebuilt.flatMap(\.print.embeddings) + added.flatMap(\.embeddings))
         p.samples = rebuilt.map {
             Person.Sample(id: UUID(), recordingId: $0.recordingId, date: $0.date,
-                          seconds: $0.print.seconds, count: $0.print.embeddings.count, earlier: $0.earlier)
+                          seconds: $0.print.seconds, count: $0.print.embeddings.count, earlier: $0.earlier,
+                          speakers: $0.speakers)
         } + added.map { a -> Person.Sample in
             // Count matches the embeddings actually taken, as trim expects.
             var s = a.sample
@@ -592,17 +696,26 @@ nonisolated struct PeopleStore {
 
     /// Joins `source` into `target`: one voice, one history. Returns the
     /// source's name, for the caller to rename in recordings. What was read
-    /// from the source's meetings goes; the target's page reads them again.
+    /// from the source's meetings, and what was marked done there, moves to
+    /// the target; the target's page reads those meetings again under its
+    /// name, carrying the done marks over.
+    /// `force` skips the voice check: the user was told the two voices
+    /// differ and said they are one person anyway.
     @discardableResult
-    func merge(_ source: UUID, into target: UUID, now: Date = Date()) throws -> String {
+    func merge(_ source: UUID, into target: UUID, force: Bool = false, now: Date = Date()) throws -> String {
         var people = try read()
         guard source != target,
               let si = people.firstIndex(where: { $0.id == source }),
               let ti = people.firstIndex(where: { $0.id == target }) else { throw PeopleError.missing }
         let s = people[si]
         var t = people[ti]
-        // Merge is for one person saved twice: never for two voices.
-        try gate(s.print, onto: t, among: people.filter { $0.id != s.id })
+        // Merge is for one person saved twice: never for two voices, unless
+        // the user insists.
+        if force {
+            guard s.print.model == t.print.model else { throw PeopleError.otherModel }
+        } else {
+            try gate(s.print, onto: t, among: people.filter { $0.id != s.id })
+        }
         // Sample by sample, so each stays forgettable after the merge.
         var start = 0
         for sample in s.allSamples {
@@ -627,11 +740,17 @@ nonisolated struct PeopleStore {
         t.dismissed = Array(Set((t.dismissed ?? []) + (s.dismissed ?? [])))
         t.settled = Array(Set((t.settled ?? []) + (s.settled ?? [])))
         t.triedFrom = Array(Set((t.triedFrom ?? []) + (s.triedFrom ?? [])))
+        if s.invited != nil || t.invited != nil {
+            t.invited = Array(Set((t.invited ?? []) + (s.invited ?? [])))
+        }
+        if s.autoNamed != nil || t.autoNamed != nil {
+            t.autoNamed = Array(Set((t.autoNamed ?? []) + (s.autoNamed ?? [])))
+        }
         t.updated = now
         people[ti] = t
         people.remove(at: si)
         try write(people)
-        briefs.delete(person: source)
+        briefs.move(from: source, to: target)
         return s.name
     }
 
@@ -738,10 +857,65 @@ nonisolated enum PeopleMatch {
         return out
     }
 
+    /// Which matches name a speaker, and the assessments to log. Two rules
+    /// on top of `assess`, which judges each speaker alone:
+    /// - A speaker already carrying a saved person's name keeps it: a match
+    ///   to someone else is only asked about on that person's page (seen:
+    ///   a name the user set overwritten by a later Find people).
+    /// - One speaker per person per recording. Two speakers named alike are
+    ///   folded into one by the repository, so a second match would merge
+    ///   two people's lines. The speaker already carrying the name keeps
+    ///   it (hand-tagged lines aside); otherwise the best score wins (ties:
+    ///   the lower key). The others are asked about instead.
+    /// Demoted matches stay in `found` as not accepted, so the log keeps
+    /// them as candidates.
+    static func plan(_ found: [String: Assessment],
+                     names: [String: String?]) -> (found: [String: Assessment], rename: [String: UUID]) {
+        func current(_ key: String) -> String? {
+            guard let n = names[key] ?? nil, !n.isEmpty else { return nil }
+            return n
+        }
+        func same(_ a: String, _ b: String) -> Bool { a.caseInsensitiveCompare(b) == .orderedSame }
+        var out = found
+        func demote(_ key: String) {
+            guard let a = out[key] else { return }
+            out[key] = Assessment(person: a.person, score: a.score, runnerUp: a.runnerUp, accepted: false)
+        }
+        for (key, a) in found where a.accepted {
+            if let name = current(key), !same(name, a.person.name) { demote(key) }
+        }
+        let accepted = out.filter { $0.value.accepted }
+        let byPerson = Dictionary(grouping: accepted.keys.sorted(), by: { accepted[$0]!.person.id })
+        for keys in byPerson.values {
+            guard let person = keys.first.flatMap({ accepted[$0]?.person }) else { continue }
+            // Hand-tagged lines are not a speaker of their own: naming the
+            // diarized speaker after them folds the lines in (the repository's
+            // same-name fold), as it should.
+            let holders = Set(names.keys.filter { k in
+                !k.hasPrefix(RecordingRepository.taggedKeyPrefix) && (current(k).map { same($0, person.name) } ?? false)
+            })
+            if !holders.isEmpty {
+                for k in keys where !holders.contains(k) { demote(k) }
+            } else {
+                let best = keys.max { a, b in
+                    let sa = accepted[a]!.score, sb = accepted[b]!.score
+                    return sa != sb ? sa < sb : a > b
+                }
+                for k in keys where k != best { demote(k) }
+            }
+        }
+        var rename: [String: UUID] = [:]
+        for (key, a) in out where a.accepted && current(key) != a.person.name {
+            rename[key] = a.person.id
+        }
+        return (out, rename)
+    }
+
     /// Speakers whose name may be set by a match: unnamed ones, and ones
     /// carrying a saved person's name (an earlier match, or a name typed
-    /// before the person was saved). A name typed by hand that is no
-    /// person's, and the user's own, are never touched.
+    /// before the person was saved), which `plan` lets only that same
+    /// person's match touch. A name typed by hand that is no person's, and
+    /// the user's own, are never touched.
     static func renamable(names: [String: String?], people: [Person], me: String) -> Set<String> {
         let known = Set(people.map { $0.name.lowercased() })
         return Set(names.compactMap { key, name in
@@ -901,6 +1075,13 @@ nonisolated enum PeopleVoice {
             .filter { $0.value.count >= ClusterVoice.minClips }
         let order = ranges.keys.sorted()
         let embeddings = try await PeopleEmbedder.embed(order.flatMap { ranges[$0]!.map { samples[$0] } }, model: model)
+        // One embedding per clip, or the slices below would run past the end
+        // (an embedder that dropped a clip): nothing is matched rather than
+        // a crash or clips filed under the wrong speaker.
+        guard embeddings.count == order.map({ ranges[$0]!.count }).reduce(0, +) else {
+            AppLog.warn("people", "embedder returned \(embeddings.count) embeddings for \(order.map({ ranges[$0]!.count }).reduce(0, +)) clips")
+            return [:]
+        }
         var out: [String: [[Float]]] = [:]
         var i = 0
         for key in order {
@@ -959,10 +1140,13 @@ enum PeopleNamer {
             // embeddings are not comparable with the voices now saved.
             guard VoiceModel.current == model else { return 0 }
             // A speaker already carrying the person's name is not asked about.
-            let found = PeopleMatch.assess(clusters, people: people, invited: PeopleMatch.invited(attendees, people: people))
+            let assessed = PeopleMatch.assess(clusters, people: people, invited: PeopleMatch.invited(attendees, people: people))
                 .filter { key, a in
                 a.accepted || (names[key] ?? nil)?.caseInsensitiveCompare(a.person.name) != .orderedSame
             }
+            // Never over a saved person's name, one speaker per person.
+            let planned = PeopleMatch.plan(assessed, names: names)
+            let found = planned.found
             // The recording may have been deleted or re-run meanwhile: then
             // these speaker keys may name different people now.
             guard recording.modelContext != nil, !recording.isDeleted,
@@ -983,14 +1167,21 @@ enum PeopleNamer {
             // People may have been renamed, merged or deleted while the audio
             // was read: name speakers after who they are now, by id.
             let now = Dictionary(store.load().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            let matches = found.compactMapValues { $0.accepted ? now[$0.person.id] : nil }
+            let matches = planned.rename.compactMapValues { now[$0] }
             do { try store.log(found, in: recording.id) } catch {
                 AppLog.warn("people", "match log not saved: \(error.localizedDescription)")
             }
             var named = 0
+            var provenance: [(hearing: String, person: UUID, invited: Bool)] = []
+            defer {
+                do { try store.noteNamed(provenance) } catch {
+                    AppLog.warn("people", "naming provenance not saved: \(error.localizedDescription)")
+                }
+            }
             for (key, person) in matches.sorted(by: { $0.key < $1.key })
             where (names[key] ?? nil) != person.name {
                 try repository.setSpeakerName(person.name, for: key, in: recording)
+                provenance.append((Person.Hearing.key(recording.id, key), person.id, false))
                 named += 1
             }
             // A small call where voices left exactly one speaker and exactly one
@@ -1004,6 +1195,7 @@ enum PeopleNamer {
                 if missing.count == 1, open.count == 1, let key = open.first {
                     let saved = now.values.first { MeetingContext.sameName($0.name, missing[0]) }
                     try repository.setSpeakerName(saved?.name ?? missing[0], for: key, in: recording)
+                    if let saved { provenance.append((Person.Hearing.key(recording.id, key), saved.id, true)) }
                     named += 1
                     AppLog.info("people", "named the one remaining speaker after the one remaining invitee")
                 }
@@ -1023,7 +1215,7 @@ enum PeopleNamer {
                     }
                 }
             }
-            AppLog.info("people", "\(matches.count) of \(keys.count) speakers matched a saved person, \(named) renamed, \(learned) learned from")
+            AppLog.info("people", "\(found.values.filter(\.accepted).count) of \(keys.count) speakers matched a saved person, \(named) renamed, \(learned) learned from")
             return named
         } catch {
             AppLog.warn("people", "matching skipped: \(error.localizedDescription)")

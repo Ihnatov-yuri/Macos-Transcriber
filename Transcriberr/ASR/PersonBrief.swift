@@ -88,10 +88,35 @@ nonisolated enum PersonBriefBuilder {
             : String(format: "%02d:%02d", t / 60, t % 60)
     }
 
-    /// What the cache is keyed on: the input and the prompt.
+    /// What the cache is keyed on: the input and the prompt, with the
+    /// person's own name taken out of both, so renaming them (which renames
+    /// every line they said) does not read every meeting again. What others
+    /// said, and their names, still count.
     static func key(transcript: String, name: String) -> String {
+        let digest = SHA256.hash(data: Data("\(promptVersion)|v2|\(anonymized(transcript, name: name))".utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The key before 5.x keyed on the name too. Read as fresh still, so
+    /// briefs cached under it are not all read again; a rename re-reads
+    /// them once, and they are saved under `key` from then on.
+    static func legacyKey(transcript: String, name: String) -> String {
         let digest = SHA256.hash(data: Data("\(promptVersion)|\(name)|\(transcript)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The transcript with the person's speaker label on their own lines
+    /// ("[01:02] Kate: …") replaced by a placeholder.
+    static func anonymized(_ transcript: String, name: String) -> String {
+        let label = " \(name):"
+        return transcript.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            guard line.hasPrefix("["), let close = line.firstIndex(of: "]") else { return String(line) }
+            let rest = line[line.index(after: close)...]
+            guard rest.count >= label.count,
+                  String(rest.prefix(label.count)).caseInsensitiveCompare(label) == .orderedSame
+            else { return String(line) }
+            return String(line[...close]) + " \u{1}:" + String(rest.dropFirst(label.count))
+        }.joined(separator: "\n")
     }
 
     /// One read per section, merged. `complete` is false when a section
@@ -409,6 +434,29 @@ nonisolated struct PersonBriefStore {
         list.append(entry)
         file.people[person] = list
         try write(file)
+    }
+
+    /// A merge: what was read from the source's meetings and what was
+    /// marked done there become the target's. A meeting both were read
+    /// from keeps the target's read; done marks of both are kept (item keys
+    /// name the recording and the text, not the person).
+    func move(from source: UUID, to target: UUID) {
+        var file = read()
+        let moving = file.people.removeValue(forKey: source) ?? []
+        let movingClosed = file.closed?.removeValue(forKey: source) ?? []
+        guard !moving.isEmpty || !movingClosed.isEmpty else { return }
+        let have = Set((file.people[target] ?? []).map(\.recordingId))
+        // Kept under no key: the target's name is on those lines now, so a
+        // refresh reads them again and carries the done marks onto the new read.
+        file.people[target, default: []] += moving.filter { !have.contains($0.recordingId) }.map {
+            Entry(recordingId: $0.recordingId, key: "", built: $0.built, brief: $0.brief)
+        }
+        if !movingClosed.isEmpty {
+            var closed = file.closed ?? [:]
+            closed[target] = Array(Set((closed[target] ?? []) + movingClosed))
+            file.closed = closed
+        }
+        try? write(file)
     }
 
     func delete(person: UUID) {

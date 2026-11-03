@@ -14,6 +14,9 @@ struct PeopleView: View {
     @State private var opened: (recording: Recording, at: Double)?
     /// The user's own print, read once: every row compares against it.
     @State private var mine = PeopleEmbedder.myVoice()
+    /// Each row's confidence, kept while nothing it is computed from
+    /// changes: the list body runs on every keystroke in Search.
+    @State private var confidenceCache = ConfidenceCache()
 
     enum Selection: Hashable { case overview, you, person(UUID) }
     enum Sort: String, CaseIterable { case name = "Name", confidence = "Confidence", toConfirm = "To confirm" }
@@ -103,7 +106,11 @@ struct PeopleView: View {
         let q = people.count > 3 ? query.trimmingCharacters(in: .whitespaces) : ""
         let rows = people
             .filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) }
-            .map { (person: $0, confidence: PeopleConfidence.assess($0, others: others(than: $0), unmatched: ["you"])) }
+            .map { p -> (person: Person, confidence: VoiceConfidence) in
+                (person: p, confidence: confidenceCache.value(for: p, people: people, mine: mine) {
+                    PeopleConfidence.assess(p, others: others(than: p), unmatched: ["you"])
+                })
+            }
         switch sort {
         case .name: return rows
         case .confidence: return rows.sorted { $0.confidence.score < $1.confidence.score }
@@ -209,6 +216,41 @@ struct PeopleView: View {
     }
 }
 
+/// Row confidences, by person. A class held in state, so filling it from
+/// the body does not count as a state change. An entry stands while the
+/// person, everyone else's voices and the user's own print are as they were.
+final class ConfidenceCache {
+    struct Key: Equatable {
+        let updated: Date
+        let sources: Int
+        let matches: [Person.Hearing]?
+        /// Everyone else: id, when their voice changed, and their name (the
+        /// closest one is named in the detail).
+        let others: [String]
+        let mine: Date?
+        let mineCount: Int
+        let mineSeconds: Double
+        let model: String
+    }
+    private var entries: [UUID: (key: Key, value: VoiceConfidence)] = [:]
+
+    static func key(for person: Person, people: [Person], mine: Voiceprint?) -> Key {
+        Key(updated: person.updated, sources: person.sources, matches: person.matches,
+            others: people.filter { $0.id != person.id }
+                .map { "\($0.id.uuidString)|\($0.updated.timeIntervalSince1970)|\($0.print.model)|\($0.name)" }.sorted(),
+            mine: mine?.created, mineCount: mine?.embeddings.count ?? 0, mineSeconds: mine?.seconds ?? 0,
+            model: person.print.model)
+    }
+
+    func value(for person: Person, people: [Person], mine: Voiceprint?, compute: () -> VoiceConfidence) -> VoiceConfidence {
+        let key = Self.key(for: person, people: people, mine: mine)
+        if let hit = entries[person.id], hit.key == key { return hit.value }
+        let value = compute()
+        entries[person.id] = (key, value)
+        return value
+    }
+}
+
 /// The confidence level as a word with a small square in its colour.
 struct LevelMark: View {
     let level: VoiceConfidence.Level
@@ -241,9 +283,15 @@ struct PeopleOverview: View {
     struct Row: Identifiable {
         let person: Person
         let meetings: [PersonMeeting]
+        /// The last `recentDays`' meetings the user was in too.
         let recent: [PersonMeeting]
         var id: UUID { person.id }
     }
+    /// What the last background read found, kept so Confirmed only can
+    /// re-filter without reading again.
+    @State private var data = PeopleOverviewData()
+    @State private var reloading: Task<Void, Never>?
+    @AppStorage("people.confirmedOnly") private var confirmedOnly = false
     @State private var rows: [Row] = []
     @State private var commitments: [(person: Person, row: PersonBriefView.Row, id: String)] = []
     @State private var named: [VoiceSuggestions.Named] = []
@@ -299,7 +347,10 @@ struct PeopleOverview: View {
         }
         .onChange(of: scan.isRunning) { if !scan.isRunning { reload() } }
         .onChange(of: suggest.busy) { if suggest.busy == nil { reload() } }
-        .onChange(of: briefs.revision) { reload() }
+        // A brief saved changes only the commitments: no library read.
+        .onChange(of: briefs.revision) { buildRows() }
+        .onChange(of: confirmedOnly) { buildRows() }
+        .onDisappear { reloading?.cancel() }
     }
 
     private var summary: String {
@@ -410,10 +461,13 @@ struct PeopleOverview: View {
 
     private var togetherCard: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("Most meetings together, last \(Int(Self.recentDays)) days").cardTitle()
+            Text("Most meetings with you, last \(Int(Self.recentDays)) days").cardTitle()
             let top = rows.filter { !$0.recent.isEmpty }.sorted { $0.recent.count > $1.recent.count }.prefix(8)
+            Text("Recordings you were in too (your microphone, or a line under your name)\(confirmedOnly ? ", where you named or confirmed them" : ""). Talk is the time their lines cover, and their words.")
+                .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                .fixedSize(horizontal: false, vertical: true)
             if top.isEmpty {
-                Text("No saved person spoke in a recording in the last \(Int(Self.recentDays)) days.")
+                Text("No saved person spoke in a recording with you in the last \(Int(Self.recentDays)) days.")
                     .font(AppFont.text(13)).foregroundStyle(AppColor.ink2)
             }
             let most = Double(top.first?.recent.count ?? 1)
@@ -428,8 +482,8 @@ struct PeopleOverview: View {
                                 .frame(maxHeight: .infinity, alignment: .center)
                         }
                         .frame(height: 14)
-                        Text("\(r.recent.count) · \(PersonPage.duration(r.recent.map(\.seconds).reduce(0, +)))")
-                            .uiLabel(9, color: AppColor.ink2).frame(width: 90, alignment: .trailing)
+                        Text("\(r.recent.count) · \(PersonMeetings.talk(r.recent))")
+                            .uiLabel(9, color: AppColor.ink2).lineLimit(1).fixedSize()
                     }
                     .contentShape(Rectangle())
                 }
@@ -502,30 +556,39 @@ struct PeopleOverview: View {
         .litGlass()
     }
 
+    /// One fetch of every named line, on a background context of the same
+    /// store (it stalled the window with a large library), then the rows on
+    /// the main actor from plain values. A newer reload replaces one running.
     private func reload() {
-        let since = Date().addingTimeInterval(-Self.recentDays * 86_400)
-        // One fetch of every named line and one read of the brief file,
-        // however many people are saved.
-        let byName = (try? container.repository.segmentsByNamedSpeaker()) ?? [:]
-        rows = people.map { p in
-            let m = PersonMeetings.group(byName[p.name.lowercased()] ?? [])
-            return Row(person: p, meetings: m, recent: m.filter { $0.date >= since })
-        }
-        // Suggestions: hand-typed names without a voice, recurring unnamed voices.
+        reloading?.cancel()
+        let store = container.modelContainer
         let me = TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))
-        named = VoiceSuggestions.named(
-            byName.values.flatMap { $0 }.compactMap { s in
-                guard let n = s.speakerName, let r = s.recording, !r.isDeleted else { return nil }
-                return (n, r.id, max(0, s.endSeconds - s.startSeconds))
-            },
-            saved: Set(people.map { $0.name.lowercased() }), me: me)
-        let unknown = UnknownVoiceStore.shared.load()
-        scanned = !unknown.entries.isEmpty
-        groups = VoiceSuggestions.groups(unknown, people: people.map { (name: $0.name, centroid: $0.print.centroid) },
-                                         me: PeopleEmbedder.myVoice()?.centroid)
-        titles = Dictionary(groups.flatMap(\.members).compactMap { m in
-            (try? container.repository.get(id: m.recordingId)).map { (m.recordingId, $0.title) }
-        }, uniquingKeysWith: { a, _ in a })
+        let list = people.map { (id: $0.id, name: $0.name, centroid: $0.print.centroid) }
+        reloading = Task {
+            let read = await Task.detached(priority: .userInitiated) {
+                PeopleOverviewData.load(people: list, me: me, repository: RecordingRepository(context: ModelContext(store)))
+            }.value
+            if Task.isCancelled { return }
+            data = read
+            named = read.named
+            groups = read.groups
+            titles = read.titles
+            scanned = read.scanned
+            buildRows()
+        }
+    }
+
+    /// Rows and commitments from the last read: per person, and the recent
+    /// meetings with the user (confirmed ones only when asked).
+    private func buildRows() {
+        let since = Date().addingTimeInterval(-Self.recentDays * 86_400)
+        rows = people.map { p in
+            let m = data.meetings[p.id] ?? []
+            return Row(person: p, meetings: m, recent: m.filter { meeting in
+                meeting.date >= since && data.withMe.contains(meeting.id)
+                    && (!confirmedOnly || p.provenance(in: meeting.id, keys: meeting.keys).isConfirmed)
+            })
+        }
         let all = PersonBriefStore.shared.all()
         commitments = rows.flatMap { r in
             PersonBriefView.combine(all.entries[r.person.id] ?? [], meetings: r.meetings,

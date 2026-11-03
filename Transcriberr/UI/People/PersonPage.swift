@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import AppKit
 
 /// Training in flight, per person and app-wide: a page rebuilt by
@@ -22,8 +23,14 @@ struct PersonPage: View {
 
     @State private var meetings: [PersonMeeting] = []
     @State private var speech: [MeetingSpeech] = []
-    @State private var together: (them: Double, you: Double, rest: Double)?
-    @State private var candidates: [(hearing: Person.Hearing, title: String, date: Date)] = []
+    @State private var candidates: [PersonPageData.Candidate] = []
+    /// Stats from confirmed and hand-named meetings only (People-wide).
+    @AppStorage("people.confirmedOnly") private var confirmedOnly = false
+    @State private var showDone = false
+    /// A rename to a name someone saved has: offered as a merge into them.
+    @State private var renameTarget: Person?
+    /// A merge the voice check refused: offered again, past the check.
+    @State private var forceMerge: (target: Person, reason: String)?
     @State private var brief = PersonBriefView()
     @AppStorage("people.briefPeriod") private var briefPeriodRaw = PersonBriefView.Period.lastMeeting.rawValue
     private var briefPeriod: PersonBriefView.Period { .init(rawValue: briefPeriodRaw) ?? .lastMeeting }
@@ -52,6 +59,23 @@ struct PersonPage: View {
     }
 
     private var busy: String? { training.busy[person.id] }
+
+    /// How each meeting's speaker came to carry their name.
+    private func provenance(_ m: PersonMeeting) -> Provenance { person.provenance(in: m.id, keys: m.keys) }
+
+    /// The meetings the numbers stand on: all, or with Confirmed only the
+    /// ones the user named or confirmed.
+    private var statsMeetings: [PersonMeeting] {
+        confirmedOnly ? meetings.filter { provenance($0).isConfirmed } : meetings
+    }
+    private var statsSpeech: [MeetingSpeech] {
+        guard confirmedOnly else { return speech }
+        let ids = Set(statsMeetings.map(\.id))
+        return speech.filter { ids.contains($0.recordingId) }
+    }
+    private var together: (them: Double, you: Double, rest: Double)? {
+        Self.together(statsSpeech, me: TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName")))
+    }
     private var confidence: VoiceConfidence { PeopleConfidence.assess(person, others: others, unmatched: ["you"]) }
 
     /// Named recordings their voice has not been learned from or tried in.
@@ -80,7 +104,7 @@ struct PersonPage: View {
                     confidenceCard
                     samplesCard
                     if !candidates.isEmpty { candidatesCard }
-                    if !speech.isEmpty { speechCard }
+                    if !statsSpeech.isEmpty { speechCard }
                     briefCard
                     meetingsCard
                 }
@@ -100,7 +124,7 @@ struct PersonPage: View {
                 if Task.isCancelled { return }
             }
             loadedFor = person.id
-            reload()
+            await reload()
         }
         .onChange(of: runner.revision) { reloadBrief() }
         .sheet(isPresented: $recordingReading) {
@@ -118,6 +142,20 @@ struct PersonPage: View {
             Button("Delete", role: .destructive) { delete() }
         } message: {
             Text("The voice and what was read from their meetings are removed from this Mac. Names already in recordings stay.")
+        }
+        .confirmationDialog("\(renameTarget?.name ?? "") is already saved. Merge \(person.name) into \(renameTarget?.name ?? "")?",
+                            isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } }),
+                            titleVisibility: .visible, presenting: renameTarget) { target in
+            Button("Merge") { merge(into: target) }
+        } message: { target in
+            Text("Two people cannot share a name. Merging makes them one: \(person.name)'s voice samples and history join \(target.name)'s, and recordings naming \(person.name) name \(target.name).")
+        }
+        .confirmationDialog("Merge anyway?",
+                            isPresented: Binding(get: { forceMerge != nil }, set: { if !$0 { forceMerge = nil } }),
+                            titleVisibility: .visible, presenting: forceMerge?.target) { target in
+            Button("Merge anyway", role: .destructive) { merge(into: target, force: true) }
+        } message: { target in
+            Text("\(forceMerge?.reason ?? "") Merge only if \(person.name) and \(target.name) really are one person: a voice with someone else in it names the wrong speakers. A sample that does not belong can be forgotten afterwards.")
         }
         .confirmationDialog("Merge \(person.name) into \(merging?.name ?? "")?",
                             isPresented: Binding(get: { merging != nil }, set: { if !$0 { merging = nil } }),
@@ -169,9 +207,10 @@ struct PersonPage: View {
 
     private var summary: String {
         guard let last = meetings.first else { return "Not heard in a recording yet." }
-        let talk = meetings.map(\.seconds).reduce(0, +)
-        let count = meetings.count == 1 ? "1 recording" : "\(meetings.count) recordings"
-        return "Heard in \(count), \(Self.duration(talk)) of talk. Last heard \(last.date.formatted(date: .abbreviated, time: .omitted))."
+        let shown = statsMeetings
+        let count = shown.count == 1 ? "1 recording" : "\(shown.count) recordings"
+        let scope = confirmedOnly ? " confirmed (of \(meetings.count))" : ""
+        return "Heard in \(count)\(scope), \(PersonMeetings.talk(shown)) in all. Last heard \(last.date.formatted(date: .abbreviated, time: .omitted))."
     }
 
     // MARK: Confidence and training
@@ -370,12 +409,18 @@ struct PersonPage: View {
     // MARK: How they speak
 
     private var speechCard: some View {
-        VStack(alignment: .leading, spacing: AppMetric.m) {
+        let speech = statsSpeech
+        let window = min(speech.count, SpeechMeasure.window)
+        return VStack(alignment: .leading, spacing: AppMetric.m) {
             Text("How they speak").cardTitle()
-            Text("Each number is the average of their last \(min(speech.count, SpeechMeasure.window) == 1 ? "meeting" : "\(min(speech.count, SpeechMeasure.window)) meetings"), from the transcripts only.")
+            Text("Each number is the average of their last \(window == 1 ? "meeting" : "\(window) meetings")\(confirmedOnly ? " you confirmed" : ""), from the transcripts only. Talk share counts words, not seconds.")
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                .fixedSize(horizontal: false, vertical: true)
             if let t = together {
-                Text("In meetings with you").uiLabel(11, color: AppColor.ink2)
+                let joint = speech.filter { s in
+                    s.others.keys.contains { $0.caseInsensitiveCompare(TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))) == .orderedSame }
+                }.count
+                Text("Share of the words, in all \(joint == 1 ? "1 meeting" : "\(joint) meetings") with you").uiLabel(11, color: AppColor.ink2)
                 // The accent is the user's own figure (Lit Field §10).
                 ShareBar(parts: [("You", t.you, AppColor.accent),
                                  (person.name, t.them, AppColor.ink),
@@ -386,7 +431,6 @@ struct PersonPage: View {
                     MetricTile(metric: m, meetings: speech)
                 }
             }
-            weeksStrip
         }
         .padding(AppMetric.l)
         .litGlass()
@@ -397,7 +441,7 @@ struct PersonPage: View {
         let cal = Calendar.current
         let thisWeek = cal.dateInterval(of: .weekOfYear, for: Date())?.start ?? Date()
         let weeks = (0..<8).reversed().map { cal.date(byAdding: .weekOfYear, value: -$0, to: thisWeek) ?? thisWeek }
-        let counts = weeks.map { w in meetings.filter { $0.date >= w && $0.date < w.addingTimeInterval(7 * 86_400) }.count }
+        let counts = weeks.map { w in statsMeetings.filter { $0.date >= w && $0.date < w.addingTimeInterval(7 * 86_400) }.count }
         let most = Double(max(1, counts.max() ?? 1))
         return VStack(alignment: .leading, spacing: 6) {
             Text("Meetings per week, last 8 weeks").uiLabel(11, color: AppColor.ink2)
@@ -506,10 +550,35 @@ struct PersonPage: View {
                 if brief.isEmpty {
                     briefNote("Nothing to note from \(person.name) \(period.phrase).")
                 }
-                if brief.closedCount > 0 {
+                if !brief.closedRows.isEmpty {
+                    doneList
+                } else if brief.closedCount > 0 {
                     Text("\(brief.closedCount) marked done.").font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
                 }
             }
+        }
+    }
+
+    /// What was marked done in the period, each with Undo.
+    private var doneList: some View {
+        DisclosureGroup(isExpanded: $showDone) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(brief.closedRows) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: AppMetric.m) {
+                        Text(row.item.text).font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                            .strikethrough(true, color: AppColor.ink4)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: AppMetric.m)
+                        Text(row.meeting.date.formatted(date: .abbreviated, time: .omitted)).uiLabel(9, color: AppColor.ink3)
+                        TapButton { reopen(row) } label: { Text("Undo").uiLabel(9, color: AppColor.accentOnLight) }
+                            .help("Show it again as open.")
+                    }
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            Text(brief.closedCount == 1 ? "1 done" : "\(brief.closedCount) done").uiLabel(10, color: AppColor.ink2)
         }
     }
 
@@ -621,26 +690,48 @@ struct PersonPage: View {
 
     private var meetingsCard: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("Meetings").cardTitle()
+            HStack(alignment: .firstTextBaseline, spacing: AppMetric.s) {
+                Text("Meetings").cardTitle()
+                Spacer()
+                if meetings.contains(where: { !provenance($0).isConfirmed }) {
+                    LitChip(label: "All", active: !confirmedOnly) { confirmedOnly = false }
+                    LitChip(label: "Confirmed only", active: confirmedOnly) { confirmedOnly = true }
+                        .help("Count only meetings where you named or confirmed \(person.name), not ones a voice match or a calendar invite named. Applies on every person page and the overview.")
+                }
+            }
+            if !meetings.isEmpty {
+                weeksStrip
+                HairlineSoft()
+            }
             if meetings.isEmpty {
                 Text("No recording names \(person.name) yet. Find people on the overview, or on a recording in Library, names them in older ones.")
                     .font(AppFont.text(13)).foregroundStyle(AppColor.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(meetings) { m in
+                let origin = provenance(m)
                 TapButton { openMeeting(m, at: m.firstLine) } label: {
                     HStack(alignment: .top, spacing: AppMetric.m) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(m.title).font(AppFont.text(14)).foregroundStyle(AppColor.ink).lineLimit(1)
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(m.title).font(AppFont.text(14)).foregroundStyle(AppColor.ink).lineLimit(1)
+                                if let tag = origin.tag {
+                                    Text(tag).uiLabel(8, color: AppColor.ink3)
+                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                        .overlay(Capsule().stroke(AppColor.hair))
+                                        .help(origin.help)
+                                }
+                            }
                             Text("“\(m.lastSaid)”").font(AppFont.text(12)).foregroundStyle(AppColor.ink3).lineLimit(1)
                         }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 3) {
-                            Text(Self.duration(m.seconds)).font(AppFont.display(14, weight: .semibold))
+                            Text(PersonMeetings.talk(seconds: m.seconds, words: m.words)).font(AppFont.display(13, weight: .semibold))
                                 .monospacedDigit().foregroundStyle(AppColor.ink)
                             Text(m.date.formatted(date: .abbreviated, time: .omitted)).uiLabel(9, color: AppColor.ink3)
                         }
                     }
+                    .opacity(confirmedOnly && !origin.isConfirmed ? 0.55 : 1)
                     .padding(.vertical, 8)
                     .contentShape(Rectangle())
                 }
@@ -653,18 +744,27 @@ struct PersonPage: View {
 
     // MARK: Loading
 
-    private func reload() {
-        meetings = PersonMeetings.load(person.name, repository: container.repository)
-        candidates = (person.candidates ?? []).reversed().compactMap { h in
-            guard let rec = try? container.repository.get(id: h.recordingId), !rec.isDeleted else { return nil }
-            return (h, rec.title, Date(timeIntervalSince1970: TimeInterval(rec.createdAtMillis) / 1000))
-        }
-        speech = SpeechHistory.load(person.name, repository: container.repository, meetings: meetings).meetings
-        together = Self.together(speech, me: TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName")))
+    /// Read on a background context of the same store, the way the You page
+    /// measures: a person heard in many meetings stalled the window while
+    /// their lines were fetched and measured. Only plain values cross back,
+    /// and a reload superseded meanwhile (the task is cancelled) is dropped.
+    private func reload() async {
+        let store = container.modelContainer, name = person.name
+        let me = TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))
+        let asked = person.candidates ?? []
+        let data = await Task.detached(priority: .userInitiated) {
+            PersonPageData.load(name: name, me: me, candidates: asked,
+                                repository: RecordingRepository(context: ModelContext(store)))
+        }.value
+        if Task.isCancelled { return }
+        meetings = data.meetings
+        candidates = data.candidates
+        speech = data.speech
         reloadBrief()
     }
 
-    /// Word split over the meetings the user was also named in.
+    /// Word split over the meetings the user was in (their name on a line,
+    /// or the microphone track's lines, which `SpeechHistory` labels with it).
     static func together(_ speech: [MeetingSpeech], me: String) -> (them: Double, you: Double, rest: Double)? {
         var them = 0.0, you = 0.0, rest = 0.0
         for s in speech {
@@ -753,7 +853,10 @@ struct PersonPage: View {
             for (i, m) in todo.enumerated() {
                 training.busy[id] = "Listening to \(i + 1) of \(todo.count)…"
                 guard let rec = try? container.repository.get(id: m.id), !rec.isDeleted else { continue }
-                let keys = m.keys.filter { !$0.hasPrefix(RecordingRepository.taggedKeyPrefix) }.sorted()
+                // One learn per meeting: it reads every key carrying their
+                // name as one speaker, so learning each key again read the
+                // same speech twice. A diarized key first, it has the most.
+                let keys = Array(m.keys.filter { !$0.hasPrefix(RecordingRepository.taggedKeyPrefix) }.sorted().prefix(1))
                 let before = PeopleVoice.signature(rec)
                 var prints: [Voiceprint] = []
                 var unlearnable = false, failure: Error?, refusedHere = 0
@@ -832,16 +935,42 @@ struct PersonPage: View {
         } catch { pageError = error.localizedDescription }
     }
 
+    private func reopen(_ row: PersonBriefView.Row) {
+        do {
+            try PersonBriefStore.shared.setClosed(row.id, false, for: person.id)
+            reloadBrief()
+        } catch { pageError = error.localizedDescription }
+    }
+
     private func rename() {
         do { try PeopleActions.rename(person, to: draftName, container: container); pageError = nil }
+        catch PeopleStore.PeopleError.nameTaken(let name) {
+            // Two people cannot share a name: the way on is a merge.
+            if let target = people.first(where: { $0.id != person.id && $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+                pageError = nil
+                // After the rename sheet has gone: one presentation at a time.
+                afterDismissal { renameTarget = target }
+            } else {
+                pageError = PeopleStore.PeopleError.nameTaken(name).localizedDescription
+            }
+        }
         catch { pageError = error.localizedDescription }
     }
 
-    private func merge(into target: Person) {
+    private func merge(into target: Person, force: Bool = false) {
         PersonBriefRunner.shared.cancel(person: person.id)
         do {
-            try PeopleActions.merge(person, into: target, container: container)
+            try PeopleActions.merge(person, into: target, force: force, container: container)
+            pageError = nil
             container.requestPeoplePane(person: target.id)
+        } catch let error as PeopleStore.PeopleError {
+            if case .notSamePerson(_, _, _) = error, !force {
+                // The voices differ: say so and let the user decide.
+                let reason = error.localizedDescription
+                afterDismissal { forceMerge = (target, reason) }
+            } else {
+                pageError = error.localizedDescription
+            }
         } catch { pageError = error.localizedDescription }
     }
 
@@ -850,15 +979,19 @@ struct PersonPage: View {
         do { try PeopleStore.shared.delete(person.id) } catch { pageError = error.localizedDescription }
     }
 
+    /// Presents the next dialog once the sheet or dialog just answered has
+    /// closed: macOS drops a presentation started while another is closing.
+    private func afterDismissal(_ present: @escaping @MainActor () -> Void) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            present()
+        }
+    }
+
     private func done(_ text: String, for id: UUID) { training.notes[id] = (text, false) }
     private func show(_ error: Error, for id: UUID) { training.notes[id] = (error.localizedDescription, true) }
 
-    static func duration(_ seconds: Double) -> String {
-        let s = Int(seconds.rounded())
-        if s < 60 { return "\(s) s" }
-        if s < 3600 { return "\(s / 60) min" }
-        return String(format: "%d h %02d min", s / 3600, (s / 60) % 60)
-    }
+    static func duration(_ seconds: Double) -> String { PersonMeetings.duration(seconds) }
 }
 
 /// One factor of the voice confidence: its name, a bar, and why.

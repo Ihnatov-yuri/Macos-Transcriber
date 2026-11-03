@@ -136,7 +136,10 @@ struct DictationView: View {
                      action: micOK ? nil : ("Allow", {
                         // The completion form calls back on a private queue; a
                         // main-actor closure there traps in Swift 6.
-                        Task {
+                        // `_ =`: a bare `Task {}` as the closure's only expression
+                        // made it return a Task where `() -> Void` is expected,
+                        // which crashed the Swift 6.3 compiler.
+                        _ = Task {
                             _ = await AVCaptureDevice.requestAccess(for: .audio)
                             micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
                         }

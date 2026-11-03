@@ -380,7 +380,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         if shared.held {
             ioQueue.sync { io.voiceMic = shared.unit; io.voiceMicBorrowed = true }
             AppLog.info("meeting", "mic shared with the Transcriberr Microphone")
-        } else if RecorderSettings.shared.meetingEchoFilter {
+        } else if RecorderSettings.meetingEchoFilterNow {
             let route = VoiceProcessedMic.outputRoute()
             if route.headphones {
                 AppLog.info("meeting", "echo filter off — output '\(route.name)' is headphones")
@@ -390,7 +390,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
                 // from here on gets the raw mic, never a second unit.
                 VirtualMicrophone.shared.recorderVoiceProcessing(true)
                 let vp = VoiceProcessedMic()
-                if vp.start(inputUID: RecorderSettings.shared.inputDeviceUID) {
+                if vp.start(inputUID: RecorderSettings.inputDeviceUIDNow) {
                     ioQueue.sync { io.voiceMic = vp }
                 } else {
                     VirtualMicrophone.shared.recorderVoiceProcessing(false)
@@ -416,7 +416,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         // recorded as the far side too. With it off, nothing of ours feeds
         // anything, and sound played from Transcriberr during a call (a clip
         // shared with the others) stays in the call track as before.
-        let excludeOwn = RecorderSettings.shared.virtualMicrophone || VirtualMicrophone.shared.isActive
+        let excludeOwn = RecorderSettings.virtualMicrophoneNow || VirtualMicrophone.shared.isActive
         let excluded = excludeOwn ? VirtualMicrophone.ownProcessObject().map { [$0] } ?? [] : []
         let desc = tapChannels == 1
             ? CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
@@ -856,7 +856,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// when CoreAudio reports no default input; `defaultInputUID` then
     /// produces the error.
     private func selectedInputDevice() -> AudioInputDevices.Device? {
-        AudioInputDevices.effective(uid: RecorderSettings.shared.inputDeviceUID)
+        AudioInputDevices.effective(uid: RecorderSettings.inputDeviceUIDNow)
     }
 
     private func defaultInputUID() throws -> String {

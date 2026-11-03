@@ -657,7 +657,7 @@ nonisolated final class DictationController: @unchecked Sendable {
                 defer { self.previewInFlight = false }
                 let backend = self.factory.backend(for: self.settings.engine)
                 guard await backend.isReady else { continue }
-                let gained = UtteranceCapture.applyGain(samples, sensitivity: RecorderSettings.shared.micSensitivity)
+                let gained = UtteranceCapture.applyGain(samples, sensitivity: RecorderSettings.micSensitivityNow)
                 let languages = self.settings.languages
                 // Interactive: never queued behind a background job's Gemma
                 // call (see InferenceGate).
@@ -857,7 +857,7 @@ nonisolated final class DictationController: @unchecked Sendable {
     @MainActor
     private func processUtterance(_ raw: [Float], final: Bool, passage: Passage) async {
         let seconds = Double(raw.count) / UtteranceCapture.sampleRate
-        let samples = UtteranceCapture.applyGain(raw, sensitivity: RecorderSettings.shared.micSensitivity)
+        let samples = UtteranceCapture.applyGain(raw, sensitivity: RecorderSettings.micSensitivityNow)
 
         // Empty / silent passes end quietly.
         guard samples.count >= 8_000, Self.hasSpeech(samples) else {

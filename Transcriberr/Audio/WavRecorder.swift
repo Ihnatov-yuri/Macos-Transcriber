@@ -105,11 +105,13 @@ nonisolated final class WavRecorder: @unchecked Sendable {
 
     // MARK: - Public API
 
-    private var isStarting = false
+    /// Claimed and released on the cooperative pool (`start()` is
+    /// `@concurrent`) and read on main by `isCapturing`: a plain Bool raced.
+    private let starting = Mutex(false)
 
     /// A capture is starting or has a file open. Launch-time crash repair
     /// (`WavRepair`) must not run while this is true.
-    var isCapturing: Bool { isStarting || openFileURL != nil }
+    var isCapturing: Bool { starting.withLock { $0 } || openFileURL != nil }
 
     /// Nonisolated on purpose: voice-processing setup and `engine.start()`
     /// block for up to seconds and must not sit on the main thread. The
@@ -128,9 +130,9 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             return false
         }
         if alreadyRecording { return }
-        guard !isStarting else { return }   // double-tap raced past the state check
-        isStarting = true
-        defer { isStarting = false }
+        // Double-tap raced past the state check: one claim wins.
+        guard starting.withLock({ s in defer { s = true }; return !s }) else { return }
+        defer { starting.withLock { $0 = false } }
 
         // ── Permission gate. AVAudioEngine.prepare() throws an NSException
         //    when mic access hasn't been granted yet; that NSException kills
@@ -194,7 +196,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         // BEFORE `engine.inputNode` — see `AudioInputDevices.apply`; touching
         // the input node first opens the system default whatever we ask for
         // afterwards.
-        AudioInputDevices.apply(uid: RecorderSettings.shared.inputDeviceUID, to: engine)
+        AudioInputDevices.apply(uid: RecorderSettings.inputDeviceUIDNow, to: engine)
         var grabbedInput: AVAudioInputNode?
         do {
             try ExceptionTrap.run { grabbedInput = self.engine.inputNode }
@@ -230,7 +232,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             if !startedCleanly { releaseVoiceProcessing() }
         }
 
-        if RecorderSettings.shared.noiseSuppression {
+        if RecorderSettings.noiseSuppressionNow {
             let t0 = Date()
             var toggleError: Error?
             do {
@@ -323,7 +325,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         do {
             try ExceptionTrap.run {
                 input.removeTap(onBus: 0)
-                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buf, _ in
+                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { @Sendable [weak self] buf, _ in
                     self?.ingest(buffer: buf)
                 }
             }
@@ -452,7 +454,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         do {
             try ExceptionTrap.run {
                 input.removeTap(onBus: 0)
-                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buf, _ in
+                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { @Sendable [weak self] buf, _ in
                     self?.ingest(buffer: buf)
                 }
             }

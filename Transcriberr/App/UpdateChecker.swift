@@ -105,7 +105,7 @@ nonisolated final class UpdateChecker: @unchecked Sendable {
     /// the network when checks are on and the last one is a day old.
     func start() {
         guard loop == nil else { return }
-        loop = Task { [weak self] in
+        loop = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(20))
             while !Task.isCancelled {
                 guard let self else { return }

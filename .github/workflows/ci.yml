@@ -67,8 +67,12 @@ jobs:
           xcodebuild build -project Transcriberr.xcodeproj -scheme TranscriberrCLI \
             -destination "platform=macOS" -derivedDataPath "$DD" \
             -skipPackagePluginValidation -skipMacroValidation \
-            $SIGN_FLAGS 2>&1 | tee cli-build.log | grep -E "error:|warning:|BUILD" || true
-          grep -q "BUILD SUCCEEDED" cli-build.log
+            $SIGN_FLAGS 2>&1 | tee cli-build.log | grep -E "error:|BUILD" || true
+          if ! grep -q "BUILD SUCCEEDED" cli-build.log; then
+            grep -nE "error|failed" cli-build.log | grep -v "warning:" | tail -150 || true
+            tail -80 cli-build.log
+            exit 1
+          fi
 
       - name: Build and test app
         run: |
@@ -76,8 +80,18 @@ jobs:
           xcodebuild test -project Transcriberr.xcodeproj -scheme Transcriberr \
             -destination "platform=macOS" -derivedDataPath "$DD" \
             -skipPackagePluginValidation -skipMacroValidation \
-            $SIGN_FLAGS 2>&1 | tee app-test.log | grep -E "error:|warning:|Test Case.*failed|Executed|TEST|BUILD" || true
-          grep -q "TEST SUCCEEDED" app-test.log
+            $SIGN_FLAGS 2>&1 | tee app-test.log | grep -E "error:|Test Case.*failed|Executed|TEST|BUILD" || true
+          if ! grep -q "TEST SUCCEEDED" app-test.log; then
+            echo "::group::Why it failed"
+            # xcodebuild's summary ("Testing failed:", indented reasons) has
+            # no "error:" prefix, so print it and the log's tail as well.
+            grep -nE "error|Testing failed|failed|Failing tests|XCTAssert|Fatal|crash" app-test.log \
+              | grep -v "warning:" | tail -150 || true
+            echo "----- tail -----"
+            tail -120 app-test.log
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: Concurrency warning count
         if: always()

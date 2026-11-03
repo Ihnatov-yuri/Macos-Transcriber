@@ -84,7 +84,7 @@ Before anything is pasted the text goes through the same cleanup as the transcri
 
 ![How a dictated passage goes from key press to pasted text](docs/images/dictation-flow.svg)
 
-Dictation needs the Microphone, Accessibility and Input Monitoring permissions once; the Dictate screen walks through them and shows the last key event it saw, so a hotkey that does nothing is easy to diagnose. There are Shortcuts actions, a menu bar item, a floating status strip, optional history saved as ordinary recordings, and a URL scheme (`transcriberr://dictate/start`, `/stop`, `/toggle`, `/cancel`) for Raycast or a Stream Deck.
+Dictation needs the Microphone, Accessibility and Input Monitoring permissions once; the Dictate screen walks through them and shows the last key event it saw, so a hotkey that does nothing is easy to diagnose. There are Shortcuts actions, a menu bar item, a floating status strip, optional history saved as ordinary recordings, and a URL scheme (`transcriberr://dictate/start`, `/stop`, `/toggle`, `/cancel`) for Raycast or a Stream Deck. Text from a session a link starts always goes to the Dictate screen, never into another app, since any app or web page can open the link; Settings › Dictation can turn the links off.
 
 ## People
 

@@ -529,26 +529,33 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// Set by AppContainer: switches the window to the Dictate screen.
     var onShowPane: (() -> Void)?
 
-    /// `transcriberr://dictate/<start|stop|toggle|cancel|pane>` for Shortcuts,
-    /// Raycast, Stream Deck… (`transcriberr://dictate` alone toggles). Opening
-    /// a URL normally activates the app, so a plain `open` lands the text in
-    /// the Dictate screen; `open -g <url>` keeps the current app in front and
-    /// the text is pasted there.
+    /// `transcriberr://dictate/<start|stop|toggle|cancel|pane>` for Raycast,
+    /// Stream Deck, scripts… (`transcriberr://dictate` alone toggles). A
+    /// session a link starts always writes to the Dictate screen, also under
+    /// `open -g`: any app or web page can open the link, and pasting into the
+    /// front app let one without microphone access bring itself forward and
+    /// receive what the room said. The hotkey, the menu and the Shortcuts
+    /// actions still paste into the front app. Settings → Dictation can turn
+    /// the links off.
     @MainActor
     func handle(url: URL) {
         guard url.scheme?.lowercased() == "transcriberr" else { return }
         let host = url.host?.lowercased() ?? ""
         let action = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
         guard host == "dictate" else { return }
+        guard settings.urlActions else {
+            AppLog.info("dictation", "url action ignored: links are off in Settings")
+            return
+        }
         AppLog.info("dictation", "url action: \(action.isEmpty ? "toggle" : action)")
         switch action {
-        case "start", "begin":  if canBegin { begin(target: resolveTarget()) }
+        case "start", "begin":  if canBegin { begin(target: .pane) }
         case "stop", "finish":  finish()
         case "cancel":          cancel()
         case "pane", "show":
             NSApp.activate(ignoringOtherApps: true)
             onShowPane?()
-        default:                toggle(target: resolveTarget())
+        default:                toggle(target: .pane)
         }
     }
 

@@ -105,6 +105,12 @@ jobs:
         run: |
           for f in cli-build.log app-test.log; do
             [ -f "$f" ] || continue
+            echo "::group::$f: warnings in our code"
+            grep -E 'warning:' "$f" | grep -viE 'SourcePackages|checkouts' | sed 's|.*Macos-Transcriber/||' | sort -u | cut -c1-300 | head -300
+            echo "::endgroup::"
+          done
+          for f in cli-build.log app-test.log; do
+            [ -f "$f" ] || continue
             echo "$f: $(grep -E 'warning:' "$f" | grep -viE 'SourcePackages|checkouts' | sort -u | wc -l) project warnings"
           done
 

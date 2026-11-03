@@ -179,6 +179,7 @@ nonisolated final class DictationSettings: @unchecked Sendable {
         static let keepHistory       = "dictation.keepHistory"
         static let showMenuBar       = "dictation.showMenuBar"
         static let showHUD           = "dictation.showHUD"
+        static let urlActions        = "dictation.urlActions"
         static let pauseFlushSeconds = "dictation.pauseFlushSeconds"
         static let playSounds        = "dictation.playSounds"
         static let appRules          = "dictation.appRules"
@@ -221,6 +222,10 @@ nonisolated final class DictationSettings: @unchecked Sendable {
     var keepHistory: Bool { didSet { defaults.set(keepHistory, forKey: Key.keepHistory) } }
     var showMenuBar: Bool { didSet { defaults.set(showMenuBar, forKey: Key.showMenuBar) } }
     var showHUD: Bool { didSet { defaults.set(showHUD, forKey: Key.showHUD) } }
+    /// `transcriberr://dictate/…` links start and stop dictation. Their
+    /// text always goes to the Dictate screen, never into another app, so
+    /// this is on by default.
+    var urlActions: Bool { didSet { defaults.set(urlActions, forKey: Key.urlActions) } }
     /// Toggle mode: silence (seconds) after speech that flushes a passage.
     var pauseFlushSeconds: Double { didSet { defaults.set(pauseFlushSeconds, forKey: Key.pauseFlushSeconds) } }
     var playSounds: Bool { didSet { defaults.set(playSounds, forKey: Key.playSounds) } }
@@ -298,6 +303,7 @@ nonisolated final class DictationSettings: @unchecked Sendable {
         keepHistory = defaults.bool(forKey: Key.keepHistory)
         showMenuBar = (defaults.object(forKey: Key.showMenuBar) as? Bool) ?? true
         showHUD = (defaults.object(forKey: Key.showHUD) as? Bool) ?? true
+        urlActions = (defaults.object(forKey: Key.urlActions) as? Bool) ?? true
         if let data = defaults.data(forKey: Key.appRules),
            let rules = try? JSONDecoder().decode([AppRule].self, from: data) {
             appRules = rules

@@ -117,6 +117,8 @@ struct DictationSettingsTab: View {
                        isOn: Binding(get: { s.showMenuBar }, set: { s.showMenuBar = $0 }))
                 Toggle("Start / stop sounds",
                        isOn: Binding(get: { s.playSounds }, set: { s.playSounds = $0 }))
+                Toggle("Allow transcriberr://dictate links (text goes to the Dictate screen)",
+                       isOn: Binding(get: { s.urlActions }, set: { s.urlActions = $0 }))
                 Text("Text is inserted with ⌘V into whatever has keyboard focus; the previous clipboard contents come back 0.8 s later. Automatic spacing reads the characters before the cursor through Accessibility (a space only after a word, a capital only at a sentence start) and falls back to a trailing space where an app hides its text. Say “scratch that” to take the last passage back. When Transcriberr itself is in front with the Dictate screen open, text goes to its scratch pad instead.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }

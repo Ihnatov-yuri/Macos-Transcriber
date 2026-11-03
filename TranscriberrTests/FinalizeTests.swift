@@ -7,11 +7,11 @@ import XCTest
 @MainActor
 final class FinalizeTests: XCTestCase {
     var savedGap: Double = 0
-    override func setUp() {
+    override func setUp() async throws {
         savedGap = UserDefaults.standard.double(forKey: "ui.turnCoalesceGapSeconds")
         UserDefaults.standard.set(30.0, forKey: "ui.turnCoalesceGapSeconds")
     }
-    override func tearDown() {
+    override func tearDown() async throws {
         UserDefaults.standard.set(savedGap, forKey: "ui.turnCoalesceGapSeconds")
     }
 

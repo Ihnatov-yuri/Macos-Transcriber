@@ -8,13 +8,13 @@ final class PeopleTests: XCTestCase {
     var dir: URL!
     var store: PeopleStore!
 
-    override func setUp() {
+    override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("people-\(UUID().uuidString.prefix(6))")
         store = PeopleStore(url: dir.appendingPathComponent("people.json"))
         store.myVoice = { nil }   // never the real user's voice in a test
     }
 
-    override func tearDown() { try? FileManager.default.removeItem(at: dir) }
+    override func tearDown() async throws { try? FileManager.default.removeItem(at: dir) }
 
     private func unit(_ v: [Float]) -> [Float] {
         let n = sqrt(v.map { $0 * $0 }.reduce(0, +)); return v.map { $0 / n }

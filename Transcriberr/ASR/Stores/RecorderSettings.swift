@@ -108,6 +108,20 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
         defaults.set(true, forKey: Key.echoFilterReset)
     }
 
+    // Thread-safe reads for the recorder pool and the audio IO queues.
+    // Settings writes the stored properties on main, and reading a String?
+    // from another thread at the same time is a data race; every didSet
+    // above writes UserDefaults synchronously, which is safe from any thread.
+    static var inputDeviceUIDNow: String? { UserDefaults.standard.string(forKey: Key.inputDeviceUID) }
+    static var noiseSuppressionNow: Bool { UserDefaults.standard.bool(forKey: Key.noiseSuppression) }
+    /// Touches `shared` first so the one-time echo-filter reset has run.
+    static var meetingEchoFilterNow: Bool { _ = shared; return UserDefaults.standard.bool(forKey: Key.meetingEchoFilter) }
+    static var virtualMicrophoneNow: Bool { UserDefaults.standard.bool(forKey: Key.virtualMicrophone) }
+    static var preprocessImportsNow: Bool { UserDefaults.standard.bool(forKey: Key.preprocessImports) }
+    static var micSensitivityNow: MicSensitivity {
+        UserDefaults.standard.string(forKey: Key.micSensitivity).flatMap(MicSensitivity.init(rawValue:)) ?? .auto
+    }
+
     private init() {
         Self.resetEchoFilterOnce(defaults)
         // Default OFF until we verify voice processing works on every Mac

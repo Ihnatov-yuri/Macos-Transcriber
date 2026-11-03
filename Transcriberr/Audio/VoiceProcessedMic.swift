@@ -130,9 +130,14 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
             release()
             return false
         }
-        configObserver = NotificationCenter.default.addObserver(
+        let observer = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { [weak self] _ in self?.restartAfterConfigurationChange() }
+        // Under the lock, like every other `configObserver` access: a release
+        // on the notification thread could run at this very moment.
+        controlLock.lock()
+        if released { NotificationCenter.default.removeObserver(observer) } else { configObserver = observer }
+        controlLock.unlock()
         AppLog.info("meeting", String(format: "%@ (%.0f Hz) in %.2fs",
                                       voiceProcessing ? "echo filter on (Apple voice processing)" : "raw mic on (headphones)",
                                       sourceRate, Date().timeIntervalSince(t0)))
@@ -156,7 +161,7 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
         let sourceRate = format.sampleRate
         try ExceptionTrap.run {
             input.removeTap(onBus: 0)
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buf, _ in
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak self] buf, _ in
                 guard let p = buf.floatChannelData?[0] else { return }
                 self?.push(UnsafeBufferPointer(start: p, count: Int(buf.frameLength)), sourceRate: sourceRate)
             }

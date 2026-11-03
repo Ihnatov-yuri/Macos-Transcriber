@@ -45,6 +45,11 @@ targets:
     settings:
       TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Transcriberr.app/Contents/MacOS/Transcriberr"
       BUNDLE_LOADER: "$(TEST_HOST)"
+      # Same isolation defaults as the app: tests call main-actor-by-default
+      # app APIs from synchronous test methods, an error in Swift 6.
+      SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_APPROACHABLE_CONCURRENCY: YES
+      SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
   Transcriberr:
     type: application
     platform: macOS

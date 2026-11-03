@@ -284,7 +284,7 @@ nonisolated struct AudioDecoder: Sendable {
         var pcm = try await decodeAll(file: file)
         // Optional Apple-DSP noise suppression for imported files.
         // (Live-recorded WAVs were already cleaned at capture time.)
-        if RecorderSettings.shared.preprocessImports {
+        if RecorderSettings.preprocessImportsNow {
             AppLog.info("decoder", "applying offline noise suppression to \(file.lastPathComponent) (\(pcm.count) samples)")
             pcm = NoiseSuppressor.process(samples: pcm, sampleRate: Self.sampleRate)
         }
@@ -292,7 +292,7 @@ nonisolated struct AudioDecoder: Sendable {
         // fixed steps multiply. Applied to every file the same way so the
         // Record screen's option is honored for real recordings, not only for
         // dictation.
-        pcm = UtteranceCapture.applyGain(pcm, sensitivity: RecorderSettings.shared.micSensitivity)
+        pcm = UtteranceCapture.applyGain(pcm, sensitivity: RecorderSettings.micSensitivityNow)
         let duration = Double(pcm.count) / Self.sampleRate
         let silences = scanSilences(samples: pcm)
         let cuts = computeCutPoints(silences: silences, durationSeconds: duration)

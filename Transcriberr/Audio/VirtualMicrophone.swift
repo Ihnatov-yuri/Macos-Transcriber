@@ -90,7 +90,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         micDevice = AudioObjectID(kAudioObjectUnknown)
         callInUse = false
         ring.reset()
-        if hadFeed || RecorderSettings.shared.virtualMicrophone {
+        if hadFeed || RecorderSettings.virtualMicrophoneNow {
             // The plug-in may take a moment to come back after the restart.
             queue.asyncAfter(deadline: .now() + 1) { self.reconcile() }
         }
@@ -161,7 +161,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     // MARK: - Reconcile (on `queue`)
 
     private func reconcile() {
-        let wanted = RecorderSettings.shared.virtualMicrophone && Self.isInstalled
+        let wanted = RecorderSettings.virtualMicrophoneNow && Self.isInstalled
         if !wanted {
             stopUnit()
             stopFeed()
@@ -251,7 +251,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         // itself). Naming the default device explicitly instead failed on a
         // USB webcam mic with voice processing (-10851, 2026-10-27) and fell
         // back to the default anyway.
-        let chosen = RecorderSettings.shared.inputDeviceUID
+        let chosen = RecorderSettings.inputDeviceUIDNow
         let mic = AudioInputDevices.effective(uid: chosen)
         let why = recordingHolds > 0 ? "a meeting records" : "a call uses '\(Self.micName)'"
         AppLog.info("virtual-mic", "\(why) — starting the mic on '\(mic?.name ?? "default")', output '\(route.name)'")

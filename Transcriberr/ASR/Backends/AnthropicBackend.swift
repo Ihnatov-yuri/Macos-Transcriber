@@ -63,7 +63,7 @@ actor AnthropicBackend: ASRBackend {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await CloudHTTP.session.data(for: req)
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? "<binary>"
             let code = (resp as? HTTPURLResponse)?.statusCode ?? -1

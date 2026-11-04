@@ -11,6 +11,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The jobs only read the repository: a token that could push, or write
+# releases, issues or packages, is not handed to xcodebuild, Homebrew, the
+# resolved Swift packages and their build plugins.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   # A run in progress finishes; only a still-queued one is replaced.

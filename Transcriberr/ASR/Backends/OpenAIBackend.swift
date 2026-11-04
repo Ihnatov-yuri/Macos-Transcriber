@@ -83,7 +83,7 @@ actor OpenAIBackend: ASRBackend {
         body.appendString("\r\n--\(boundary)--\r\n")
         req.httpBody = body
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await CloudHTTP.session.data(for: req)
         try ensureOK(resp, data: data)
         return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
@@ -115,7 +115,7 @@ actor OpenAIBackend: ASRBackend {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await CloudHTTP.session.data(for: req)
         try ensureOK(resp, data: data)
 
         return try Self.parseTextResponse(data)

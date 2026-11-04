@@ -29,6 +29,12 @@ on:
         type: boolean
         default: false
 
+# The jobs only read the repository: a token that could push, or write
+# releases, issues or packages, is not handed to xcodebuild, Homebrew, the
+# resolved Swift packages and their build plugins.
+permissions:
+  contents: read
+
 concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true

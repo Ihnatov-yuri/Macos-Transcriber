@@ -95,7 +95,7 @@ actor GoogleGeminiBackend: ASRBackend {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await CloudHTTP.session.data(for: req)
         try ensureOK(resp, data: data)
 
         // A 200 with no text part is a REFUSAL, not an empty chunk —
@@ -137,7 +137,7 @@ actor GoogleGeminiBackend: ASRBackend {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await CloudHTTP.session.data(for: req)
         try ensureOK(resp, data: data)
         // Never "" on a reply it could not read: PostProcessor's length guard
         // caught the empty case, but a MAX_TOKENS reply cut mid-sentence

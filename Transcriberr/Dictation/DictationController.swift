@@ -901,6 +901,18 @@ nonisolated final class DictationController: @unchecked Sendable {
             return
         }
 
+        // A password is never sent to a cloud engine. Every other
+        // safeguard (verbatim mode, no polish, no history, no pane) kept it
+        // on this Mac — except the recognition itself, which with OpenAI or
+        // Gemini as the dictation engine uploaded the spoken password.
+        if Self.mustRefuseSecure(passage.context, engine: settings.engine) {
+            AppLog.warn("dictation", "password field with a cloud engine — passage dropped, nothing sent")
+            if final {
+                deliveredSessions.remove(passage.session)
+                finalMessage("Passwords are dictated with a local engine only")
+            }
+            return
+        }
         let backend = factory.backend(for: settings.engine)
         let text: String
         do {
@@ -1399,6 +1411,12 @@ nonisolated final class DictationController: @unchecked Sendable {
         let k = VocabularyHarvester.key(term)
         settings.dismissedTermKeys.insert(k)
         suggestedNames.removeAll { VocabularyHarvester.key($0) == k }
+    }
+
+    /// A passage for a password field that the chosen engine would upload.
+    @MainActor
+    static func mustRefuseSecure(_ context: DictationContext, engine: BackendFactory.Kind) -> Bool {
+        context.isSecure && !engine.isLocal
     }
 
     /// Whole-utterance speech gate (mirror of the live captioner's).

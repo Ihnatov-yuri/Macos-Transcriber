@@ -11,5 +11,10 @@ if security find-generic-password -s "$SERVICE" -a release >/dev/null 2>&1; then
   echo "a signing key already exists in the Keychain ($SERVICE); not replacing it" >&2; exit 1
 fi
 KEY="$(swift scripts/update-signing.swift keygen)"
-security add-generic-password -s "$SERVICE" -a release -l "Transcriberr update signing key" -w "$KEY"
+# Through `security -i`'s stdin, not `-w "$KEY"`: an argument is readable by
+# every local user (ps, process accounting) while the command runs. The key
+# is base64 and the service name is fixed, so neither needs quoting.
+print -r -- "add-generic-password -s $SERVICE -a release -l \"Transcriberr update signing key\" -w $KEY" | security -i >/dev/null
+security find-generic-password -s "$SERVICE" -a release >/dev/null 2>&1 \
+  || { echo "could not store the signing key in the Keychain" >&2; exit 1; }
 print -r -- "$KEY" | swift scripts/update-signing.swift pubkey

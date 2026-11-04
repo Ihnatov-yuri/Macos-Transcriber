@@ -1835,6 +1835,10 @@ struct OutputPane: View {
                         .foregroundStyle(AppColor.ink)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
+                        // Model-written Markdown: only web links open (SafeLink).
+                        .environment(\.openURL, OpenURLAction { url in
+                            SafeLink.isOpenable(url) ? .systemAction : .discarded
+                        })
                         .padding(AppMetric.sheetPadding)
                 }
             } else {
@@ -1917,6 +1921,9 @@ private struct OutputHistoryList: View {
                     .foregroundStyle(AppColor.ink)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .environment(\.openURL, OpenURLAction { url in
+                        SafeLink.isOpenable(url) ? .systemAction : .discarded
+                    })
                 if showingPrompt == v.id, let user = v.userPrompt {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("System").uiLabel(9, color: AppColor.ink2)

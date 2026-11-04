@@ -80,6 +80,9 @@ nonisolated struct HFModelRelease: Sendable {
                 throw invalid("bad path \(f.path)")
             }
             guard (f.sha256?.count == 64) || (f.gitBlob?.count == 40) else { throw invalid("no checksum for \(f.path)") }
+            // A negative size from the listing pulled the total under the
+            // cap below while the other files stayed as large as they came.
+            guard f.size >= 0, f.size <= maxTotalBytes else { throw invalid("bad size for \(f.path)") }
         }
         guard m.totalBytes <= maxTotalBytes else { throw invalid("\(m.totalBytes / 1_000_000) MB is too large") }
     }

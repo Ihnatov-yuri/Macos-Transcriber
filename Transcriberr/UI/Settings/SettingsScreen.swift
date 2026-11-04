@@ -7,6 +7,10 @@ import SwiftUI
 /// A search field and a Normal / Advanced switch sit at the top. Which
 /// settings show is decided by `SettingsFilter` (SettingsCatalog.swift),
 /// handed to every section through the environment.
+///
+/// The same field takes a request ("turn off the echo filter"): Ask sends
+/// it to the on-device text model (SettingsAsk.swift), and the proposed
+/// changes wait for Apply.
 struct SettingsScreen: View {
     @Environment(AppContainer.self) private var container
     /// Letters of the sections folded away, kept between launches. Style &
@@ -15,6 +19,8 @@ struct SettingsScreen: View {
     @AppStorage(SettingsLevel.storageKey) private var levelRaw = SettingsLevel.normal.rawValue
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    @State private var askPhase: SettingsAskPhase = .idle
+    @State private var askTask: Task<Void, Never>?
 
     private var collapsed: Set<String> { Set(collapsedRaw.split(separator: ",").map(String.init)) }
     private var level: SettingsLevel { SettingsLevel(rawValue: levelRaw) ?? .normal }
@@ -68,6 +74,7 @@ struct SettingsScreen: View {
             }
             .onChange(of: container.modelsPaneRequested) { _, _ in showModels(proxy) }
             .task { if container.pendingModelsScroll { showModels(proxy) } }
+            .onDisappear { cancelAsk() }
             .background {
                 // ⌘F: to the field, wherever the screen is scrolled.
                 Button("Search settings") {
@@ -96,10 +103,20 @@ struct SettingsScreen: View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
             HStack(alignment: .bottom, spacing: AppMetric.m) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Find a setting").uiLabel(9, color: AppColor.ink2)
-                    SettingsSearchField(query: $query, focused: $searchFocused)
+                    Text("Find a setting, or ask to change one").uiLabel(9, color: AppColor.ink2)
+                    HStack(spacing: AppMetric.s) {
+                        SettingsSearchField(query: $query, focused: $searchFocused, onAsk: startAsk)
+                            .frame(maxWidth: 420)
+                        TapButton(action: startAsk) {
+                            LitButtonChrome(.secondary, compact: true) {
+                                Label("Ask", systemImage: "sparkles")
+                            }
+                        }
+                        .disabled(!canAsk)
+                        .help("Ask the on-device text model to change settings for you, such as \u{201C}turn off the echo filter\u{201D}. You confirm each change. ⌘↩")
+                        .accessibilityLabel("Ask to change settings")
+                    }
                 }
-                .frame(maxWidth: 420)
                 Spacer(minLength: 0)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Show").uiLabel(9, color: AppColor.ink2)
@@ -119,7 +136,70 @@ struct SettingsScreen: View {
                 .foregroundStyle(AppColor.ink3)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.updatesFrequently)
+            if askPhase != .idle {
+                SettingsAskPanel(phase: askPhase, onApply: apply, onUndo: undo, onDismiss: dismissAsk)
+                    .padding(.top, AppMetric.xs)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.15), value: askPhase)
+    }
+
+    // MARK: - Ask
+
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var canAsk: Bool {
+        if case .thinking = askPhase { return false }
+        return !trimmedQuery.isEmpty
+    }
+
+    private var stores: SettingsStores { SettingsStores(container: container) }
+
+    private func startAsk() {
+        guard canAsk else { return }
+        let request = trimmedQuery
+        let stores = stores
+        let model = OnDeviceSettingsAskModel(factory: container.backendFactory)
+        askTask?.cancel()
+        askPhase = .thinking(request: request)
+        askTask = Task { @MainActor in
+            let phase: SettingsAskPhase
+            do {
+                let result = try await SettingsAsk.ask(request, stores: stores, model: model)
+                phase = .proposal(request: request, result)
+            } catch {
+                phase = .failed(request: request, message: error.localizedDescription)
+            }
+            guard !Task.isCancelled, askPhase == .thinking(request: request) else { return }
+            askPhase = phase
+        }
+    }
+
+    private func apply(_ changes: [SettingChange]) {
+        let snapshot = SettingsAsk.apply(changes, stores: stores)
+        AppLog.info("settings", "ask applied: \(changes.map(\.summary).joined(separator: "; "))")
+        askPhase = .applied(changes, snapshot)
+        // The request has done its job; the screen shows every setting again.
+        query = ""
+    }
+
+    private func undo(_ snapshot: SettingsAsk.Snapshot) {
+        guard case .applied(let changes, _) = askPhase else { return }
+        SettingsAsk.undo(snapshot, stores: stores)
+        AppLog.info("settings", "ask undone: \(changes.map(\.key).joined(separator: ", "))")
+        askPhase = .undone(changes)
+    }
+
+    private func dismissAsk() {
+        cancelAsk()
+        askPhase = .idle
+    }
+
+    private func cancelAsk() {
+        askTask?.cancel()
+        askTask = nil
+        if case .thinking = askPhase { askPhase = .idle }
     }
 
     private func caption(_ filter: SettingsFilter, sections: [SettingsSection]) -> String {
@@ -144,13 +224,21 @@ struct SettingsScreen: View {
 
     private var noMatch: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("No setting matches \u{201C}\(query.trimmingCharacters(in: .whitespaces))\u{201D}, in Normal or Advanced. Try one word, such as microphone, Whisper or hotkey.")
+            Text("No setting matches \u{201C}\(query.trimmingCharacters(in: .whitespaces))\u{201D}, in Normal or Advanced. Try one word, such as microphone, Whisper or hotkey, or ask to change it in your own words.")
                 .font(AppFont.text(14))
                 .foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 520, alignment: .leading)
-            TapButton { query = "" } label: {
-                LitButtonChrome(.secondary, compact: true) { Text("Clear search") }
+            HStack(spacing: AppMetric.s) {
+                if askPhase == .idle {
+                    TapButton(action: startAsk) {
+                        LitButtonChrome(.secondary, compact: true) { Label("Ask to change it", systemImage: "sparkles") }
+                    }
+                    .help("Send \u{201C}\(trimmedQuery)\u{201D} to the on-device text model as a request. You confirm each change.")
+                }
+                TapButton { query = "" } label: {
+                    LitButtonChrome(.ghost, compact: true) { Text("Clear search") }
+                }
             }
         }
     }
@@ -276,6 +364,8 @@ struct SettingsScreen: View {
 private struct SettingsSearchField: View {
     @Binding var query: String
     var focused: FocusState<Bool>.Binding
+    /// ⌘↩ in the field sends it as a request.
+    var onAsk: () -> Void = {}
 
     var body: some View {
         HStack(spacing: AppMetric.s) {
@@ -283,13 +373,18 @@ private struct SettingsSearchField: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(AppColor.ink3)
                 .accessibilityHidden(true)
-            TextField("Search settings", text: $query, prompt: Text("Microphone, Whisper, hotkey…"))
+            TextField("Search settings", text: $query, prompt: Text("Microphone, Whisper… or turn off the echo filter"))
                 .textFieldStyle(.plain)
                 .font(AppFont.text(14))
                 .foregroundStyle(AppColor.ink)
                 .focused(focused)
                 .focusEffectDisabled()
                 .onExitCommand { query = "" }
+                .onKeyPress(.return, phases: .down) { press in
+                    guard press.modifiers.contains(.command) else { return .ignored }
+                    onAsk()
+                    return .handled
+                }
                 .accessibilityLabel("Search settings")
             if !query.isEmpty {
                 TapButton { query = "" } label: {

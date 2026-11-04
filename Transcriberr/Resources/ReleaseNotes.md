@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.4.1
+- Transcription works without an internet connection again. Whisper went online to Hugging Face every time it loaded, even with the model already downloaded, and when Hugging Face did not answer the whole Super run failed. A downloaded model now loads straight from disk.
+
 ## 5.4.0
 - New text models, chosen by a blind test on real Ukrainian and English meetings: Gemma 4 26B (the best, for Macs with 32 GB or more), Qwen3.5 9B (the fastest at cleanup and dictation) and Gemma 4 E4B (the small one). They write summaries, titles, briefs and dictation polish, and settle Super's disputed words.
 - Settings → Models has two picks: one for Super and one for everything else. A chart compares the three on quality in Ukrainian and English, speed and memory, and the ⓘ explains how to pick.

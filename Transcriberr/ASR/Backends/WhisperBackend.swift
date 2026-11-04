@@ -205,7 +205,15 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
                 // then loaded from the folder (WhisperKit downloads only argmaxinc's).
                 try await WhisperUKModel.release.ensureDownloaded()
             }
-            let config = own
+            // On disk: load the folder, no network. By name, WhisperKit runs
+            // its downloader on every load, which first asks Hugging Face
+            // for the repo's file list even with every file cached; with
+            // Hugging Face unreachable that request timed out after a minute
+            // and the whole Super run failed (2026-11-04). The models only
+            // change with the app (each version pins them), so the folder
+            // is all a load needs. The tokenizer is found in WhisperKit's
+            // cache folder the same way.
+            let config = own || model.isDownloaded
                 ? WhisperKitConfig(modelFolder: model.folder.path, computeOptions: where_.computeOptions,
                                    verbose: false, prewarm: true, download: false)
                 : WhisperKitConfig(

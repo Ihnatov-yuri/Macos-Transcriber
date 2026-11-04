@@ -117,7 +117,7 @@ Settings › AI assistants has a switch for this. With it off, a connected assis
 
 ## Privacy
 
-Everything above runs locally: recording, both speech engines, diarization, voice prints, Gemma, search and the MCP server. Audio, transcripts, voices and briefs stay in `~/Library/Application Support/Transcriberr` and your Recordings folder, with transcript backups in `~/Documents/Transcriberr Backups`. The app talks to the network for four things only: downloading a model the first time you need it, checking GitHub for a new version (it asks once, on first launch, and the request is the same from every Mac), asking Hugging Face once a day whether Parakeet UK has a newer release while those checks are on, and a cloud engine if you add a key for one.
+Everything above runs locally: recording, both speech engines, diarization, voice prints, Gemma, search and the MCP server. Audio, transcripts, voices and briefs stay in `~/Library/Application Support/Transcriberr` and your Recordings folder, with transcript backups in `~/Documents/Transcriberr Backups`. The app talks to the network for four things only: downloading a model the first time you need it, checking GitHub for a new version (it asks once, on first launch, and the request is the same from every Mac), asking Hugging Face once a week whether Parakeet UK or Whisper UK has a newer release while those checks are on, and a cloud engine if you add a key for one.
 
 ## Settings
 

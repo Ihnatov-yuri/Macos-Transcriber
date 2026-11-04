@@ -201,8 +201,10 @@ nonisolated struct HFModelRelease: Sendable {
         return req
     }
 
-    /// Automatic update checks at most this often.
-    static let checkInterval: TimeInterval = 24 * 60 * 60
+    /// Automatic update checks at most this often. Weekly since v5.4.2: new
+    /// Parakeet UK / Whisper UK releases stopped (Nov 2026), and a daily
+    /// question to Hugging Face with no news was only network chatter.
+    static let checkInterval: TimeInterval = 7 * 24 * 60 * 60
 
     private func getJSON(_ url: String) async throws -> Any {
         let (data, response) = try await Self.session.data(for: Self.request(for: URL(string: url)!))
@@ -374,7 +376,7 @@ nonisolated struct HFModelRelease: Sendable {
         }
     }
 
-    /// Once a day while the app runs, when the user allowed update checks.
+    /// Once a week while the app runs, when the user allowed update checks.
     func startUpdateLoop(lastCheckKey: String, allowed: @escaping @Sendable () async -> Bool) {
         Task.detached(priority: .utility) {
             try? await Task.sleep(for: .seconds(60))

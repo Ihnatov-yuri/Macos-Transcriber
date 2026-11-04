@@ -164,7 +164,7 @@ final class PersonBriefRunner {
     /// The text engine a brief runs on, and whether it leaves this Mac.
     static func engine(_ container: AppContainer) -> BackendFactory.Kind {
         let kind = container.uiPrefs.textEngine
-        return kind.supportsTextGeneration ? kind : .gemmaLiteRT
+        return kind.supportsTextGeneration ? kind : .localText
     }
 
     func build(person: Person, meetings: [PersonMeeting], container: AppContainer) {
@@ -256,12 +256,9 @@ final class PersonBriefRunner {
             } catch {
                 errors[id] = "“\(meeting.title)” could not be read: \(error.localizedDescription)"
                 AppLog.warn("person-brief", "\(meeting.id) failed: \(error.localizedDescription)")
-                // A timed-out read leaves LiteRT wedged; more reads would
-                // only queue behind it.
-                if case ASRError.chunkTimeout = error {
-                    if let litert = backend as? GemmaLiteRTBackend { try? await litert.recoverWedge(modelPath: nil) }
-                    break
-                }
+                // A timed-out read means the engine is struggling; more
+                // reads would only queue behind it.
+                if case ASRError.chunkTimeout = error { break }
             }
         }
         AppLog.info("person-brief", "read \(read) of \(recent.count) meetings")

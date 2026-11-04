@@ -154,9 +154,6 @@ final class LiveTranscriber: @unchecked Sendable {
     nonisolated static let maxPhraseSeconds = 15.0
     /// New audio needed before the open phrase is re-read.
     nonisolated static let partialStepSeconds = 0.9
-    /// How long a read may wait for the inference gate (Gemma running for a
-    /// background job) before this pass is skipped and retried later.
-    nonisolated static let gatePatience: TimeInterval = 3
     /// A read taking longer than this is abandoned; the audio is read again.
     nonisolated static let readDeadline: TimeInterval = 10
     /// No audio this long after start: subscribe to the recorder again.
@@ -348,25 +345,18 @@ final class LiveTranscriber: @unchecked Sendable {
         let translateTo = translateTo
         let started = Date()
         do {
-            // Interactive with bounded patience, as dictation does: a Gemma
-            // call from a background job must not leave captions minutes
-            // behind (see InferenceGate). Bounded in time as well: a read
-            // that never returns must not stop live for the rest of the
-            // recording.
+            // Bounded in time: a read that never returns must not stop live
+            // for the rest of the recording.
             let text = try await Self.withDeadline(Self.readDeadline) {
-                try await InferenceGate.$interactive.withValue(true) {
-                    try await InferenceGate.$patience.withValue(Self.gatePatience) {
-                        try await ParakeetBackend.$logsChunks.withValue(false) {
-                            try await backend.transcribeChunk(
-                                samples: samples,
-                                languages: languages,
-                                translateTo: translateTo,
-                                diarize: false,
-                                previousContext: nil,
-                                speakerHints: []
-                            )
-                        }
-                    }
+                try await ParakeetBackend.$logsChunks.withValue(false) {
+                    try await backend.transcribeChunk(
+                        samples: samples,
+                        languages: languages,
+                        translateTo: translateTo,
+                        diarize: false,
+                        previousContext: nil,
+                        speakerHints: []
+                    )
                 }
             }
             readCount += 1
@@ -376,9 +366,6 @@ final class LiveTranscriber: @unchecked Sendable {
             guard session == startToken else { return .gone }
             let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
             return cleaned.isEmpty ? .silent : .text(cleaned)
-        } catch is InferenceGate.Busy {
-            AppLog.info("live", "engines busy — retrying with the next audio")
-            return session == startToken ? .busy : .gone
         } catch is ReadTimeout {
             AppLog.warn("live", String(format: "a %.1f s read took over %.0f s — abandoned, reading again",
                                        Double(samples.count) / Double(Self.sampleRate), Self.readDeadline))

@@ -6,6 +6,15 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.4.0
+- New text models, chosen by a blind test on real Ukrainian and English meetings: Gemma 4 26B (the best, for Macs with 32 GB or more), Qwen3.5 9B (the fastest at cleanup and dictation) and Gemma 4 E4B (the small one). They write summaries, titles, briefs and dictation polish, and settle Super's disputed words.
+- Settings → Models has two picks: one for Super and one for everything else. A chart compares the three on quality in Ukrainian and English, speed and memory, and the ⓘ explains how to pick.
+- With either Gemma model, summaries and minutes of hour-long Ukrainian meetings come out in Ukrainian and in full. Before, the old engine often wrote them in English or returned nothing. Qwen can still answer a Ukrainian summary in English.
+- After the update, download a model in Settings → Models; the app asks once. The old Gemma files (about 6 GB) are removed.
+- The Gemma 4 audio engine is gone. It was never the default and made words up; recordings set to it use Parakeet.
+- Arrows and symbols in summaries show as →, ≥ and × instead of "$\rightarrow$".
+- Needs macOS 26.4 or later. On an older macOS the in-app update says so and keeps the current version.
+
 ## 5.3.1
 - Echo removal keeps working on calls where you do most of the talking. Before, the cleaned microphone track could be thrown away and the other side's words transcribed as yours.
 

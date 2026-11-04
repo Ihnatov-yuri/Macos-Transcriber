@@ -700,13 +700,9 @@ nonisolated final class DictationController: @unchecked Sendable {
                 guard await backend.isReady else { continue }
                 let gained = UtteranceCapture.applyGain(samples, sensitivity: RecorderSettings.micSensitivityNow)
                 let languages = self.settings.languages
-                // Interactive: never queued behind a background job's Gemma
-                // call (see InferenceGate).
-                if let text = try? await InferenceGate.$interactive.withValue(true, operation: {
-                    try await backend.transcribeChunk(
-                        samples: gained, languages: languages, translateTo: nil, diarize: false,
-                        previousContext: nil, speakerHints: [])
-                }), session == self.sessionID, self.phase == .listening {
+                if let text = try? await backend.transcribeChunk(
+                    samples: gained, languages: languages, translateTo: nil, diarize: false,
+                    previousContext: nil, speakerHints: []), session == self.sessionID, self.phase == .listening {
                     let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !cleaned.isEmpty { self.previewText = cleaned }
                 }
@@ -948,19 +944,15 @@ nonisolated final class DictationController: @unchecked Sendable {
                 languages = [lang]
             }
             let spoken = languages
-            // Interactive: a Super run in the background must not hold the
-            // user's words hostage (see InferenceGate).
-            let recognized = try await InferenceGate.$interactive.withValue(true) {
-                try await Self.withTimeout(seconds: 60) {
-                    try await backend.transcribeChunk(
-                        samples: samples,
-                        languages: spoken,
-                        translateTo: nil,
-                        diarize: false,
-                        previousContext: nil,
-                        speakerHints: []
-                    )
-                }
+            let recognized = try await Self.withTimeout(seconds: 60) {
+                try await backend.transcribeChunk(
+                    samples: samples,
+                    languages: spoken,
+                    translateTo: nil,
+                    diarize: false,
+                    previousContext: nil,
+                    speakerHints: []
+                )
             }
             AppLog.info("dictation", String(
                 format: "recognized %.1fs → %d chars in %.2fs", seconds, recognized.count,
@@ -993,11 +985,6 @@ nonisolated final class DictationController: @unchecked Sendable {
             text = cleaned
         } catch {
             AppLog.error("dictation", "recognition failed: \(error.localizedDescription)")
-            if case ASRError.chunkTimeout = error {
-                // The abandoned call never releases its gate hold, and left
-                // in place it blocks the next Gemma call forever.
-                await InferenceGate.shared.evictShared(owner: backend.id, olderThan: 30, interactiveOnly: true)
-            }
             lastError = error.localizedDescription
             if final { finalMessage("Recognition failed: \(error.localizedDescription)") }
             return
@@ -1186,13 +1173,9 @@ nonisolated final class DictationController: @unchecked Sendable {
 
     @MainActor
     private func polish(_ text: String, passage: Passage) async -> String {
-        let kind = uiPrefs.textEngine.supportsTextGeneration ? uiPrefs.textEngine : .gemmaLiteRT
-        if kind == .gemmaLiteRT,
-           !ModelCatalog.entries.contains(where: {
-               $0.backend == .gemmaLiteRT
-                   && ModelCatalog.cachedRepoDirectory(huggingFaceID: $0.huggingFaceID) != nil
-           }) {
-            AppLog.warn("dictation", "polish skipped — LiteRT Gemma model not downloaded")
+        let kind = uiPrefs.textEngine.supportsTextGeneration ? uiPrefs.textEngine : .localText
+        if kind == .localText, !ModelCatalog.isInstalled(ModelCatalog.selected(.general)) {
+            AppLog.warn("dictation", "polish skipped — the text model is not downloaded")
             return text
         }
         let backend = factory.backend(for: kind)
@@ -1214,13 +1197,12 @@ nonisolated final class DictationController: @unchecked Sendable {
             }
             let maxTokens = min(1200, text.count / 2 + 120)
             let t0 = Date()
-            // The polish is optional: when a background job has the engines
-            // (Super reading a whole meeting holds them for many minutes),
-            // give up after a few seconds and deliver the clean text rather
-            // than keep the user waiting — and never let the wait block the
-            // next passage's recognition.
-            let out = try await InferenceGate.$interactive.withValue(true) {
-                try await InferenceGate.$patience.withValue(Self.polishPatience) {
+            // The polish is optional: when a background job has the text
+            // model (Super reading a whole meeting holds it for minutes),
+            // jump the queue, give up after a few seconds and deliver the
+            // clean text rather than keep the user waiting.
+            let out = try await GenerationQueue.$interactive.withValue(true) {
+                try await GenerationQueue.$patience.withValue(Self.polishPatience) {
                     try await Self.withTimeout(seconds: 45) {
                         try await backend.generateText(systemInstruction: systemPrompt, userMessage: userPrompt, maxTokens: maxTokens)
                     }
@@ -1237,8 +1219,8 @@ nonisolated final class DictationController: @unchecked Sendable {
             // Self-corrections legitimately change words, so the in-order
             // overlap bar is lower than for a plain cleanup.
             return DictationText.acceptPolished(raw: text, polished: trimmed, minOverlap: 0.6) ? trimmed : text
-        } catch is InferenceGate.Busy {
-            AppLog.info("dictation", "polish skipped — a background transcription has the engines; using clean text")
+        } catch is GenerationQueue.Busy {
+            AppLog.info("dictation", "polish skipped — a background job has the text model; using clean text")
             return text
         } catch {
             AppLog.warn("dictation", "polish failed (\(error.localizedDescription)) — using raw text")

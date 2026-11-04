@@ -103,8 +103,8 @@ final class PipelineLogicTests: XCTestCase {
         XCTAssertLessThan(after, before * 0.25, "pure echo at 150 ms should lose ≥6 dB")
     }
 
-    /// No chunk — recap included — may exceed the 28 s the LiteRT backend
-    /// keeps; the old fixed grid produced up to 33 s and lost the tail.
+    /// No chunk — recap included — may exceed 28 s (the engines' limit when
+    /// it was set); the old fixed grid produced up to 33 s and lost the tail.
     func testChunksNeverExceedEngineLimit() {
         let decoder = AudioDecoder()
         // Silences placed to pull one boundary early and the next one late.
@@ -125,8 +125,9 @@ final class PipelineLogicTests: XCTestCase {
     }
 }
 
-/// The cross-engine gate: Whisper/Parakeet share it, LiteRT holds it alone.
-final class InferenceGateTests: XCTestCase {
+/// The text model's queue: one generation at a time, dictation first, and a
+/// bounded, cancellable wait.
+final class GenerationQueueTests: XCTestCase {
 
     private final class Order: @unchecked Sendable {
         private let lock = NSLock()
@@ -135,237 +136,62 @@ final class InferenceGateTests: XCTestCase {
         var all: [String] { lock.lock(); defer { lock.unlock() }; return events }
     }
 
-    private func settle() async throws { try await Task.sleep(nanoseconds: 50_000_000) }
+    private func settle() async { try? await Task.sleep(nanoseconds: 50_000_000) }
 
-    func testPassThroughWithoutLiteRT() async throws {
-        let gate = InferenceGate()
-        let stamp = try await gate.acquire(exclusive: true)
-        XCTAssertEqual(stamp, -1)
-    }
-
-    func testSharedHoldersRunTogetherAndExclusiveRunsAlone() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let s1 = try await gate.acquire(), s2 = try await gate.acquire()
-        XCTAssertGreaterThanOrEqual(s1, 0)
-        XCTAssertGreaterThanOrEqual(s2, 0)
-
+    func testOneAtATimeInArrivalOrder() async throws {
+        let q = GenerationQueue()
         let order = Order()
-        let exclusive = Task { let s = try await gate.acquire(exclusive: true); order.add("X"); return s }
-        try await settle()
-        // A shared request behind a waiting exclusive one must not jump it.
-        let late = Task { let s = try await gate.acquire(); order.add("S"); return s }
-        try await settle()
-        XCTAssertEqual(order.all, [])
-
-        await gate.release(s1)
-        try await settle()
-        XCTAssertEqual(order.all, [], "exclusive waits for the last shared holder")
-        await gate.release(s2)
-        let xs = try await exclusive.value
-        try await settle()
-        XCTAssertEqual(order.all, ["X"], "shared waits while LiteRT holds the gate")
-        await gate.release(xs, exclusive: true)
-        _ = try await late.value
-        XCTAssertEqual(order.all, ["X", "S"])
+        try await q.enter()
+        let a = Task { try await q.enter(); order.add("a"); await q.leave() }
+        await settle()
+        let b = Task { try await q.enter(); order.add("b"); await q.leave() }
+        await settle()
+        XCTAssertEqual(order.all, [], "nothing runs while the model is held")
+        await q.leave()
+        try await a.value; try await b.value
+        XCTAssertEqual(order.all, ["a", "b"])
+        let busy = await q.isBusy
+        XCTAssertFalse(busy)
     }
 
-    func testEvictExclusiveDropsZombieAndIgnoresItsLateRelease() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let zombie = try await gate.acquire(exclusive: true)
-        let w1 = Task { try await gate.acquire() }, w2 = Task { try await gate.acquire() }
-        try await settle()
-        await gate.evictExclusive()
-        let a = try await w1.value, b = try await w2.value
-        XCTAssertNotEqual(a, b)
-        XCTAssertNotEqual(a, zombie)
-
+    func testInteractiveGoesAheadOfBackground() async throws {
+        let q = GenerationQueue()
         let order = Order()
-        let next = Task { _ = try await gate.acquire(exclusive: true); order.add("X") }
-        try await settle()
-        await gate.release(zombie, exclusive: true)   // evicted token: no effect
-        await gate.release(a)
-        try await settle()
-        XCTAssertEqual(order.all, [], "one shared holder is still running")
-        await gate.release(b)
-        try await next.value
-        XCTAssertEqual(order.all, ["X"])
-    }
-
-    /// Gemma recovery used to zero the shared count: the Whisper calls still
-    /// running on other chunks lost their hold, and the next Gemma call ran
-    /// next to them.
-    func testEvictExclusiveKeepsLiveSharedHolders() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let whisper = try await gate.acquire(owner: "whisper")
-        let order = Order()
-        let gemma = Task { let s = try await gate.acquire(exclusive: true); order.add("X"); return s }
-        try await settle()
-        await gate.evictExclusive()
-        try await settle()
-        XCTAssertEqual(order.all, [], "Gemma still waits for the running Whisper call")
-        await gate.release(whisper)
-        _ = try await gemma.value
-        XCTAssertEqual(order.all, ["X"])
-    }
-
-    /// A Whisper chunk admitted before Gemma loaded is still running when
-    /// it does; the first Gemma call must wait for it.
-    func testSharedHoldTakenBeforeActivationIsCounted() async throws {
-        let gate = InferenceGate()
-        let early = try await gate.acquire(owner: "whisper")
-        await gate.setLitertActive(true)
-        let order = Order()
-        let gemma = Task { let s = try await gate.acquire(exclusive: true); order.add("X"); return s }
-        try await settle()
-        XCTAssertEqual(order.all, [])
-        await gate.release(early)
-        _ = try await gemma.value
-        XCTAssertEqual(order.all, ["X"])
-    }
-
-    func testEvictSharedDropsOnlyThatEnginesHolds() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let hungWhisper = try await gate.acquire(owner: "whisper")
-        let parakeet = try await gate.acquire(owner: "parakeet")
-        let order = Order()
-        let gemma = Task { let s = try await gate.acquire(exclusive: true); order.add("X"); return s }
-        try await settle()
-        await gate.evictShared(owner: "whisper", olderThan: 0)
-        try await settle()
-        XCTAssertEqual(order.all, [], "Parakeet's hold is not Whisper's to give up")
-        await gate.release(parakeet)
-        let x = try await gemma.value
-        XCTAssertEqual(order.all, ["X"])
-        await gate.release(hungWhisper)   // evicted token: no effect
-        await gate.release(x, exclusive: true)
-    }
-
-    /// Dictation abandoning its own hung call evicts that hold, never a
-    /// background hold of the same engine (Super's whole-track reading).
-    func testInteractiveEvictionLeavesBackgroundHolds() async throws {
-        let gate = InferenceGate()
-        let background = try await gate.acquire(owner: "whisper")
-        let dictation = try await InferenceGate.$interactive.withValue(true) {
-            try await gate.acquire(owner: "whisper")
-        }
-        await gate.setLitertActive(true)
-        let order = Order()
-        let gemma = Task { let s = try await gate.acquire(exclusive: true); order.add("X"); return s }
-        try await settle()
-        await gate.evictShared(owner: "whisper", olderThan: 0, interactiveOnly: true)
-        try await settle()
-        XCTAssertEqual(order.all, [], "the background reading still holds the gate")
-        await gate.release(background)
-        _ = try await gemma.value
-        XCTAssertEqual(order.all, ["X"])
-        await gate.release(dictation)   // evicted token: no effect
-    }
-
-    /// The 2026-09-25 freeze: a timed-out dictation polish left its
-    /// exclusive request queued behind Super's long Whisper hold, and every
-    /// later shared request queued behind that. Cancelling must free the
-    /// queue.
-    func testCancelledExclusiveWaiterStopsBlockingSharedRequests() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let longHold = try await gate.acquire()                 // Super's whole-track Whisper
-        let polish = Task { try await gate.acquire(exclusive: true) }
-        try await settle()
-        let order = Order()
-        let next = Task { let s = try await gate.acquire(); order.add("S"); return s }
-        try await settle()
-        XCTAssertEqual(order.all, [], "shared request queues behind the waiting exclusive one")
-        polish.cancel()
-        do { _ = try await polish.value; XCTFail("cancelled waiter must not get the gate") }
-        catch is CancellationError {}
-        let s = try await next.value
-        XCTAssertEqual(order.all, ["S"])
-        await gate.release(s)
-        await gate.release(longHold)
-        // The gate is whole again: an exclusive request gets straight in.
-        let x = try await gate.acquire(exclusive: true)
-        XCTAssertGreaterThanOrEqual(x, 0)
-    }
-
-    func testInteractiveSharedDoesNotWaitForQueuedExclusive() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let longHold = try await gate.acquire()
-        let background = Task { try await gate.acquire(exclusive: true) }
-        try await settle()
-        // Dictation's Parakeet call: runs next to Whisper at once.
-        let s = try await InferenceGate.$interactive.withValue(true) { try await gate.acquire() }
-        XCTAssertGreaterThanOrEqual(s, 0)
-        await gate.release(s)
-        await gate.release(longHold)
-        let x = try await background.value
-        await gate.release(x, exclusive: true)
-    }
-
-    func testInteractiveSharedStillWaitsWhileLiteRTRuns() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let x = try await gate.acquire(exclusive: true)
-        let order = Order()
+        try await q.enter()
+        let background = Task { try await q.enter(); order.add("background"); await q.leave() }
+        await settle()
         let dictation = Task {
-            try await InferenceGate.$interactive.withValue(true) {
-                let s = try await gate.acquire(); order.add("D"); return s
-            }
+            try await GenerationQueue.$interactive.withValue(true) { try await q.enter() }
+            order.add("dictation"); await q.leave()
         }
-        try await settle()
-        XCTAssertEqual(order.all, [], "never next to a running LiteRT call")
-        await gate.release(x, exclusive: true)
-        _ = try await dictation.value
-        XCTAssertEqual(order.all, ["D"])
+        await settle()
+        await q.leave()
+        try await background.value; try await dictation.value
+        XCTAssertEqual(order.all, ["dictation", "background"])
     }
 
-    func testPatienceGivesUpWithBusyAndLeavesTheQueue() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let longHold = try await gate.acquire()
+    func testPatienceRunsOutWithBusy() async throws {
+        let q = GenerationQueue()
+        try await q.enter()
         do {
-            _ = try await InferenceGate.$patience.withValue(0.1) { try await gate.acquire(exclusive: true) }
-            XCTFail("expected Busy")
-        } catch is InferenceGate.Busy {}
-        // Nothing left queued: a plain shared request is admitted at once.
-        let s = try await gate.acquire()
-        await gate.release(s)
-        await gate.release(longHold)
+            try await GenerationQueue.$patience.withValue(0.1) { try await q.enter() }
+            XCTFail("should have given up")
+        } catch is GenerationQueue.Busy {}
+        await q.leave()
+        let busy = await q.isBusy
+        XCTAssertFalse(busy, "the request that gave up left the queue")
     }
 
-    func testInteractiveExclusiveGoesAheadOfBackgroundWaiters() async throws {
-        let gate = InferenceGate()
-        await gate.setLitertActive(true)
-        let hold = try await gate.acquire()
-        let order = Order()
-        let background = Task { let s = try await gate.acquire(exclusive: true); order.add("B"); return s }
-        try await settle()
-        let polish = Task {
-            try await InferenceGate.$interactive.withValue(true) {
-                let s = try await gate.acquire(exclusive: true); order.add("P"); return s
-            }
-        }
-        try await settle()
-        await gate.release(hold)
-        let p = try await polish.value
-        try await settle()
-        XCTAssertEqual(order.all, ["P"])
-        await gate.release(p, exclusive: true)
-        let b = try await background.value
-        XCTAssertEqual(order.all, ["P", "B"])
-        await gate.release(b, exclusive: true)
-    }
-
-    func testSilentChunkDetection() {
-        XCTAssertTrue(EnsembleBackend.isSilent([Float](repeating: 0, count: 16_000 * 26)))
-        // The quietest real chunk measured peaked at 0.020 RMS.
-        var quiet = [Float](repeating: 0, count: 16_000 * 26)
-        for i in 0..<16_000 { quiet[160_000 + i] = 0.02 * sinf(Float(i) * 0.3) * 1.414 }
-        XCTAssertFalse(EnsembleBackend.isSilent(quiet))
+    func testCancelledWaiterLeavesTheQueue() async throws {
+        let q = GenerationQueue()
+        try await q.enter()
+        let waiter = Task { try await q.enter() }
+        await settle()
+        waiter.cancel()
+        do { try await waiter.value; XCTFail("should have been cancelled") } catch is CancellationError {}
+        await q.leave()
+        let busy = await q.isBusy
+        XCTAssertFalse(busy)
     }
 }
 

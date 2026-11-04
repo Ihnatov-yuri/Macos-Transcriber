@@ -37,16 +37,37 @@ struct AppShell: View {
     private let sidebarWidth: CGFloat = 200
 
     @State private var askUpdateConsent = false
+    @State private var askTextModel = false
+    /// Asked once: summaries, titles, briefs and Super's rulings need a text
+    /// model, and v5.4 removed the LiteRT one without downloading another.
+    @AppStorage("textModel.prompted") private var textModelPrompted = false
 
     var body: some View {
         shell
             .onChange(of: container.dictatePaneRequested) { _, _ in section = .dictate }
+            .onChange(of: container.modelsPaneRequested) { _, _ in section = .settings }
             .onChange(of: container.peoplePaneRequested) { _, _ in section = .people }
             .task {
                 // A beat after the window settles, once, until answered.
                 guard container.updates.needsConsent else { return }
                 try? await Task.sleep(for: .seconds(1.5))
                 askUpdateConsent = container.updates.needsConsent
+            }
+            .task {
+                guard !textModelPrompted, !ModelCatalog.anyInstalled else { return }
+                try? await Task.sleep(for: .seconds(2))
+                // The update question, when there is one, goes first.
+                while askUpdateConsent { try? await Task.sleep(for: .seconds(1)) }
+                askTextModel = !ModelCatalog.anyInstalled
+            }
+            .alert("Download a text model", isPresented: $askTextModel) {
+                Button("Open Models") {
+                    textModelPrompted = true
+                    container.requestModelsPane()
+                }
+                Button("Later", role: .cancel) { textModelPrompted = true }
+            } message: {
+                Text("Summaries, titles, person briefs, dictation polish and Super's rulings run on a text model on this Mac. Transcription works without one. Settings → Models compares the three and downloads the one you pick (5 to 16 GB).")
             }
             .alert("Check for new versions?", isPresented: $askUpdateConsent) {
                 Button("Check once a day") { container.updates.answerConsent(true) }

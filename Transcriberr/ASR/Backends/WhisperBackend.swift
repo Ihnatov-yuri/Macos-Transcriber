@@ -237,14 +237,13 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// Wedge recovery: build a fresh pipeline first, then swap it in. The
     /// default release-then-load left `pipe` nil for the whole reload, and
     /// every other chunk in flight failed with "not loaded", which killed
-    /// the run. The hung call keeps the old pipeline until it returns; its
-    /// gate hold is evicted so Gemma is not blocked behind it forever.
+    /// the run. The hung call keeps the old pipeline until it returns.
     ///
     /// Only when one of this engine's own calls is stuck: in Super the
     /// runner cannot tell which engine hung, so it asks every engine, and
     /// the healthy ones stay as they are.
     func recoverWedge(modelPath: URL?) async throws {
-        let stuck = inFlight.filter { $0.value.sinceLastToken >= InferenceGate.stuckCallAge }
+        let stuck = inFlight.filter { $0.value.sinceLastToken >= ParakeetBackend.stuckCallAge }
         guard !stuck.isEmpty else {
             try await load(modelPath: modelPath)
             return
@@ -252,7 +251,6 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         AppLog.warn("whisper", "wedge recovery: \(stuck.count) call(s) stuck — rebuilding the pipeline")
         try await rebuild()
         for key in stuck.keys { inFlight[key] = nil }
-        await InferenceGate.shared.evictShared(owner: id)
     }
 
     /// Native calls running now, by call id.
@@ -337,13 +335,8 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         // Cyrillic ("housekeeping" → "хаускіпінг") and dropped real speech.
         // The vocabulary acts in the word vote and the arbitration instead.
 
-        // Shared hold: runs alongside other Whisper/Parakeet calls, but never
-        // while LiteRT Gemma infers — that pairing wedges LiteRT's native
-        // call (see InferenceGate). Pass-through when no Gemma is loaded.
         if let limiter { try await limiter.acquire() }
         defer { if let limiter { Task { await limiter.release() } } }
-        let gateStamp = try await InferenceGate.shared.acquire(owner: id)
-        defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let callProgress = WhisperCallProgress()
         let call = beginCall(callProgress)
         defer { endCall(call) }
@@ -523,8 +516,6 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         guard isReady, let pipe else {
             throw ASRError.modelLoadFailed(reason: "Whisper backend not loaded")
         }
-        let gateStamp = try await InferenceGate.shared.acquire(owner: id)
-        defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let call = beginCall(WhisperCallProgress())
         defer { endCall(call) }
         let r = try await pipe.detectLangauge(audioArray: samples)

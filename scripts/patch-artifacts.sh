@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Post-resolve fix for the FluidAudio 0.15.5+ / LiteRT-LM header collision.
+# Post-resolve fix for the FluidAudio 0.15.5+ / uzu header collision (it was
+# LiteRT-LM until v5.4; uzu's xcframework has the same flat layout).
 #
 # Both packages ship a library xcframework whose Headers/ folder has a
 # top-level module.modulemap. Xcode's ProcessXCFramework copies every

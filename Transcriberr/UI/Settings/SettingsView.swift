@@ -34,9 +34,8 @@ struct SettingsView: View {
 // MARK: - Tabs
 
 /// Which engine does what. Speech-to-text runs on Parakeet / Whisper (or the
-/// dual-engine merge); Gemma 4 is primarily the TEXT engine — summaries,
-/// cleanup, translation, titles, merge arbitration — and is additionally
-/// selectable as an EXPERIMENTAL audio engine (known to hallucinate).
+/// dual-engine merge); the on-device text model (Models tab) does the TEXT
+/// work — summaries, cleanup, translation, titles, merge arbitration.
 struct EnginesSettingsTab: View {
     @AppStorage("ui.meetingBrief") private var meetingBrief = true
     @AppStorage(MeetingContext.enabledKey) private var meetingContext = true
@@ -118,15 +117,15 @@ struct EnginesSettingsTab: View {
                 }
                 Text("Before a recording is transcribed, the invite it was made in (its title, attendees and the names in its notes) and the names that recur in your earlier meetings with the same people become vocabulary for that run. Read from the Calendar app on this Mac; nothing leaves it.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-                Toggle("Gemma reads the whole transcript first (recording brief)", isOn: $meetingBrief)
-                Text("A few extra reads (about a minute per hour of recording) give Gemma the topic, the people and the names as spelled in this recording. Max-quality arbitration and the Clean / Context rewrite / Translate presets all use it, and a name spelled inconsistently is unified when the correction sounds the same.")
+                Toggle("The text model reads the whole transcript first (recording brief)", isOn: $meetingBrief)
+                Text("A few extra reads (about a minute per hour of recording) give the text model the topic, the people and the names as spelled in this recording. Max-quality arbitration and the Clean / Context rewrite / Translate presets all use it, and a name spelled inconsistently is unified when the correction sounds the same.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-                Picker("Gemma rules on disputed chunks", selection: $gemmaRulings) {
+                Picker("Text model rules on disputed chunks", selection: $gemmaRulings) {
                     Text("English runs (measured to help)").tag("english")
                     Text("All languages").tag("all")
                     Text("Never").tag("off")
                 }
-                Text("Both engines transcribe every chunk in parallel; disagreements are settled word by word by recognizer confidence. With Max quality on, the whole recording is also read at once (long-form Whisper, English stretches re-read in English, echo removed by timing). Gemma's rulings on disputed chunks helped in English and hurt in Ukrainian when measured against checked transcripts, so by default they run for English only.")
+                Text("Both engines transcribe every chunk in parallel; disagreements are settled word by word by recognizer confidence. With Max quality on, the whole recording is also read at once (long-form Whisper, English stretches re-read in English, echo removed by timing). The text model's rulings on disputed chunks helped in English and hurt in Ukrainian when measured against checked transcripts, so by default they run for English only.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Speaker turns") {
@@ -146,8 +145,7 @@ struct EnginesSettingsTab: View {
                 LabeledContent("Parakeet v2", value: "English only — best English accuracy")
                 LabeledContent("Ihnatov Parakeet UK", value: "Parakeet v3 fine-tuned for Ukrainian — keeps v3's English")
                 LabeledContent("Whisper", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese (distil-large-v3: English only)")
-                LabeledContent("Gemma 4 LiteRT", value: "~140 languages incl. Gulf Arabic — strongest Arabic (as on Android)")
-                Text("Recommendations: English → Parakeet v3 (or v2). Ukrainian → Ihnatov Parakeet UK. Other European languages → Parakeet v3. Arabic → Gemma LiteRT (Whisper as second opinion). Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge.")
+                Text("Recommendations: English → Parakeet v3 (or v2). Ukrainian → Ihnatov Parakeet UK. Other European languages → Parakeet v3. Arabic → Whisper. Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
             Section("Post-processing") {
@@ -159,7 +157,7 @@ struct EnginesSettingsTab: View {
                         Text($0.displayName).tag($0)
                     }
                 }
-                Text("Gemma 4 (Google LiteRT) generates much faster than the MLX build on Apple GPUs; cloud engines need an API key. Preset prompt templates are editable in the Presets tab; transcription prompts in Prompts.")
+                Text("The on-device model is picked in the Models tab; cloud engines need an API key. Preset prompt templates are editable in the Presets tab; transcription prompts in Prompts.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
         }
@@ -172,8 +170,11 @@ struct ModelsSettingsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppMetric.m) {
-            // Speech models are managed automatically; this tab manages the
-            // Gemma text model (downloaded explicitly — they're big).
+            // Text models first: they are downloaded and picked by hand.
+            // Speech models are managed automatically.
+            TextModelsSection()
+            Hairline()
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("Speech-to-text — Parakeet v3/v2/UK (automatic)")
                     .uiLabel(10, color: AppColor.ink2)
@@ -183,17 +184,6 @@ struct ModelsSettingsTab: View {
             Hairline()
 
             WhisperModelsSection()
-            Hairline()
-
-            HairlineSoft()
-            Text("Catalog").uiLabel(10, color: AppColor.ink2)
-
-            VStack(spacing: 0) {
-                ForEach(ModelCatalog.entries, id: \.id) { entry in
-                    ModelRow(entry: entry)
-                    HairlineSoft()
-                }
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -202,95 +192,6 @@ struct ModelsSettingsTab: View {
         let mb = Double(b) / 1_000_000
         if mb < 1000 { return String(format: "%.0f MB", mb) }
         return String(format: "%.1f GB", mb / 1000)
-    }
-}
-
-private struct ModelRow: View {
-    @Environment(AppContainer.self) private var container
-    let entry: ModelEntry
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: AppMetric.m) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name)
-                        .font(AppFont.display(14, weight: .semibold))
-                        .foregroundStyle(AppColor.ink)
-                    Text(entry.purpose)
-                        .font(AppFont.text(12))
-                        .foregroundStyle(AppColor.ink2)
-                    if let hf = entry.huggingFaceID {
-                        Text(hf).uiLabel(9, color: AppColor.ink3)
-                    }
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text(format(entry.sizeBytes)).uiLabel(10, color: AppColor.ink2)
-                    actionButton
-                }
-                .frame(minWidth: 130, alignment: .trailing)
-            }
-            if let info = container.modelDownloader.progress[entry.id],
-               container.modelDownloader.isDownloading.contains(entry.id) {
-                ProgressView(value: info.fractionComplete) {
-                    Text(info.status).uiLabel(9, color: AppColor.ink2)
-                }
-                .progressViewStyle(.linear)
-                .tint(AppColor.accent)
-            }
-        }
-        .padding(.vertical, AppMetric.s)
-    }
-
-    @State private var confirmingDelete = false
-
-    @ViewBuilder
-    private var actionButton: some View {
-        if container.modelDownloader.isCached(entry) {
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("Installed").uiLabel(10, color: AppColor.accentOnLight)
-                if let size = container.modelDownloader.diskSize(entry) {
-                    Text(formatGB(size)).uiLabel(9, color: AppColor.ink3)
-                }
-                TapButton { confirmingDelete = true } label: {
-                    LitButtonChrome(.destructive, compact: true) { Text("Delete") }
-                }
-            }
-            .confirmationDialog(
-                "Delete \(entry.name)?",
-                isPresented: $confirmingDelete,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    container.modelDownloader.deleteCached(entry)
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Removes the model from \(container.modelDownloader.localPath(entry)?.path ?? "disk").")
-            }
-        } else if container.modelDownloader.isDownloading.contains(entry.id) {
-            TapButton { container.modelDownloader.cancel(entry.id) } label: {
-                LitButtonChrome(.secondary, compact: true) { Text("Cancel") }
-            }
-        } else {
-            TapButton {
-                Task { try? await container.modelDownloader.download(entry) }
-            } label: {
-                LitButtonChrome(.primary, compact: true) { Text("Download") }
-            }
-        }
-    }
-
-    private func format(_ b: Int64) -> String {
-        let mb = Double(b) / 1_000_000
-        if mb < 1000 { return String(format: "%.0f MB", mb) }
-        return String(format: "%.1f GB", mb / 1000)
-    }
-
-    private func formatGB(_ b: Int64) -> String {
-        let mb = Double(b) / 1_000_000
-        if mb < 1000 { return String(format: "%.0f MB on disk", mb) }
-        return String(format: "%.1f GB on disk", mb / 1000)
     }
 }
 
@@ -412,7 +313,7 @@ struct RecorderSettingsTab: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Pre-process imported files")
                         .font(AppFont.text(13, weight: .bold))
-                    Text("Runs the same cleanup over MP3 / M4A / WAV files before Gemma sees them. Adds a few seconds to the decode step.")
+                    Text("Runs the same cleanup over MP3 / M4A / WAV files before they are transcribed. Adds a few seconds to the decode step.")
                         .font(AppFont.text(11))
                         .foregroundStyle(AppColor.ink2)
                 }

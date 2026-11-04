@@ -125,7 +125,7 @@ final class VoiceprintTests: XCTestCase {
     @MainActor
     func testUntimedMicChunkWithoutYourVoiceIsDropped() {
         let runner = TranscriptionRunner(
-            factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore()),
+            factory: BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore()),
             prompts: PromptStore(), diarization: DiarizationRunner())
         let out = runner.finalizeSegments(
             [seg(0, 26, "Hello, I'm Joe. Hello, I'm Joe.", "ME"),
@@ -161,7 +161,7 @@ final class VoiceprintTests: XCTestCase {
     @MainActor
     private func singleTrack(_ clusterVoice: [String: Float]?, myName: String? = "Yuri") -> [RawSegment] {
         let runner = TranscriptionRunner(
-            factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore()),
+            factory: BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore()),
             prompts: PromptStore(), diarization: DiarizationRunner())
         return runner.finalizeSegments(
             [seg(0, 5, "So what did the bank say?", "S1"),

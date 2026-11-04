@@ -17,8 +17,6 @@ import os
 /// Returns `AsyncThrowingStream<ASREvent>` (swap of Kotlin's `channelFlow`).
 nonisolated final class TranscriptionRunner: @unchecked Sendable {
     static let chunkTimeoutSeconds: TimeInterval = 120
-    /// Wedge recoveries observed in the current run (drives Gemma probation).
-    private var runWedgeCount = 0
     static let chunkTailChars = 250
 
     private let factory: BackendFactory
@@ -452,8 +450,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         // Acoustic engines don't use cross-chunk prompt context, so their
         // chunks are independent — run a bounded PIPELINE (3 in flight) so
         // the ANE (Parakeet), GPU (Whisper / arbitration), and CPU (vote)
-        // work simultaneously instead of in lockstep. LiteRT/cloud engines
-        // stay sequential (single engine actor + real context use).
+        // work simultaneously instead of in lockstep. Cloud engines stay
+        // sequential (real context use).
         let pipelineWidth: Int = {
             switch params.backend {
             case .parakeet, .parakeetV2, .parakeetUK, .whisper: return 3
@@ -488,7 +486,6 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         }
         let ensembleTwoPass = superMaxQuality
         let richBox = RichBox()
-        runWedgeCount = 0
         var perChunkParsed: [Int: [RawSegment]] = [:]
 
         // Chunks share a 1 s recap with their predecessor, so the word spoken
@@ -700,7 +697,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         // actually fight — and the arbiter sees text BEFORE AND AFTER the
         // disputed chunk plus the user's vocabulary.
         var spellingFixes: [MeetingBrief.Fix] = []
-        if ensembleTwoPass, let ens = backend as? EnsembleBackend, await !ens.isGemmaBenched {
+        if ensembleTwoPass, let ens = backend as? EnsembleBackend {
             // The arbiter first reads the whole voted transcript: who is
             // talking, about what, and which names the engines spelled three
             // ways. Every arbitration below gets that brief; its guarded
@@ -715,7 +712,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 let words = vocabulary
                 do {
                     let brief = try await withChunkTimeout(
-                        seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass) * GemmaLiteRTBackend.thinkingTimeoutScale
+                        seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass)
                     ) {
                         try await ens.prepareBrief(transcript: firstPass, vocabulary: words)
                     }
@@ -771,7 +768,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 // keep the confidence-voted text for this chunk.
                 let ruled: String
                 do {
-                    ruled = try await withChunkTimeout(seconds: 120 * GemmaLiteRTBackend.thinkingTimeoutScale) {
+                    ruled = try await withChunkTimeout(seconds: 120) {
                         await ens.arbitrate(
                             textA: info.textA, textB: info.textB,
                             context: ctx, languages: params.languages)
@@ -1438,8 +1435,13 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             .prefix(2)
             .map(\.text)
             .joined(separator: " ")
-        let combined = (before + " " + after).trimmingCharacters(in: .whitespacesAndNewlines)
-        return combined.isEmpty ? nil : "[REFINEMENT PASS — prior attempt was low-confidence; neighboring transcript: \(combined.prefix(400))]"
+        // Labelled and capped separately: one "preceding" block with the
+        // following speech appended, cut from the front to 400 characters,
+        // told the arbiter that what came after had come before.
+        var parts: [String] = []
+        if !before.isEmpty { parts.append("Before this segment: …\(before.suffix(300))") }
+        if !after.isEmpty { parts.append("After this segment: \(after.prefix(300))…") }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
     /// Whole-track ERLE at which the mic counts as mostly echo (≈94% of its
@@ -1560,7 +1562,6 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 // wedge ladder below and ended the whole run over one part.
                 AppLog.error("runner", "chunk wedged on its retry — skipping it, recovering engine for the rest")
                 RunGapLog.record(.wedged)
-                await noteWedge(backend: backend, continuation: continuation)
                 try? await backend.recoverWedge(modelPath: params.modelDirectory)
                 return ""
             }
@@ -1569,7 +1570,6 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             // release()+load() here yanked engines from under the OTHER
             // in-flight pipeline chunks — the watchdog killed healthy work.
             continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
-            await noteWedge(backend: backend, continuation: continuation)
             // A failed rebuild must not end the run from here: the engine
             // keeps its old instance, and the retry below either works on it
             // or times out into the skip.
@@ -1593,31 +1593,15 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 // recover the engine for the chunks behind it, move on.
                 AppLog.error("runner", "chunk wedged twice — skipping it, recovering engine for the rest")
                 RunGapLog.record(.wedged)
-                await noteWedge(backend: backend, continuation: continuation)
                 try? await backend.recoverWedge(modelPath: params.modelDirectory)
                 return ""
             }
         }
     }
 
-    /// Wedge bookkeeping for one run. Audio that hangs LiteRT hangs it
-    /// DETERMINISTICALLY (log-proven: the same meeting wedged on the same
-    /// chunk three runs in a row) — after the second wedge, bench Gemma for
-    /// the rest of the run instead of paying a recovery stall per chunk.
-    @MainActor
-    private func noteWedge(backend: ASRBackend, continuation: AsyncThrowingStream<ASREvent, Error>.Continuation) async {
-        runWedgeCount += 1
-        guard runWedgeCount >= 2, let ens = backend as? EnsembleBackend,
-              await !ens.isGemmaBenched else { return }
-        await ens.benchGemma()
-        continuation.yield(.stage(
-            text: "Gemma keeps wedging — finishing this run single-engine",
-            fraction: -1))
-    }
-
     /// Max-quality first pass with the same recover-retry-degrade ladder as
     /// runChunkWithRetry. This path previously had a bare 300 s timeout and
-    /// NO recovery: one wedged LiteRT call tore down the whole task group —
+    /// NO recovery: one wedged native call tore down the whole task group —
     /// every "error 3" (chunkTimeout) run death traced back to it.
     @MainActor
     private func richChunkWithRetry(
@@ -1635,7 +1619,6 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             }
         } catch ASRError.chunkTimeout {
             continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
-            await noteWedge(backend: ens, continuation: continuation)
             try? await ens.recoverWedge(modelPath: nil)
             do {
                 return try await withChunkTimeout(seconds: timeout) {
@@ -1644,7 +1627,6 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 }
             } catch ASRError.chunkTimeout {
                 AppLog.error("runner", "rich chunk wedged twice — degrading to single engine")
-                await noteWedge(backend: ens, continuation: continuation)
                 try? await ens.recoverWedge(modelPath: nil)
                 do {
                     return try await withChunkTimeout(seconds: timeout) {

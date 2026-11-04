@@ -16,7 +16,7 @@
 #   E2E_SKIP_MODELS=1     skip everything that downloads or runs a speech model
 #   E2E_SKIP_WHISPER=1    skip Whisper (WhisperKit large-v3, ~3 GB) and Super
 #   E2E_SKIP_UK=1         skip Parakeet UK (~630 MB from Hugging Face)
-#   E2E_GEMMA=1           also download Gemma 4 E2B (~2.6 GB) and run litert/gentest/brief
+#   E2E_GEMMA=1           also download Gemma 4 E4B on MLX (~5.2 GB) and run gentest/brief
 #   E2E_SKIP_NETWORK=1    skip `uk-model status` (asks Hugging Face for its release list)
 #   E2E_ALLOW_PREFS=1     allow writing nl.ihnatov.Transcriberr preferences (assistant
 #                         access off/on); on by default when CI=true, restored afterwards
@@ -1025,37 +1025,22 @@ print("%.1f" % ((r["start"] + r["end"]) / 2))' "$AUDIO/regions.json" 2> /dev/nul
         fi
     fi
 
-    # --------------------------------------------------------------- Gemma ---
+    # ---------------------------------------------------------- text model ---
     if [ "$RUN_GEMMA" != "1" ]; then
-        record SKIP "gemma" "set E2E_GEMMA=1 to download Gemma 4 E2B (~2.6 GB) and run litert/gentest/brief"
+        record SKIP "text model" "set E2E_GEMMA=1 to download Gemma 4 E4B on MLX (~5.2 GB) and run gentest/brief"
     else
-        GEMMA_DIR="$HOME/Library/Application Support/Transcriberr/models/litert-community/gemma-4-E2B-it-litert-lm"
-        GEMMA_FILE="$GEMMA_DIR/gemma-4-E2B-it.litertlm"
-        GEMMA_URL="https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1/gemma-4-E2B-it.litertlm"
-        GEMMA_SHA="181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
-        mkdir -p "$GEMMA_DIR"
-        if [ ! -s "$GEMMA_FILE" ]; then
-            run_step gemma-download 3600 curl -fL --retry 3 -o "$GEMMA_FILE.partial" "$GEMMA_URL"
-            if [ "$RC" -eq 0 ]; then mv "$GEMMA_FILE.partial" "$GEMMA_FILE"; fi
-        fi
-        if [ -s "$GEMMA_FILE" ] && [ "$(shasum -a 256 "$GEMMA_FILE" | awk '{print $1}')" = "$GEMMA_SHA" ]; then
-            record PASS "gemma bundle" "E2B present, SHA-256 matches the catalog"
-            cli litert 2400 litert "$AUDIO/a1.wav"
-            if [ "$RC" -eq 0 ]; then
-                helper_between "$LOGS/litert.out" "$WORK/litert.txt"
-                keyword_check "litert gemma-audio-transcription" "quick brown fox jumps lazy dog river" \
-                    "$WORK/litert.txt" "$(grep -oE 'engine ready on [A-Z]+' "$LOGS/litert.out" | head -1 || true)"
-            else
-                record FAIL "litert gemma-audio-transcription" "$(rc_reason litert)"
-            fi
+        # The app's own downloader: every file of the pinned commit, checksummed.
+        cli models-download 3600 models download gemma-4-e4b-mlx
+        if [ "$RC" -eq 0 ]; then
+            record PASS "text model" "Gemma 4 E4B installed, every file matches the catalog"
+            defaults write nl.ihnatov.TranscriberrCLI text.model.general gemma-4-e4b-mlx
             cli gentest 1800 gentest
             expect_rc "gentest concurrent-generations" gentest 0 "PASS — no starved generations"
             printf 'Yuri: Good morning, let us review the Kubernetes rollout.\nKees: I will send the budget on Tuesday.\n' > "$WORK/brief.txt"
             cli brief 1800 brief "$WORK/brief.txt"
             expect_rc "brief meeting-brief" brief 0 "\[brief\] ✓"
         else
-            rm -f "$GEMMA_FILE.partial"
-            record FAIL "gemma bundle" "download failed or SHA-256 mismatch (logs/gemma-download.err)"
+            record FAIL "text model" "download failed or a checksum mismatched (logs/models-download.err)"
         fi
     fi
 fi

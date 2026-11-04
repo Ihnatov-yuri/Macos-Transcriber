@@ -53,7 +53,7 @@ final class RunGapTests: XCTestCase {
 
     @MainActor
     func testSuperKeepsParakeetWhenWhisperRunsOutOfTimeAndAsksWhisperOnce() async throws {
-        let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore())
+        let factory = BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore())
         let ens = EnsembleBackend(factory: factory)
         let whisper = FakeEngine(id: "whisper", text: nil)
         let parakeet = FakeEngine(id: "parakeet", text: "the plan for the week")

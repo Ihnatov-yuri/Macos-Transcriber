@@ -8,7 +8,7 @@
     <key>com.apple.security.personal-information.calendars</key>
     <true/>
     <!-- No Team ID on an ad-hoc / self-signed build: without this the hardened
-         runtime refuses the app's own embedded dylibs (LiteRT, FluidAudio). -->
+         runtime refuses the app's own embedded frameworks (UzuRuntime, FluidAudio). -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 </dict>

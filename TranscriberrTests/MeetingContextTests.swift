@@ -114,7 +114,7 @@ final class MeetingContextTests: XCTestCase {
     }
 
     func testTheSharedEngineForgetsThePreviousMeeting() async {
-        let ens = EnsembleBackend(factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore()))
+        let ens = EnsembleBackend(factory: BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore()))
         var mc = MeetingContext(title: "x", attendees: ["Haya Ahmed", "Kees van der Berg", "Will Smith"], emails: [],
                                 inviteTerms: ["Kaiko", "Blits Insurance"], start: Date(), end: Date())
         mc.voteTerms = MeetingContext.voteTerms(from: mc.calendarTerms)

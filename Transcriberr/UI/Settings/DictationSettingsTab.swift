@@ -84,7 +84,7 @@ struct DictationSettingsTab: View {
                        isOn: Binding(get: { s.livePreview }, set: { s.livePreview = $0 }))
                 Toggle("Use names learned from my transcripts (Settings → Style & Vocabulary)",
                        isOn: Binding(get: { s.useLearnedTerms }, set: { s.useLearnedTerms = $0 }))
-                Text("Verbatim inserts the recognizer's words untouched. Clean applies the deterministic passes (vocabulary, fillers, commands, self-corrections) in well under a second. Smart additionally runs Gemma with the target app, its register, and the text before the cursor — chat stays short and casual, mail gets full sentences, an enumeration becomes a list. Smart uses the text engine chosen under Post-processing; if that is a cloud engine, the dictated passage is sent to it, but the window title and the text around your cursor never leave this Mac. Password fields are always verbatim and never read.")
+                Text("Verbatim inserts the recognizer's words untouched. Clean applies the deterministic passes (vocabulary, fillers, commands, self-corrections) in well under a second. Smart additionally runs the text model with the target app, its register, and the text before the cursor — chat stays short and casual, mail gets full sentences, an enumeration becomes a list. Smart uses the text engine chosen under Post-processing; if that is a cloud engine, the dictated passage is sent to it, but the window title and the text around your cursor never leave this Mac. Password fields are always verbatim and never read.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
 
@@ -101,7 +101,7 @@ struct DictationSettingsTab: View {
                 TapButton { s.polishPrompt = DictationSettings.defaultPolishPrompt } label: {
                     LitButtonChrome(.ghost, compact: true) { Text("Reset to default") }
                 }
-                Text("Appended to the built-in context prompt when you change it. Uses the post-processing text engine (Settings → Engines); roughly 2–4 s per passage on Gemma LiteRT. A result that isn't clearly the same passage (wrong length, answers the text, echoes the prompt) is discarded in favour of the deterministic output.")
+                Text("Appended to the built-in context prompt when you change it. Uses the post-processing text engine (Settings → Engines); a second or two per passage on the on-device model. A result that isn't clearly the same passage (wrong length, answers the text, echoes the prompt) is discarded in favour of the deterministic output.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
 

@@ -2,8 +2,9 @@ import CryptoKit
 import Foundation
 import Observation
 
-/// Thin coordinator that fronts Gemma4Swift's downloader (and, later,
-/// FluidAudio's). Lets the UI observe per-model progress and trigger cancels.
+/// Downloads the text models in `ModelCatalog`: every file of a pinned
+/// commit, checksum-checked. Lets the UI observe per-model progress and
+/// trigger cancels.
 @Observable
 nonisolated final class ModelDownloader: @unchecked Sendable {
     struct ProgressInfo: Sendable, Equatable {
@@ -43,19 +44,6 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
             guard running.isCancelled else { return try await running.value }
             _ = await running.result
         }
-        // Single-file models (.litertlm bundles): direct streaming download —
-        // a repo snapshot would pull every device-specific variant (~20 GB).
-        if let direct = entry.directURL {
-            return try await downloadDirect(entry, from: direct)
-        }
-        throw NSError(
-            domain: "Transcriberr.ModelDownloader", code: -5,
-            userInfo: [NSLocalizedDescriptionKey: "\(entry.name) has no direct download URL."]
-        )
-    }
-
-    @MainActor
-    private func downloadDirect(_ entry: ModelEntry, from remote: URL) async throws -> URL {
         // Run inside a registered Task so cancel(id:) actually stops the byte
         // loop (before this, CANCEL left the loop running and a second press
         // could interleave two writers into one .partial file).
@@ -65,105 +53,118 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
         // no other task can be registered under this id meanwhile.
         let task = Task<URL, Error> { @MainActor in
             defer { self.activeTasks.removeValue(forKey: entry.id) }
-            return try await self.downloadDirectBody(entry, from: remote)
+            isDownloading.insert(entry.id)
+            defer { isDownloading.remove(entry.id) }
+            progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: "Downloading…")
+            do {
+                let dir = try await self.downloadFiles(entry)
+                progress[entry.id] = ProgressInfo(bytesDownloaded: entry.sizeBytes, totalBytes: entry.sizeBytes, status: "Downloaded.")
+                AppLog.info("models", "\(entry.id) installed")
+                return dir
+            } catch {
+                // Every failure used to leave the Settings → Models row
+                // showing a frozen "Downloading…" bar forever.
+                let cancelled = error is CancellationError || (error as NSError).code == NSURLErrorCancelled
+                progress[entry.id] = ProgressInfo(
+                    bytesDownloaded: 0, totalBytes: entry.sizeBytes,
+                    status: cancelled ? "Cancelled." : "Failed: \(error.localizedDescription)")
+                AppLog.error("models", "download failed for \(entry.id): \(error.localizedDescription)")
+                throw error
+            }
         }
         activeTasks[entry.id] = task
         return try await task.value
     }
 
+    /// Every file of the entry's pinned commit into its folder, each checked
+    /// against Hugging Face's checksum before it is moved into place (the
+    /// weights are parsed by native code in a process holding mic +
+    /// Accessibility grants). Files already there and matching are kept, so
+    /// a cut-short download resumes file by file. The completion marker is
+    /// written last.
     @MainActor
-    private func downloadDirectBody(_ entry: ModelEntry, from remote: URL) async throws -> URL {
-        guard let dir = directTargetDirectory(entry) else {
-            throw NSError(domain: "Transcriberr.ModelDownloader", code: -3,
-                          userInfo: [NSLocalizedDescriptionKey: "No cache path for \(entry.name)"])
-        }
-        let target = dir.appendingPathComponent(remote.lastPathComponent)
-        if FileManager.default.fileExists(atPath: target.path) { return dir }
-
-        isDownloading.insert(entry.id)
-        defer { isDownloading.remove(entry.id) }
-        progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: "Downloading…")
-
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let temp = target.appendingPathExtension("partial")
-        FileManager.default.createFile(atPath: temp.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: temp)
-        defer { try? handle.close() }
-
-        // Delegate-driven, CHUNKED. `URLSession.bytes` hands back an
-        // AsyncSequence of individual UInt8 values: on a 4.9 GB bundle that
-        // is ~5 billion async-iteration steps (plus a `Task.checkCancellation`
-        // and a `Data.append` each), which made the download CPU-bound rather
-        // than network-bound. The delegate delivers whole Data chunks.
+    private func downloadFiles(_ entry: ModelEntry) async throws -> URL {
+        let dir = ModelCatalog.localDirectory(entry)
+        let repo = entry.huggingFaceID, revision = entry.revision
+        let fm = FileManager.default
+        let marker = dir.appendingPathComponent(ModelCatalog.completeMarker)
+        if fm.fileExists(atPath: marker.path) { return dir }
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let entryID = entry.id
-        let fallbackTotal = entry.sizeBytes
-        let written: Int64
-        // One UI hop per 16 MB, not per network chunk.
-        let reported = ByteCounter()
-        attemptCounter += 1
-        let attempt = attemptCounter
-        streamingAttempt[entry.id] = attempt
-        // A pinned file is its catalog size (its hash is checked after): a
-        // server that streams far more is refused as it arrives, not after
-        // it has filled the disk.
-        let cap = Self.downloadCap(sizeBytes: entry.sizeBytes, pinned: entry.sha256 != nil)
-        do {
-            written = try await StreamingDownload(handle: handle, maxBytes: cap) { [weak self] got, expected in
-                guard reported.shouldReport(got, every: 16 << 20) else { return }
-                let total = expected > 0 ? expected : fallbackTotal
-                Task { @MainActor in
-                    guard let self, self.streamingAttempt[entryID] == attempt else { return }
-                    self.progress[entryID] = ProgressInfo(
-                        bytesDownloaded: got, totalBytes: total, status: "Downloading…")
-                }
-            }.run(url: remote)
-            streamingAttempt[entry.id] = nil
-        } catch {
-            streamingAttempt[entry.id] = nil
-            // Every failure used to leave the Settings → Models row showing a
-            // frozen "Downloading…" bar forever: only `isDownloading` was
-            // cleaned up, never the status.
-            try? handle.close()
-            try? FileManager.default.removeItem(at: temp)
-            let cancelled = error is CancellationError || (error as NSError).code == NSURLErrorCancelled
-            progress[entry.id] = ProgressInfo(
-                bytesDownloaded: 0, totalBytes: entry.sizeBytes,
-                status: cancelled ? "Cancelled." : "Failed: \(error.localizedDescription)")
-            AppLog.error("models", "direct download failed for \(entry.id): \(error.localizedDescription)")
-            throw error
-        }
-        try handle.close()
-        if Task.isCancelled {
-            try? FileManager.default.removeItem(at: temp)
-            progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: "Cancelled.")
-            throw CancellationError()
-        }
-        if let expected = entry.sha256 {
-            progress[entry.id] = ProgressInfo(bytesDownloaded: written, totalBytes: written, status: "Verifying…")
-            let actual = try await Task.detached(priority: .userInitiated) { try Self.sha256(of: temp) }.value
-            // The hash runs detached, so a cancel during it only shows here;
-            // before, the download went on to finish over "Cancelled.".
+        var done: Int64 = 0
+        for file in entry.files {
+            try Task.checkCancellation()
+            let target = dir.appendingPathComponent(file.path)
+            if fm.fileExists(atPath: target.path) {
+                progress[entry.id]?.status = "Checking \(file.path)…"
+                if await Self.matchesDetached(file, at: target) { done += file.size; continue }
+                try? fm.removeItem(at: target)
+            }
+            let remote = URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file.path)")!
+            let temp = target.appendingPathExtension("partial")
+            fm.createFile(atPath: temp.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: temp)
+            // Delegate-driven, CHUNKED. `URLSession.bytes` hands back an
+            // AsyncSequence of individual UInt8 values: on a 5 GB file that
+            // is ~5 billion async-iteration steps, which made the download
+            // CPU-bound rather than network-bound.
+            let reported = ByteCounter()
+            attemptCounter += 1
+            let attempt = attemptCounter
+            streamingAttempt[entry.id] = attempt
+            let base = done
+            let total = entry.sizeBytes
+            do {
+                // A pinned file is its listed size: a server that streams
+                // far more is refused as it arrives, not after it has filled
+                // the disk.
+                _ = try await StreamingDownload(handle: handle, maxBytes: Self.downloadCap(sizeBytes: file.size, pinned: true)) { [weak self] got, _ in
+                    guard reported.shouldReport(got, every: 16 << 20) else { return }
+                    Task { @MainActor in
+                        guard let self, self.streamingAttempt[entryID] == attempt else { return }
+                        self.progress[entryID] = ProgressInfo(bytesDownloaded: base + got, totalBytes: total, status: "Downloading…")
+                    }
+                }.run(url: remote)
+                streamingAttempt[entry.id] = nil
+                try handle.close()
+            } catch {
+                streamingAttempt[entry.id] = nil
+                try? handle.close()
+                try? fm.removeItem(at: temp)
+                throw error
+            }
             if Task.isCancelled {
-                try? FileManager.default.removeItem(at: temp)
-                progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: "Cancelled.")
+                try? fm.removeItem(at: temp)
                 throw CancellationError()
             }
-            guard actual == expected else {
-                try? FileManager.default.removeItem(at: temp)
-                progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes,
-                                                  status: "Failed: the downloaded file did not match its checksum.")
-                AppLog.error("models", "checksum mismatch for \(entry.id): got \(actual)")
+            progress[entry.id] = ProgressInfo(bytesDownloaded: base + file.size, totalBytes: total, status: "Verifying \(file.path)…")
+            guard await Self.matchesDetached(file, at: temp) else {
+                try? fm.removeItem(at: temp)
+                AppLog.error("models", "checksum mismatch for \(entry.id)/\(file.path)")
                 throw NSError(domain: "Transcriberr.ModelDownloader", code: -6,
-                              userInfo: [NSLocalizedDescriptionKey: "\(entry.name): checksum mismatch — download discarded."])
+                              userInfo: [NSLocalizedDescriptionKey: "\(entry.name): \(file.path) did not match its checksum — download discarded."])
             }
+            // The hash runs detached, so a cancel during it only shows here.
+            if Task.isCancelled {
+                try? fm.removeItem(at: temp)
+                throw CancellationError()
+            }
+            try fm.moveItem(at: temp, to: target)
+            done += file.size
         }
-        try FileManager.default.moveItem(at: temp, to: target)
-        progress[entry.id] = ProgressInfo(
-            bytesDownloaded: written,
-            totalBytes: written > 0 ? written : entry.sizeBytes,
-            status: "Downloaded.")
-        AppLog.info("models", "direct download done: \(target.lastPathComponent) (\(written) bytes)")
+        for (path, content) in entry.generatedFiles {
+            try Data(content.utf8).write(to: dir.appendingPathComponent(path), options: .atomic)
+        }
+        fm.createFile(atPath: marker.path, contents: Data(revision.utf8))
         return dir
+    }
+
+    nonisolated private static func matchesDetached(_ file: ModelEntry.File, at url: URL) async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            if let sha = file.sha256 { return (try? sha256(of: url)) == sha }
+            if let blob = file.gitBlob { return (try? HFModelRelease.gitBlobSHA1(of: url)) == blob }
+            return false
+        }.value
     }
 
     /// The most bytes a download of a `sizeBytes` catalog entry may bring:
@@ -191,15 +192,6 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    private func directTargetDirectory(_ entry: ModelEntry) -> URL? {
-        guard let hfID = entry.huggingFaceID else { return nil }
-        // Application Support, NOT Caches — macOS purges Caches under disk
-        // pressure and has already evicted a 10 GB model this way.
-        var dir = ModelCatalog.durableModelsDirectory()
-        for part in hfID.split(separator: "/") { dir = dir.appendingPathComponent(String(part)) }
-        return dir
-    }
-
     /// The task stays registered until its own cleanup has run (see
     /// download); only the UI state is cleared here, at once.
     @MainActor
@@ -210,21 +202,12 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
         progress[id]?.status = "Cancelled."
     }
 
-    func isCached(_ entry: ModelEntry) -> Bool {
-        if let direct = entry.directURL {
-            guard let dir = directTargetDirectory(entry) else { return false }
-            return FileManager.default.fileExists(
-                atPath: dir.appendingPathComponent(direct.lastPathComponent).path)
-        }
-        return false
-    }
+    func isCached(_ entry: ModelEntry) -> Bool { ModelCatalog.isInstalled(entry) }
 
+    /// The model's folder once installed.
     func localPath(_ entry: ModelEntry) -> URL? {
-        if entry.directURL != nil {
-            guard let dir = directTargetDirectory(entry), isCached(entry) else { return nil }
-            return dir
-        }
-        return nil
+        guard isCached(entry) else { return nil }
+        return ModelCatalog.localDirectory(entry)
     }
 
     /// Disk size of a downloaded model, in bytes (sum of every file in the

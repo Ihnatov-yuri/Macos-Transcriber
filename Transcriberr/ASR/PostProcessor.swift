@@ -15,9 +15,9 @@ nonisolated final class PostProcessor: @unchecked Sendable {
 
     private(set) var status: [String: Status] = [:]   // key = recordingId|presetId
 
-    /// FIFO tail: generations run strictly one at a time. The LiteRT engine
-    /// is a single shared resource — two concurrent generateText calls
-    /// starve each other (seen live: a parallel CLEAN returned 0 chars).
+    /// FIFO tail: presets run strictly one at a time, in the order pressed,
+    /// whichever engine they use (the on-device model queues its own calls
+    /// too, see GenerationQueue).
     @MainActor private var queueTail: Task<Void, Never>?
 
     private let factory: BackendFactory
@@ -49,7 +49,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
         // engine (Settings → Engines → Post-processing).
         let configured = UserDefaults.standard.string(forKey: "ui.textEngine")
             .flatMap(BackendFactory.Kind.init(rawValue:))
-            .flatMap { $0.supportsTextGeneration ? $0 : nil } ?? .gemmaLiteRT
+            .flatMap { $0.supportsTextGeneration ? $0 : nil } ?? .localText
         let kind: BackendFactory.Kind = rawKind.supportsTextGeneration ? rawKind : configured
         let key = "\(recording.id)|\(presetId)"
         // Gemma text generation on a long transcript takes minutes. Repeated
@@ -67,12 +67,8 @@ nonisolated final class PostProcessor: @unchecked Sendable {
         // The prompts this output is made with stay restorable after the
         // preset is edited (Settings → preset → History).
         presets.checkpoint(presetId, reason: .run)
-        if kind == .gemmaLiteRT,
-           !ModelCatalog.entries.contains(where: {
-               $0.backend == .gemmaLiteRT
-                   && ModelCatalog.cachedRepoDirectory(huggingFaceID: $0.huggingFaceID) != nil
-           }) {
-            setStatus(key, .failed("LiteRT Gemma model not downloaded — Settings → Models."))
+        if kind == .localText, !ModelCatalog.isInstalled(ModelCatalog.selected(.general)) {
+            setStatus(key, .failed("\(ModelCatalog.selected(.general).name) is not downloaded — Settings → Models."))
             return
         }
         // Enqueue behind whatever is already generating and return — the
@@ -211,7 +207,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
                         "Model returned \(trimmed.count) chars — kept the previous output. Try again."]
                 )
             }
-            try persist(markdown: markdown, preset: preset, recording: recording,
+            try persist(markdown: ModelText.replacingLaTeXSymbols(markdown), preset: preset, recording: recording,
                         provenance: .init(engineLabel: kind.displayName,
                                           systemPrompt: preset.systemTemplate,
                                           userPrompt: preset.userTemplate))
@@ -248,11 +244,6 @@ nonisolated final class PostProcessor: @unchecked Sendable {
             return brief
         } catch {
             AppLog.warn("postproc", "meeting brief unavailable (\(error.localizedDescription)) — continuing without it")
-            // A timed-out read leaves LiteRT's native call wedged; the preset
-            // that follows would only queue behind it.
-            if case ASRError.chunkTimeout = error, let litert = backend as? GemmaLiteRTBackend {
-                try? await litert.recoverWedge(modelPath: nil)
-            }
             return nil
         }
     }

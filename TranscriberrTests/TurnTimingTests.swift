@@ -280,7 +280,7 @@ final class TurnTimingTests: XCTestCase {
     func testFinalizeInterleavesTurns() {
         UserDefaults.standard.set(30.0, forKey: "ui.turnCoalesceGapSeconds")
         let runner = TranscriptionRunner(
-            factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore()),
+            factory: BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore()),
             prompts: PromptStore(), diarization: DiarizationRunner())
         let far = line("so tell me about your background please", from: 1) + line("and why travel", from: 14)
         let mic = line("I studied engineering and built products", from: 6)

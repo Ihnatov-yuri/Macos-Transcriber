@@ -224,9 +224,6 @@ actor SimAMEmbedder {
         defer { release() }
         try Task.checkCancellation()
         let model = try loaded()
-        // A shared hold like any engine's: LiteRT must never run beside it.
-        let gate = try await InferenceGate.shared.acquire(owner: "voice")
-        defer { Task { await InferenceGate.shared.release(gate) } }
         let cancelled = CancelFlag()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[[Float]], Error>) in

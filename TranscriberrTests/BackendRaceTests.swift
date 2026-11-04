@@ -2,8 +2,8 @@ import XCTest
 import Synchronization
 @testable import Transcriberr
 
-/// Backend fixes that need no model: speaker numbering shared by Parakeet
-/// and LiteRT Gemma, and the Gemini thinking budget.
+/// Backend fixes that need no model: speaker numbering, and the Gemini
+/// thinking budget.
 final class BackendRaceTests: XCTestCase {
 
     // MARK: - Speaker numbering
@@ -21,21 +21,6 @@ final class BackendRaceTests: XCTestCase {
         XCTAssertTrue((10..<100).contains(n))
     }
 
-    /// The hints must show the diarizer's own number: the runner parses
-    /// "Speaker N" back to SPEAKER_0N, and an off-by-one (or every turn
-    /// read as "Speaker 1") breaks the match with the diarizer's clusters.
-    func testLiteRTHintsKeepDiarizerNumbers() {
-        let msg = GemmaLiteRTBackend.userMessage(
-            languages: ["English"], translateTo: nil, diarize: true,
-            previousContext: nil,
-            speakerHints: [
-                SpeakerHint(startSeconds: 0, endSeconds: 2, speakerKey: "S1"),
-                SpeakerHint(startSeconds: 2, endSeconds: 4, speakerKey: "S2"),
-            ])
-        XCTAssertTrue(msg.contains("0.0–2.0s: Speaker 1\n"))
-        XCTAssertTrue(msg.contains("2.0–4.0s: Speaker 2\n"))
-    }
-
     // MARK: - Gemini
 
     func testGeminiThinkingBudget() {
@@ -45,37 +30,21 @@ final class BackendRaceTests: XCTestCase {
     }
 }
 
-/// LiteRT's own idle release: it waits for the transcription queue, and
-/// hands the engine back once the queue lets it.
-final class LiteRTIdleReleaseTests: XCTestCase {
+/// The text model's idle release: it waits for the transcription queue,
+/// and hands the engine back once the queue lets it.
+final class TextIdleReleaseTests: XCTestCase {
     @MainActor
     func testIdleReleaseWaitsForTheQueue() async {
-        let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore())
-        let first = factory.backend(for: .gemmaLiteRT) as AnyObject
+        let factory = BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore())
+        let first = factory.backend(for: .localText) as AnyObject
         let queueBusy = Mutex(true)
-        factory.liteRTReleaseAllowed = { !queueBusy.withLock { $0 } }
+        factory.textReleaseAllowed = { !queueBusy.withLock { $0 } }
 
-        await factory.releaseLiteRTIfQuiet()
-        XCTAssertTrue(factory.backend(for: .gemmaLiteRT) as AnyObject === first, "kept while a job runs")
+        await factory.releaseTextIfQuiet()
+        XCTAssertTrue(factory.backend(for: .localText) as AnyObject === first, "kept while a job runs")
 
         queueBusy.withLock { $0 = false }
-        await factory.releaseLiteRTIfQuiet()
-        XCTAssertFalse(factory.backend(for: .gemmaLiteRT) as AnyObject === first, "released once the queue is idle")
-    }
-}
-
-/// The CPU engine's window is small (its buffers scale with it): the token
-/// estimate that decides what may run there must never undercount.
-final class LiteRTWindowTests: XCTestCase {
-    func testEstimateOvercountsLatinAndCyrillic() {
-        let english = String(repeating: "the meeting went well ", count: 100)   // ~500 tokens
-        let ukrainian = String(repeating: "зустріч пройшла добре ", count: 100)   // ~600 tokens
-        XCTAssertGreaterThanOrEqual(GemmaLiteRTBackend.estimatedTokens(english), english.count / 4)
-        XCTAssertGreaterThanOrEqual(GemmaLiteRTBackend.estimatedTokens(ukrainian), ukrainian.count / 2)
-    }
-
-    func testAudioChunkFitsTheCPUWindow() {
-        XCTAssertLessThan(GemmaLiteRTBackend.chunkTokens, GemmaLiteRTBackend.cpuWindow)
-        XCTAssertLessThan(GemmaLiteRTBackend.cpuWindow, GemmaLiteRTBackend.gpuWindow)
+        await factory.releaseTextIfQuiet()
+        XCTAssertFalse(factory.backend(for: .localText) as AnyObject === first, "released once the queue is idle")
     }
 }

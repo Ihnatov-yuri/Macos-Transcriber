@@ -39,9 +39,17 @@ nonisolated final class UIPrefs: @unchecked Sendable {
     var liveEnabled: Bool              { didSet { defaults.set(liveEnabled, forKey: Key.liveEnabled) } }
     var liveEngine: BackendFactory.Kind { didSet { defaults.set(liveEngine.rawValue, forKey: Key.liveEngine) } }
     /// Engine that runs POST-PROCESSING (presets, titles): any Kind with
-    /// supportsTextGeneration. LiteRT Gemma generates far faster than the
-    /// MLX build on this hardware.
+    /// supportsTextGeneration — the on-device model or a cloud API.
     var textEngine: BackendFactory.Kind { didSet { defaults.set(textEngine.rawValue, forKey: Key.textEngine) } }
+    /// The on-device text model for Super's arbiter and for everything else
+    /// (`ModelCatalog` ids). Separate because Super benefits most from the
+    /// big model, and a Mac without the memory for it still runs the rest.
+    var superTextModelID: String {
+        didSet { defaults.set(superTextModelID, forKey: ModelCatalog.Role.superMerge.defaultsKey) }
+    }
+    var textModelID: String {
+        didSet { defaults.set(textModelID, forKey: ModelCatalog.Role.general.defaultsKey) }
+    }
     /// Max silence (seconds) bridged when merging adjacent same-speaker
     /// segments into one turn. 30 = smooth readable blocks (default);
     /// 2 = Samsung-style fine turns that keep every interjection separate.
@@ -68,15 +76,14 @@ nonisolated final class UIPrefs: @unchecked Sendable {
         autoTranscribe = (defaults.object(forKey: Key.autoTranscribe) as? Bool) ?? true
         liveEnabled = (defaults.object(forKey: Key.liveEnabled) as? Bool) ?? true
         // Default speech-to-text engine: Parakeet v3 (dedicated ASR on ANE).
-        // Gemma 4 stays as the text-generation engine and remains selectable
-        // for audio experimentally.
         liveEngine = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.liveEngine) ?? "") ?? .parakeet
 
-        // First-run default: prefer the LiteRT text engine when its bundle is
-        // on disk — it generates far faster than MLX Gemma. An explicit user
-        // choice (stored key) always wins.
+        // First-run default: the on-device model. An explicit user choice
+        // (stored key) always wins.
         textEngine = defaults.string(forKey: Key.textEngine)
-            .flatMap(BackendFactory.Kind.init(rawValue:)) ?? .gemmaLiteRT
+            .flatMap(BackendFactory.Kind.init(rawValue:)) ?? .localText
+        superTextModelID = ModelCatalog.chosen(.superMerge).id
+        textModelID = ModelCatalog.chosen(.general).id
         superMaxQuality = defaults.bool(forKey: Key.superMaxQuality)
         let storedGap = defaults.double(forKey: Key.turnGap)
         turnCoalesceGapSeconds = storedGap > 0 ? storedGap : 30
@@ -84,10 +91,10 @@ nonisolated final class UIPrefs: @unchecked Sendable {
         ensembleEngineB = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.ensembleEngineB) ?? "") ?? EnsembleBackend.defaultEngineB
 
         // Sanitize on EVERY launch: stored selections must be able to do
-        // their job (audio-capable for transcription/live). Explicit engine
-        // choices — including experimental Gemma audio — are respected.
+        // their job (audio-capable for transcription/live). A saved Gemma
+        // audio choice (LiteRT, gone in v5.4) falls back to Parakeet here.
         if !defaultBackend.supportsAudio { defaultBackend = .parakeet }
-        if !textEngine.supportsTextGeneration { textEngine = .gemmaLiteRT }
+        if !textEngine.supportsTextGeneration { textEngine = .localText }
         if !liveEngine.supportsLive { liveEngine = .parakeet }
         let validMerge: (BackendFactory.Kind) -> Bool = {
             $0.isLocal && $0.supportsAudio && $0 != .ensemble

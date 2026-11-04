@@ -280,6 +280,11 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
               let id = info["CFBundleIdentifier"] as? String, id == Bundle.main.bundleIdentifier,
               info["CFBundleShortVersionString"] as? String == version
         else { throw Failure("The download isn't the expected version") }
+        // v5.4 raised the floor to macOS 26.4 (uzu): swapping it in on an
+        // older macOS left a bundle that does not launch, and no app.
+        if let minimum = info["LSMinimumSystemVersion"] as? String, !runs(minimum: minimum) {
+            throw Failure("Version \(version) needs macOS \(minimum) or later. Update macOS first; this version stays installed.")
+        }
 
         var code: SecStaticCode?
         var requirement: SecRequirement?
@@ -290,6 +295,13 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
         guard SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess else {
             throw Failure("The download's code signature is broken")
         }
+    }
+
+    /// This Mac's macOS is at least `minimum` ("26.4", "26.4.1").
+    static func runs(minimum: String, on os: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion) -> Bool {
+        let parts = minimum.split(separator: ".").map { Int($0) ?? 0 } + [0, 0, 0]
+        let need = (parts[0], parts[1], parts[2])
+        return (os.majorVersion, os.minorVersion, os.patchVersion) >= need
     }
 
     /// A shell helper that outlives the app: waits for this process to exit,

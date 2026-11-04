@@ -1,8 +1,8 @@
 #!/bin/zsh
-# Package a distributable Transcriberr.app: uniform ad-hoc signature.
-# The LiteRT dylib ships pre-signed by Google (their Team ID); an ad-hoc
-# main binary + Google-signed dylib is rejected by dyld ("different Team
-# IDs"), so every embedded dylib/framework must be re-signed to match.
+# Package a distributable Transcriberr.app: uniform signature.
+# Every embedded dylib/framework (UzuRuntime) is re-signed with the app's
+# identity: dyld rejects a main binary and a library signed by different
+# Team IDs.
 set -e
 APP="${1:-.build/xcode/Build/Products/Release/Transcriberr.app}"
 # Stable identity if one exists ("Transcriberr Signing" self-signed cert or
@@ -52,8 +52,8 @@ fi
 codesign --verify --deep "$APP" && echo "signed OK: $APP"
 # The CLI (MCP server) built next to the app gets the same stable requirement:
 # with the default cdhash requirement every rebuild re-asked for Documents
-# access. No hardened runtime here — it would turn on library validation and
-# refuse the Google-signed LiteRT dylib loaded from @executable_path.
+# access. No hardened runtime here: it would turn on library validation for
+# the UzuRuntime framework it loads from @executable_path.
 CLI="$(dirname "$APP")/transcriberrcli"
 if [ -f "$CLI" ]; then
   if [ "$SIGN" = "-" ]; then

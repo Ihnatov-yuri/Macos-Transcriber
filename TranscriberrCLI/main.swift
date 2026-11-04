@@ -3,7 +3,6 @@ import Foundation
 @preconcurrency import AVFoundation
 import FluidAudio
 import WhisperKit
-@preconcurrency import LiteRTLM
 
 // CLI test harness for the Transcriberr audio pipeline.
 //
@@ -72,10 +71,10 @@ func usage() {
       transcriberrcli superdiar <file>     Super-mode diarization on a file
       transcriberrcli refinalize <file>    rerun the finalize pass on a saved run dump
       transcriberrcli brief <file>         the meeting brief for a transcript
-      transcriberrcli litert <file>        run Gemma (LiteRT-LM) on a prompt file
-      transcriberrcli gentest              Gemma generation smoke test
-      transcriberrcli thinkab <out> [titles] [people] [maxLines]
-                                            A/B of Gemma thinking on library samples
+      transcriberrcli gentest              text model smoke test (three concurrent generations)
+      transcriberrcli models [download <id>]  the text models: installed or not; download one
+      transcriberrcli textbench <calls.jsonl> [model-id]
+                                            replay logged text calls on a text model; JSON timing lines
       transcriberrcli whisperbench <placement> <Language> <files…>
                                             Whisper compute placement benchmark
       transcriberrcli whisperloop <meeting.m4a> <seconds> <model-id> [fallbacks]
@@ -459,96 +458,15 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
     return 0
 }
 
-/// Gemma via Google's LiteRT-LM runtime — the Android-proven stack.
-@MainActor
-func cmdLitert(path: String) async -> Int32 {
-    // Every LiteRT Gemma the app can download (E2B, E4B, …), in catalog
-    // order: the E2B folder alone missed a Mac that only has E4B.
-    let modelDirs = ModelCatalog.entries
-        .filter { $0.backend == .gemmaLiteRT }
-        .compactMap { ModelCatalog.cachedRepoDirectory(huggingFaceID: $0.huggingFaceID) }
-    let found = modelDirs.lazy.compactMap { dir in
-        (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
-            .first(where: { $0.pathExtension == "litertlm" })
-    }.first
-    guard let model = found else {
-        let searched = ModelCatalog.entries.filter { $0.backend == .gemmaLiteRT }.compactMap(\.huggingFaceID)
-        print("[litert] ❌ no .litertlm bundle in \(ModelCatalog.durableModelsDirectory().path) (looked for \(searched.joined(separator: ", ")))")
-        return 1
-    }
-    let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
-    let decoder = AudioDecoder()
-    guard let samples = try? await decoder.decodeAll(file: url) else {
-        print("[litert] ❌ decode failed"); return 1
-    }
-    let capped = samples.count > 16_000 * 28 ? Array(samples.prefix(16_000 * 28)) : samples
-    // 16-bit PCM WAV
-    let wav = FileManager.default.temporaryDirectory.appendingPathComponent("litert-test.wav")
-    var data = Data()
-    func le32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
-    func le16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
-    let pcmLen = capped.count * 2
-    data.append(contentsOf: Array("RIFF".utf8)); le32(UInt32(36 + pcmLen))
-    data.append(contentsOf: Array("WAVE".utf8)); data.append(contentsOf: Array("fmt ".utf8)); le32(16)
-    le16(1); le16(1); le32(16000); le32(32000); le16(2); le16(16)
-    data.append(contentsOf: Array("data".utf8)); le32(UInt32(pcmLen))
-    for s in capped { le16(UInt16(bitPattern: Int16(max(-1, min(1, s)) * 32767))) }
-    try? data.write(to: wav)
-    defer { try? FileManager.default.removeItem(at: wav) }
-
-    print("[litert] loading \(model.lastPathComponent)…")
-    do {
-        var engine: Engine?
-        for gpu in [true, false] {
-            do {
-                let cfg = try EngineConfig(
-                    modelPath: model.path,
-                    backend: gpu ? .gpu : .cpu(),
-                    audioBackend: .cpu(),
-                    maxNumTokens: 8192,
-                    cacheDir: NSTemporaryDirectory()
-                )
-                let e = Engine(engineConfig: cfg)
-                try await e.initialize()
-                engine = e
-                print("[litert] engine ready on \(gpu ? "GPU" : "CPU")")
-                break
-            } catch {
-                print("[litert] \(gpu ? "GPU" : "CPU") init failed: \(error.localizedDescription)")
-            }
-        }
-        guard let engine else { return 1 }
-        let sampler = try SamplerConfig(topK: 1, topP: 0.95, temperature: 0.1)
-        let conv = try await engine.createConversation(with: ConversationConfig(
-            systemMessage: Message("You are a professional transcription engine."),
-            samplerConfig: sampler
-        ))
-        let t0 = Date()
-        let response = try await conv.sendMessage(Message(contents: [
-            Content.audioFile(wav.path),
-            Content.text("Transcribe the following speech segment in English into English text. Only output the transcription, with no preamble. When transcribing numbers, write the digits."),
-        ]))
-        print("[litert] ✓ \(String(format: "%.1f", Date().timeIntervalSince(t0)))s compute")
-        print("──────────────────────────────────────────")
-        print(response.toString.trimmingCharacters(in: .whitespacesAndNewlines))
-        print("──────────────────────────────────────────")
-        return 0
-    } catch {
-        print("[litert] ❌ \(error)")
-        return 1
-    }
-}
-
-/// Reproduction test for the v2.2.1 engine-exclusivity fix: fire three
-/// concurrent generations at the LiteRT engine — pre-fix, interleaved
-/// conversations starved one into an empty response.
+/// Three concurrent generations at the text model: they must queue, not
+/// starve one another (the v2.2.1 LiteRT bug left one empty).
 @MainActor
 func cmdGenTest() async -> Int32 {
     let prompts = PromptStore()
-    let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
-    let backend = factory.backend(for: .gemmaLiteRT)
+    let factory = BackendFactory(prompts: prompts, apiKeys: APIKeyStore())
+    let backend = factory.backend(for: .localText)
     do {
-        print("[gentest] loading Gemma…")
+        print("[gentest] loading \(ModelCatalog.selected(.general).name)…")
         try await backend.load(modelPath: nil)
         let t0 = Date()
         async let a = backend.generateText(
@@ -586,8 +504,8 @@ func cmdBrief(path: String) async -> Int32 {
     }
     let app = UserDefaults(suiteName: "nl.ihnatov.Transcriberr")
     let vocabulary = app?.string(forKey: "prompt.vocabulary") ?? ""
-    let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(), apiKeys: APIKeyStore())
-    let backend = factory.backend(for: .gemmaLiteRT)
+    let factory = BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore())
+    let backend = factory.backend(for: .localText)
     do {
         try await backend.load(modelPath: nil)
         let parts = MeetingBriefBuilder.sections(text)
@@ -622,7 +540,7 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     }
     if kind == .ensemble {
         UserDefaults.standard.set(engineA ?? "whisper-large-v3", forKey: "ensemble.engineA")
-        UserDefaults.standard.set(engineB ?? "gemma4-litert", forKey: "ensemble.engineB")
+        UserDefaults.standard.set(engineB ?? "parakeet-v3", forKey: "ensemble.engineB")
         UserDefaults.standard.set(true, forKey: "ui.superMaxQuality")
         // A/B switch for scripts/eval-set.sh: TRANSCRIBERR_LONGFORM=1/0
         // forces long-form Whisper on/off; unset = the language default.
@@ -649,11 +567,11 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
         }
     }
     let prompts = PromptStore()
-    let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
+    let factory = BackendFactory(prompts: prompts, apiKeys: APIKeyStore())
     // The whole process is one job: as in the app while a job runs, Gemma's
     // idle release must not fire. It did after 3 quiet minutes and took
     // Super's engines with it ("Ensemble backend not loaded").
-    factory.liteRTReleaseAllowed = { false }
+    factory.textReleaseAllowed = { false }
     let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())
     var params = TranscriptionRunner.Params(
         file: url, backend: kind, modelDirectory: nil,
@@ -768,7 +686,7 @@ func cmdBench(_ argv: [String]) async -> Int32 {
         UserDefaults.standard.set(true, forKey: "ui.superMaxQuality")
     }
     let prompts = PromptStore()
-    let factory = BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore())
+    let factory = BackendFactory(prompts: prompts, apiKeys: APIKeyStore())
     let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())
     var totals: [String: (errors: Int, words: Int)] = [:]
     for (k, it) in items.enumerated() {
@@ -808,7 +726,7 @@ func cmdRefinalize(path: String) -> Int32 {
     }
     let prompts = PromptStore()
     let runner = TranscriptionRunner(
-        factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: prompts, apiKeys: APIKeyStore()),
+        factory: BackendFactory(prompts: prompts, apiKeys: APIKeyStore()),
         prompts: prompts, diarization: DiarizationRunner())
     let voice = ProcessInfo.processInfo.environment["TRANSCRIBERR_NO_VOICE"] == "1" ? nil : dump.voice
     let out = runner.finalizeSegments(
@@ -974,12 +892,11 @@ func main() async -> Int32 {
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
     case "gentest":
         return await cmdGenTest()
-    case "thinkab":
+    case "textbench":
         guard args.count > 2 else { usage(); return 64 }
-        return await cmdThinkAB(out: args[2],
-                                titleCount: args.count > 3 ? Int(args[3]) ?? 8 : 8,
-                                peopleCount: args.count > 4 ? Int(args[4]) ?? 3 : 3,
-                                maxLines: args.count > 5 ? Int(args[5]) ?? 60 : 60)
+        return await cmdTextBench(calls: args[2], modelID: args.count > 3 ? args[3] : nil)
+    case "models":
+        return await cmdModels(Array(args.dropFirst(2)))
     case "refinalize":
         guard args.count > 2 else { usage(); return 64 }
         return cmdRefinalize(path: args[2])
@@ -1009,9 +926,6 @@ func main() async -> Int32 {
     case "aec":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdAEC(base: args[2])
-    case "litert":
-        guard args.count > 2 else { usage(); return 64 }
-        return await cmdLitert(path: args[2])
     case "kb":
         return cmdKB(Array(args.dropFirst(2)))
     case "restore-backups":

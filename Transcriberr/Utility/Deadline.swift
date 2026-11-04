@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-/// Wall-clock deadline for work that may never return — MLX / LiteRT
+/// Wall-clock deadline for work that may never return — native
 /// inference blocks its thread and ignores Swift cancellation. Shared by the
 /// chunk loop (`TranscriptionRunner`), post-processing (`PostProcessor`) and
 /// live captions (`LiveTranscriber`), which used to hand-write the same race.

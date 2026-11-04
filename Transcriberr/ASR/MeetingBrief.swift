@@ -44,12 +44,12 @@ nonisolated enum MeetingBriefBuilder {
 
     // MARK: - Build
 
-    /// Tokens of transcript per read. The engine window is 32k, but what
-    /// the LiteRT stack handles RELIABLY is far smaller — measured on a
-    /// 72-minute Ukrainian meeting (17k tokens):
+    /// Tokens of transcript per read. Measured with Gemma E4B on LiteRT (the
+    /// engine until v5.4) on a 72-minute Ukrainian meeting (17k tokens); not
+    /// yet re-measured on MLX / uzu, which read 14k-token prompts cleanly:
     ///   - one 17k read: 109 s, answer in the wrong language, a "FIX: чу"
     ///     loop to the token limit;
-    ///   - 6k reads: wedged LiteRT's native call 5 runs out of 6;
+    ///   - 6k reads: wedged the native call 5 runs out of 6;
     ///   - 3k reads: 6 sections in 47 s, stable, the best brief of the three.
     /// A long recording is therefore read in sections and merged.
     static var inputTokenBudget: Int {

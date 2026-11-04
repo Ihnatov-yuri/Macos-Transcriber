@@ -56,14 +56,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
     var autoTitler: (@MainActor (Recording, [Segment], TranscriptionRunner.Params) async -> Void)?
 
     /// Called once the queue has been empty for `idleReleaseSeconds`.
-    /// AppContainer points this at `BackendFactory.releaseLiteRT`.
+    /// AppContainer points this at `BackendFactory.releaseTextIfIdle`.
     ///
-    /// Why the queue owns this: auto-titling a run loads the LiteRT text
-    /// engine: 3-5 GB resident, and it latches `InferenceGate`. Nothing
-    /// ever released it — `releaseLocalBackends` has no call site. (Before
-    /// the gate became a readers-writer lock, that latch collapsed the
-    /// three-chunks-in-flight pipeline to one for the rest of the session.)
-    /// The delay is long enough that back-to-back runs
+    /// Why the queue owns this: auto-titling a run loads the text model,
+    /// 5-16 GB resident, and nothing else ever released it —
+    /// `releaseLocalBackends` has no call site. The delay is long enough that back-to-back runs
     /// and a preset fired straight after a run keep the engine warm.
     var onIdle: (() async -> Bool)?
     /// Suspends until nothing is rewriting this recording's audio files (mix
@@ -72,7 +69,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
     /// with auto-transcribe on, that post-processing waits for THIS job to
     /// consume the source. Returns early when the job is cancelled.
     var waitForAudio: ((UUID) async -> Void)?
-    /// Nothing queued or running — BackendFactory's own LiteRT idle
+    /// Nothing queued or running — BackendFactory's own text-model idle
     /// release waits for this.
     var isIdle: Bool { queue.isEmpty && currentJob == nil }
     static let idleReleaseSeconds: UInt64 = 120
@@ -229,6 +226,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
             }
             guard let recording = try? repository.get(id: task.recordingId),
                   let backend = BackendFactory.Kind(rawValue: task.backend),
+                  // A Gemma-audio run left over from v5.3: that engine is gone.
+                  backend.supportsAudio,
                   FileManager.default.fileExists(atPath: recording.audioPath),
                   !isActive(recording.id)
             else {
@@ -380,7 +379,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
         // deduped inside snapshotVersion, so post-run snapshots don't double.
         if !recording.segments.isEmpty {
             let prevId = recording.transcribedWithBackend ?? "unknown"
-            let prevLabel = BackendFactory.Kind(rawValue: prevId)?.displayName ?? "Earlier run (\(prevId))"
+            // "gemma4-litert" now names the text model; a transcript with it
+            // was made by the Gemma audio engine (LiteRT, until v5.3).
+            let prevLabel = prevId == BackendFactory.Kind.localText.rawValue
+                ? "Gemma 4 audio (LiteRT)"
+                : BackendFactory.Kind(rawValue: prevId)?.displayName ?? "Earlier run (\(prevId))"
             try? repository.snapshotVersion(of: recording, engineId: prevId, engineLabel: prevLabel)
         }
         // Stamped when the run first PRODUCES something, not up front: a run

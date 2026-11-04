@@ -63,21 +63,9 @@ final class DetailModel {
         lastError = nil
         container.uiPrefs.lastLanguages = languages
 
-        // Local models self-resolve (Parakeet/Whisper auto-download; LiteRT
-        // scans its durable cache) — the only gate worth surfacing early is a
-        // missing LiteRT bundle, which needs an explicit download.
-        let litertCached = ModelCatalog.entries.contains {
-            $0.backend == .gemmaLiteRT
-                && ModelCatalog.cachedRepoDirectory(huggingFaceID: $0.huggingFaceID) != nil
-        }
-        let needsLitert = backend == .gemmaLiteRT
-            || (backend == .ensemble
-                && (container.uiPrefs.ensembleEngineA == .gemmaLiteRT
-                    || container.uiPrefs.ensembleEngineB == .gemmaLiteRT))
-        if needsLitert && !litertCached {
-            lastError = "LITERT GEMMA MODEL NOT DOWNLOADED · SETTINGS → MODELS"
-            return
-        }
+        // Speech models self-resolve (Parakeet/Whisper auto-download). Super
+        // runs without its text model too (the merge then keeps engine A's
+        // reading), so it is not gated here.
         if backend == .ensemble,
            container.uiPrefs.ensembleEngineA == container.uiPrefs.ensembleEngineB {
             lastError = "SUPER MERGE NEEDS TWO DIFFERENT ENGINES · PICK MERGE A ≠ MERGE B"
@@ -108,7 +96,7 @@ final class DetailModel {
         case .openAI:    return .openAI
         case .anthropic: return .anthropic
         case .gemini:    return .gemini
-        case .parakeet, .parakeetV2, .parakeetUK, .whisper, .gemmaLiteRT, .ensemble:
+        case .parakeet, .parakeetV2, .parakeetUK, .whisper, .localText, .ensemble:
             return .openAI   // unused; local backends gated above
         }
     }

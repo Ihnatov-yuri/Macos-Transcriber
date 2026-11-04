@@ -145,9 +145,6 @@ final class SpeechCoachRunner {
                 } catch {
                     // The goals still come from the same gaps, in plain words.
                     lastError = "The text engine could not write the coaching (\(error.localizedDescription)). Goals use plain wording."
-                    if case ASRError.chunkTimeout = error, let litert = backend as? GemmaLiteRTBackend {
-                        try? await litert.recoverWedge(modelPath: nil)
-                    }
                 }
             }
             if Task.isCancelled { return }

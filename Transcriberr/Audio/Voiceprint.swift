@@ -232,9 +232,6 @@ actor VoiceEmbedder {
         // to load shares the first one's, and two threads never drive one.
         var seen = Set<ObjectIdentifier>()
         let distinct = models.filter { seen.insert(ObjectIdentifier($0)).inserted }
-        // A shared hold like any engine's: LiteRT must never run beside it.
-        let gate = try await InferenceGate.shared.acquire(owner: "voice")
-        defer { Task { await InferenceGate.shared.release(gate) } }
         let cancelled = CancelFlag()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in

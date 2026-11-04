@@ -28,7 +28,6 @@ nonisolated final class AppContainer: @unchecked Sendable {
     let audioPostProcessTracker = AudioPostProcessTracker()
 
     // MARK: - Stores (persistent preferences)
-    let gemmaSettings: GemmaSettingsStore
     let promptStore: PromptStore
     let presetStore: PresetStore
     let snippetStore: SnippetStore
@@ -67,6 +66,13 @@ nonisolated final class AppContainer: @unchecked Sendable {
     private(set) var newRecordingRequested = 0
     /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
     private(set) var dictatePaneRequested = 0
+    /// Bumped to open Settings at Models (the text-model prompt after an
+    /// upgrade from LiteRT left nothing downloaded).
+    private(set) var modelsPaneRequested = 0
+    /// Set with the request, cleared by Settings once it has scrolled: a
+    /// Settings screen built after the bump (the request switched to it)
+    /// never sees the counter change.
+    var pendingModelsScroll = false
     /// Bumped to bring People forward; `pendingPerson` is whose page to
     /// open (nil for the overview), consumed by PeopleView like
     /// `pendingNewRecording` above.
@@ -126,7 +132,6 @@ nonisolated final class AppContainer: @unchecked Sendable {
             ParakeetUKModel.applyPendingUpdate()
             WhisperUKModel.release.applyPendingUpdate()
         }
-        gemmaSettings = GemmaSettingsStore()
         promptStore   = PromptStore()
         presetStore   = PresetStore()
         snippetStore  = SnippetStore()
@@ -138,7 +143,6 @@ nonisolated final class AppContainer: @unchecked Sendable {
         audioPlayer = AudioPlayerController()
 
         backendFactory = BackendFactory(
-            gemma: gemmaSettings,
             prompts: promptStore,
             apiKeys: apiKeys
         )
@@ -183,22 +187,21 @@ nonisolated final class AppContainer: @unchecked Sendable {
             guard let self else { return }
             await self.generateAutoTitle(for: recording, segments: segments)
         }
-        // Hand the multi-gigabyte LiteRT engine back once the queue has
-        // been quiet for a while — it is the only thing holding the
-        // process-wide inference gate down.
+        // Hand the multi-gigabyte text model back once the queue has been
+        // quiet for a while.
         jobs.waitForAudio = { [weak self] id in
             await self?.audioPostProcessTracker.waitUntilIdle(id)
         }
         jobs.onIdle = { [weak self] in
-            await self?.backendFactory.releaseLiteRTIfIdle() ?? true
+            await self?.backendFactory.releaseTextIfIdle() ?? true
         }
-        backendFactory.liteRTReleaseAllowed = { [weak jobs] in jobs?.isIdle ?? true }
+        backendFactory.textReleaseAllowed = { [weak jobs] in jobs?.isIdle ?? true }
         // macOS says memory is short: the idle engine is the cheapest thing
         // to give back. A running job or generation keeps it.
         let pressure = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         pressure.setEventHandler { [weak self] in
-            AppLog.info("app", "memory pressure — releasing the idle LiteRT engine")
-            Task { await self?.backendFactory.releaseLiteRTIfQuiet() }
+            AppLog.info("app", "memory pressure — releasing the idle text model")
+            Task { await self?.backendFactory.releaseTextIfQuiet() }
         }
         pressure.resume()
         memoryPressureSource = pressure
@@ -208,6 +211,7 @@ nonisolated final class AppContainer: @unchecked Sendable {
         if !Self.isTestHost {
             updates.start()
             ModelCatalog.excludeModelsFromBackup()
+            ModelCatalog.removeRetiredModels()
             // Look for newer Parakeet UK and Whisper UK releases (they take over at the next launch).
             let updates = self.updates
             ParakeetUKModel.startUpdateLoop { await MainActor.run { updates.autoCheck } }
@@ -270,8 +274,8 @@ nonisolated final class AppContainer: @unchecked Sendable {
 
     /// Recordings of the last week that still carry a default title and have
     /// a transcript, with no run of their own coming: the title their run
-    /// should have set when the text engine failed (on 26 Oct LiteRT's GPU
-    /// calls timed out under a training job, and the failure was silent).
+    /// should have set when the text engine failed (on 26 Oct the GPU calls
+    /// timed out under a training job, and the failure was silent).
     @MainActor
     private func retitleMissed() async {
         let weekAgo = Int64(Date().addingTimeInterval(-7 * 86_400).timeIntervalSince1970 * 1000)
@@ -318,7 +322,7 @@ nonisolated final class AppContainer: @unchecked Sendable {
         let titleBefore = recording.title
 
         // Titles are text generation — run on the configured text engine.
-        let kind = uiPrefs.textEngine.supportsTextGeneration ? uiPrefs.textEngine : .gemmaLiteRT
+        let kind = uiPrefs.textEngine.supportsTextGeneration ? uiPrefs.textEngine : .localText
         let backend = backendFactory.backend(for: kind)
         do {
             if !(await backend.isReady) {
@@ -377,6 +381,11 @@ nonisolated final class AppContainer: @unchecked Sendable {
 
     func requestDictatePane() {
         dictatePaneRequested &+= 1
+    }
+
+    func requestModelsPane() {
+        pendingModelsScroll = true
+        modelsPaneRequested &+= 1
     }
 
     func requestPeoplePane(person: UUID? = nil) {

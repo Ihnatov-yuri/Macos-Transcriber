@@ -209,8 +209,8 @@ nonisolated struct AudioDecoder: Sendable {
     ///
     /// Each cut is measured from the PREVIOUS cut, not from a fixed 28 s grid:
     /// on the grid, one boundary snapping early and the next snapping late
-    /// (plus the recap) made chunks of up to 33 s, and the LiteRT backend
-    /// truncates at 28 — up to 5 s at such a seam was never transcribed.
+    /// (plus the recap) made chunks of up to 33 s, and the engine of the
+    /// time truncated at 28 — up to 5 s at such a seam was never transcribed.
     func computeCutPoints(silences: [Silence], durationSeconds: Double) -> [Double] {
         let stride = Self.chunkSeconds - Self.overlapSeconds - Self.alignFlexSeconds
         var cuts: [Double] = []

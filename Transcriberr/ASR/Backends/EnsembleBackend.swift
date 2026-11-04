@@ -24,10 +24,7 @@ actor EnsembleBackend: ASRBackend {
     private var kindB: BackendFactory.Kind = EnsembleBackend.defaultEngineB
     private var engineA: ASRBackend?
     private var engineB: ASRBackend?
-    private var arbiter: ASRBackend?     // Gemma 4, text mode
-    /// Set when Gemma wedged repeatedly this run — the remaining chunks run
-    /// single-engine so the run finishes instead of stalling per chunk.
-    private var gemmaBenched = false
+    private var arbiter: ASRBackend?     // the on-device text model
     /// What the arbiter learned from reading the whole first-pass transcript
     /// — handed to every arbitration of this run.
     private var brief: MeetingBrief?
@@ -110,7 +107,7 @@ actor EnsembleBackend: ASRBackend {
               a.isLocal, b.isLocal,
               a.supportsAudio, b.supportsAudio else {
             throw ASRError.backendUnavailable(
-                reason: "Super merge sub-engines must be local speech engines (Parakeet v3/v2, Whisper, Gemma LiteRT)."
+                reason: "Super merge sub-engines must be local speech engines (Parakeet v3/v2, Whisper)."
             )
         }
 
@@ -130,13 +127,11 @@ actor EnsembleBackend: ASRBackend {
         engineA = ea
         engineB = eb
 
-        // Arbiter: the configured local text engine (LiteRT Gemma is much
-        // faster than MLX). Load is best-effort — without it we fall back to
-        // preferring engine A rather than failing the run.
-        let arbKind = Self.storedKind("ui.textEngine", fallback: .gemmaLiteRT)
-        let resolvedArb: BackendFactory.Kind =
-            (arbKind.supportsTextGeneration && arbKind.isLocal) ? arbKind : .gemmaLiteRT
-        let arb = factory.backend(for: resolvedArb)
+        // Arbiter: the on-device model picked for Super (Settings → Models),
+        // which may be bigger than the one for everything else. Load is
+        // best-effort — without it we fall back to preferring engine A
+        // rather than failing the run.
+        let arb = factory.textBackend(.superMerge)
         if await !arb.isReady {
             try? await arb.load(modelPath: nil)
         }
@@ -144,9 +139,8 @@ actor EnsembleBackend: ASRBackend {
         try checkNotReleased(since: gen)
         arbiter = arbReady ? arb : nil
         if arbiter == nil {
-            AppLog.warn("ensemble", "Gemma arbiter unavailable — merge falls back to engine A output")
+            AppLog.warn("ensemble", "text-model arbiter unavailable — merge falls back to engine A output")
         }
-        gemmaBenched = false
         brief = nil
         isReady = true
     }
@@ -191,19 +185,8 @@ actor EnsembleBackend: ASRBackend {
         if let subEngineError { throw subEngineError }
     }
 
-    /// The non-Gemma sub-engine (falls back to A when neither is Gemma).
-    private var soloEngine: ASRBackend? { kindA == .gemmaLiteRT ? engineB : engineA }
-    private var gemmaIsSubEngine: Bool { kindA == .gemmaLiteRT || kindB == .gemmaLiteRT }
-
-    var isGemmaBenched: Bool { gemmaBenched }
-
-    /// Called by the runner after repeated wedge recoveries: audio that
-    /// reliably hangs LiteRT will keep hanging it, so stop feeding it.
-    func benchGemma() {
-        guard !gemmaBenched, gemmaIsSubEngine else { return }
-        gemmaBenched = true
-        AppLog.warn("ensemble", "Gemma benched after repeated wedges — rest of run is \(kindA == .gemmaLiteRT ? kindB.rawValue : kindA.rawValue) only")
-    }
+    /// The engine a chunk that wedged the pair twice is read by alone.
+    private var soloEngine: ASRBackend? { engineA }
 
     func release() async {
         generation += 1
@@ -227,11 +210,6 @@ actor EnsembleBackend: ASRBackend {
             throw ASRError.modelLoadFailed(reason: "Ensemble backend not loaded")
         }
         if Self.isSilent(samples) { return "" }
-        if gemmaBenched, let solo = soloEngine {
-            return try await solo.transcribeChunk(
-                samples: samples, languages: languages, translateTo: nil,
-                diarize: false, previousContext: previousContext, speakerHints: [])
-        }
 
         // FAST PATH — both sub-engines expose word confidences (Parakeet,
         // Whisper). Merge at the word level on the CPU (ROVER-style):
@@ -605,9 +583,6 @@ actor EnsembleBackend: ASRBackend {
         if Self.isSilent(samples) {
             return RichChunk(text: "", agreement: 1, textA: "", textB: "")
         }
-        if gemmaBenched {
-            return try await transcribeChunkSolo(samples: samples, languages: languages, window: window)
-        }
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
             async let taskA = detailed(pa, kind: kindA, samples: samples, languages: languages, window: window)
             async let taskB = detailed(pb, kind: kindB, samples: samples, languages: languages, window: window)
@@ -698,8 +673,8 @@ actor EnsembleBackend: ASRBackend {
         return true
     }
 
-    /// Single-engine escape hatch: a chunk whose audio wedges LiteRT twice
-    /// still gets transcribed by the healthy engine instead of being lost.
+    /// Single-engine escape hatch: a chunk whose audio wedges the pair twice
+    /// still gets transcribed by engine A instead of being lost.
     /// `window` as in the pair path: without it a mic chunk of a split-track
     /// meeting was read per chunk with the far side's echo left in, and
     /// Whisper's timeline words for the chunk went unused.
@@ -713,8 +688,7 @@ actor EnsembleBackend: ASRBackend {
         }
         let text: String
         if let d = solo as? DetailedTranscribing {
-            let kind = kindA == .gemmaLiteRT ? kindB : kindA
-            text = try await detailed(d, kind: kind, samples: samples, languages: languages, window: window).text
+            text = try await detailed(d, kind: kindA, samples: samples, languages: languages, window: window).text
         } else {
             text = try await solo.transcribeChunk(
                 samples: samples, languages: languages, translateTo: nil,
@@ -1146,12 +1120,12 @@ actor EnsembleBackend: ASRBackend {
         // The bigger picture: the conversation's preceding merged text lets
         // the arbiter judge which conflicting reading fits the discussion —
         // names, topic, register — instead of judging the chunk in isolation.
-        let contextBlock = context.map { tail in
-            """
-            Preceding transcript (context ONLY — do not repeat or transcribe it):
-            …\(tail.suffix(400))
-
-            """
+        // A Super ruling passes the speech before and after, labelled; the
+        // pipeline passes the tail of what came before.
+        let contextBlock = context.map { ctx in
+            ctx.contains("Before this segment:") || ctx.contains("After this segment:")
+                ? "Transcript around this segment (context ONLY — do not repeat or transcribe it):\n\(ctx)\n\n"
+                : "Preceding transcript (context ONLY — do not repeat or transcribe it):\n…\(ctx.suffix(400))\n\n"
         } ?? ""
         do {
             let merged = try await arbiter.generateText(
@@ -1176,9 +1150,9 @@ actor EnsembleBackend: ASRBackend {
                 maxTokens: min(1200, max(160, Int(Double(max(textA.count, textB.count)) * 1.3 / 3)))
             )
             let cleaned = merged.trimmingCharacters(in: .whitespacesAndNewlines)
-            AppLog.info("ensemble", "gemma merge: A=\(textA.count)ch B=\(textB.count)ch → \(cleaned.count)ch")
+            AppLog.info("ensemble", "arbiter merge: A=\(textA.count)ch B=\(textB.count)ch → \(cleaned.count)ch")
             guard Self.mergeLengthPlausible(cleaned, textA, textB) else {
-                AppLog.warn("ensemble", "gemma merge rejected: longer than its sources — using the preferred engine's text")
+                AppLog.warn("ensemble", "arbiter merge rejected: longer than its sources — using the preferred engine's text")
                 return fallback
             }
             return cleaned.isEmpty ? fallback : cleaned

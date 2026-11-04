@@ -17,7 +17,7 @@ final class FinalizeTests: XCTestCase {
 
     private func makeRunner() -> TranscriptionRunner {
         TranscriptionRunner(
-            factory: BackendFactory(gemma: GemmaSettingsStore(), prompts: PromptStore(),
+            factory: BackendFactory(prompts: PromptStore(),
                                     apiKeys: APIKeyStore()),
             prompts: PromptStore(),
             diarization: DiarizationRunner())

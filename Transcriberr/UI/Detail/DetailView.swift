@@ -1801,13 +1801,13 @@ struct OutputPane: View {
                         Task { @MainActor in
                             // Presets are text generation; speech-only backends
                             // coerce to the configured text engine. Resolve the
-                            // model dir for the EFFECTIVE engine (LiteRT and API
-                            // engines self-resolve / need none).
+                            // model dir for the EFFECTIVE engine (the on-device
+                            // model and API engines self-resolve / need none).
                             let effective: BackendFactory.Kind =
                                 model.backend.supportsTextGeneration
                                     ? model.backend
                                     : model.container.uiPrefs.textEngine
-                            let modelDir: URL? = nil   // LiteRT/cloud self-resolve
+                            let modelDir: URL? = nil   // on-device/cloud self-resolve
                             await model.container.postProcessor.run(
                                 presetId: presetId,
                                 recording: model.recording,
@@ -1829,7 +1829,8 @@ struct OutputPane: View {
                 OutputHistoryList(model: model, presetId: presetId) { showingHistory = false }
             } else if let doc {
                 ScrollView {
-                    Text(LocalizedStringKey(doc.markdown))
+                    // Outputs saved before v5.4 may still carry "$\rightarrow$".
+                    Text(LocalizedStringKey(ModelText.replacingLaTeXSymbols(doc.markdown)))
                         .font(AppFont.text(16))
                         .lineSpacing(6)
                         .foregroundStyle(AppColor.ink)
@@ -1915,7 +1916,7 @@ private struct OutputHistoryList: View {
                 .contentShape(Rectangle())
             }
             if isOpen {
-                Text(LocalizedStringKey(v.markdown))
+                Text(LocalizedStringKey(ModelText.replacingLaTeXSymbols(v.markdown)))
                     .font(AppFont.text(15))
                     .lineSpacing(4)
                     .foregroundStyle(AppColor.ink)

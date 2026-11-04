@@ -18,6 +18,7 @@ struct SettingsScreen: View {
 
     var body: some View {
         Sheet {
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     BrandStrip {
@@ -70,7 +71,7 @@ struct SettingsScreen: View {
                             .frame(minHeight: 260)
                     }
 
-                    sectionBlock("G", "Gemma prompts") {
+                    sectionBlock("G", "Prompts") {
                         PromptsSettingsTab()
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 480)
@@ -100,6 +101,19 @@ struct SettingsScreen: View {
                 }
                 .padding(.bottom, AppMetric.xl)
             }
+            .onChange(of: container.modelsPaneRequested) { _, _ in showModels(proxy) }
+            .task { if container.pendingModelsScroll { showModels(proxy) } }
+            }
+        }
+    }
+
+    /// Unfold Models and bring it into view (the text-model prompt).
+    private func showModels(_ proxy: ScrollViewProxy) {
+        container.pendingModelsScroll = false
+        if collapsed.contains("C") { toggle("C") }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("C", anchor: .top) }
         }
     }
 
@@ -138,5 +152,6 @@ struct SettingsScreen: View {
                     .padding(.horizontal, AppMetric.sheetPadding)
             }
         }
+        .id(letter)
     }
 }

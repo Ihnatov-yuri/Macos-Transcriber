@@ -8,7 +8,7 @@ import Foundation
 /// to name the subject, not the fact that people met.
 enum AutoTitle {
 
-    /// One read: 3k tokens is what LiteRT Gemma handles stably (see
+    /// One read, sized like the brief's sections (see
     /// MeetingBriefBuilder.inputTokenBudget).
     static let tokenBudget = 2_500
     static let maxOutputTokens = 32

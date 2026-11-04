@@ -242,39 +242,84 @@ final class FeatureCoverageTests: XCTestCase {
         XCTAssertFalse(DomainVocabulary.terms(pack: .construction, languages: []).contains("арматура"))
     }
 
-    // MARK: - Gemma model catalog (Settings › Models)
+    // MARK: - Text model catalog (Settings › Models)
 
-    func testModelCatalogEntriesArePinnedAndVerifiable() throws {
+    /// Every file is pinned (commit + Hugging Face checksum) and the listed
+    /// size is the files' sum: the downloader's size cap and the progress
+    /// bar both rely on it.
+    func testModelCatalogEntriesArePinnedAndVerifiable() {
         let entries = ModelCatalog.entries
         XCTAssertFalse(entries.isEmpty)
         XCTAssertEqual(Set(entries.map(\.id)).count, entries.count)
         for e in entries {
-            XCTAssertGreaterThan(e.sizeBytes, 0, e.id)
             XCTAssertFalse(e.name.isEmpty, e.id)
-            guard let url = e.directURL else { continue }
-            XCTAssertEqual(url.scheme, "https", e.id)
-            XCTAssertEqual(url.host, "huggingface.co", e.id)
-            if let hf = e.huggingFaceID {
-                XCTAssertTrue(url.path.hasPrefix("/\(hf)/resolve/"), "\(e.id): \(url.path)")
+            XCTAssertEqual(e.revision.count, 40, e.id)
+            XCTAssertTrue(e.revision.allSatisfy(\.isHexDigit), e.id)
+            XCTAssertEqual(e.huggingFaceID.split(separator: "/").count, 2, e.id)
+            XCTAssertTrue(e.files.contains { $0.path == "config.json" }, e.id)
+            XCTAssertEqual(e.sizeBytes, e.files.reduce(0) { $0 + $1.size }, e.id)
+            for f in e.files {
+                XCTAssertFalse(f.path.hasPrefix("/") || f.path.contains(".."), "\(e.id): \(f.path)")
+                XCTAssertTrue(f.sha256?.count == 64 || f.gitBlob?.count == 40, "\(e.id): \(f.path) has no checksum")
             }
-            if e.backend == .gemmaLiteRT { XCTAssertEqual(url.pathExtension, "litertlm", e.id) }
-            let sha = try XCTUnwrap(e.sha256, "\(e.id): a direct download must carry its hash")
-            XCTAssertEqual(sha.count, 64, e.id)
-            XCTAssertTrue(sha.allSatisfy { "0123456789abcdef".contains($0) }, e.id)
         }
     }
 
-    func testGemmaBundleResolutionPrefersTheGenericFile() throws {
-        let explicit = URL(fileURLWithPath: "/nonexistent/gemma.litertlm")
-        XCTAssertEqual(GemmaLiteRTBackend.resolveModelFile(from: explicit), explicit)
+    /// The first-run pick follows the Mac's memory; a saved pick wins.
+    func testTextModelDefaultsFollowMemory() {
+        XCTAssertEqual(ModelCatalog.defaultEntry(ramGB: 16).id, ModelCatalog.gemmaE4B.id)
+        XCTAssertEqual(ModelCatalog.defaultEntry(ramGB: 36).id, ModelCatalog.gemma26B.id)
+        let key = ModelCatalog.Role.superMerge.defaultsKey
+        let saved = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.set(ModelCatalog.qwen9B.id, forKey: key)
+        XCTAssertEqual(ModelCatalog.chosen(.superMerge).id, ModelCatalog.qwen9B.id)
+        UserDefaults.standard.set("gone-model", forKey: key)
+        XCTAssertEqual(ModelCatalog.chosen(.superMerge).id, ModelCatalog.defaultEntry().id)
+    }
 
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fc-gemma-\(UUID().uuidString.prefix(6))")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        for name in ["gemma-4-E2B-it_qualcomm_sm8750.litertlm", "gemma-4-E2B-it.litertlm", "README.md"] {
-            try Data().write(to: dir.appendingPathComponent(name))
+    /// What runs when the pick is not downloaded: the best downloaded model
+    /// that fits, else any downloaded one, else the pick (whose load says
+    /// to download it).
+    func testSelectionFallsBackToADownloadedModel() {
+        let (e4b, q9, g26) = (ModelCatalog.gemmaE4B, ModelCatalog.qwen9B, ModelCatalog.gemma26B)
+        func run(_ pick: ModelEntry, ram: Int, _ have: [ModelEntry]) -> String {
+            ModelCatalog.resolve(pick: pick, ramGB: ram, installed: { e in have.contains { $0.id == e.id } }).id
         }
-        XCTAssertEqual(GemmaLiteRTBackend.resolveModelFile(from: dir)?.lastPathComponent, "gemma-4-E2B-it.litertlm")
+        XCTAssertEqual(run(g26, ram: 36, [g26, e4b]), g26.id, "the pick when it is there")
+        XCTAssertEqual(run(g26, ram: 36, [e4b, q9]), q9.id, "best downloaded that fits")
+        XCTAssertEqual(run(q9, ram: 16, [g26, e4b]), e4b.id, "26B does not fit a 16 GB Mac")
+        XCTAssertEqual(run(q9, ram: 16, [g26]), g26.id, "too big, but the only one")
+        XCTAssertEqual(run(g26, ram: 36, []), g26.id, "nothing downloaded: the pick")
+    }
+
+    /// The updater refuses a release this macOS cannot launch (v5.4 needs 26.4).
+    func testUpdaterChecksTheMinimumMacOS() {
+        let os = { (a: Int, b: Int, c: Int) in OperatingSystemVersion(majorVersion: a, minorVersion: b, patchVersion: c) }
+        XCTAssertTrue(UpdateInstaller.runs(minimum: "26.4", on: os(26, 4, 0)))
+        XCTAssertTrue(UpdateInstaller.runs(minimum: "26.4", on: os(27, 0, 0)))
+        XCTAssertFalse(UpdateInstaller.runs(minimum: "26.4", on: os(26, 3, 2)))
+        XCTAssertFalse(UpdateInstaller.runs(minimum: "26.4.1", on: os(26, 4, 0)))
+        XCTAssertTrue(UpdateInstaller.runs(minimum: "26", on: os(26, 0, 0)))
+    }
+
+    /// LaTeX the models slip into Markdown shows as the symbol, and only
+    /// known commands are touched.
+    func testLaTeXSymbolsBecomeCharacters() {
+        XCTAssertEqual(ModelText.replacingLaTeXSymbols("Send the invite $\\rightarrow$ ASAP."), "Send the invite → ASAP.")
+        XCTAssertEqual(ModelText.replacingLaTeXSymbols("a $ \\to $ b, x $\\geq$ 3, 2 $\\times$ 4"), "a → b, x ≥ 3, 2 × 4")
+        XCTAssertEqual(ModelText.replacingLaTeXSymbols("use \\leq in $x$"), "use \\leq in $x$", "bare commands stay")
+        XCTAssertEqual(ModelText.replacingLaTeXSymbols("C:\\legal\\notes and $\\alpha$"), "C:\\legal\\notes and $\\alpha$")
+        XCTAssertEqual(ModelText.replacingLaTeXSymbols("no math here"), "no math here")
+    }
+
+    /// The text model is text-only: a saved Gemma-audio pick (LiteRT, gone
+    /// in v5.4) must not be offered for transcription.
+    func testLocalTextIsNotASpeechEngine() {
+        XCTAssertFalse(BackendFactory.Kind.localText.supportsAudio)
+        XCTAssertFalse(BackendFactory.Kind.localText.supportsLive)
+        XCTAssertTrue(BackendFactory.Kind.localText.supportsTextGeneration)
+        XCTAssertEqual(BackendFactory.Kind(rawValue: "gemma4-litert"), .localText)
     }
 
     // MARK: - Bundled typefaces

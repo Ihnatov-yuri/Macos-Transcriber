@@ -2,7 +2,7 @@
 
 Transcriberr is a transcription studio for the Mac that never sends your audio anywhere. It records meetings with the call and your microphone on separate tracks, transcribes them with speech models running on the Neural Engine and the GPU, works out who said what, learns the voices of the people you talk to, writes the minutes with a local language model, and lets you dictate into any app by holding a key. The library it builds can be read by AI assistants through a read-only MCP server, so an hour-long meeting from last Tuesday is one question away.
 
-I built it because I wanted the quality of the cloud services without handing them every conversation I have at work. It runs on Apple Silicon, needs macOS 26, and is free for personal and other noncommercial use.
+I built it because I wanted the quality of the cloud services without handing them every conversation I have at work. It runs on Apple Silicon, needs macOS 26.4, and is free for personal and other noncommercial use.
 
 **[Download the latest release](https://github.com/Ihnatov-yuri/Macos-Transcriber/releases/latest)** · [Build notes: what I learned making it](https://ihnatov.nl/transcriber/macos/) · [Android companion](https://github.com/Ihnatov-yuri)
 
@@ -127,13 +127,13 @@ Settings hold the global defaults: the default and live-caption engines, which W
 
 ## Install
 
-Each [release](https://github.com/Ihnatov-yuri/Macos-Transcriber/releases/latest) is a zip with the signed app inside, which goes into Applications. From 3.14.2 on, the app installs its own updates after checking their signature. It needs an Apple Silicon Mac and macOS 26. The speech models download themselves on first use (Parakeet about 0.6 GB, Whisper 0.5 to 3 GB); Gemma's `.litertlm` bundles are downloaded from Settings › Models.
+Each [release](https://github.com/Ihnatov-yuri/Macos-Transcriber/releases/latest) is a zip with the signed app inside, which goes into Applications. From 3.14.2 on, the app installs its own updates after checking their signature. It needs an Apple Silicon Mac and macOS 26.4. The speech models download themselves on first use (Parakeet about 0.6 GB, Whisper 0.5 to 3 GB); the text models (Gemma 4 E4B and 26B on MLX, Qwen3.5 9B on uzu, 5 to 16 GB) are downloaded from Settings › Models, where each one shows its measured speed, quality and memory.
 
 ## Build from source
 
 You need Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen). `./setup.sh` installs XcodeGen if it is missing, generates the project, resolves the packages and patches them, and opens Xcode.
 
-From the command line the build always uses the `Transcriberr` scheme and the repo's own derived-data folder. Xcode's default DerivedData trips over a stray file in the LiteRT-LM package, and the scripts expect the products under `.build/xcode`.
+From the command line the build always uses the `Transcriberr` scheme and the repo's own derived-data folder. The scripts expect the products under `.build/xcode`. Building MLX needs Xcode's Metal Toolchain once: `xcodebuild -downloadComponent MetalToolchain`.
 
 ```bash
 xcodegen generate
@@ -144,9 +144,9 @@ scripts/package.sh
 open .build/xcode/Build/Products/Release/Transcriberr.app
 ```
 
-`scripts/package.sh` has to run after every Release build. The app embeds Google's LiteRT-LM dylib, signed by Google's team, and dyld refuses to load it into an ad-hoc signed app until the script re-signs it. The script also signs with an identifier-based requirement and hardened runtime, so the microphone and Accessibility grants survive updates.
+`scripts/package.sh` has to run after every Release build. It re-signs the embedded UzuRuntime framework with the app's identity, which dyld requires. It also signs with an identifier-based requirement and hardened runtime, so the microphone and Accessibility grants survive updates.
 
-FluidAudio and LiteRT-LM both ship a `NemoTextProcessing` framework with its own `include/module.modulemap`, and Xcode refuses to build with two of them. The patch has to be applied again after every package resolve (a fresh clone, a version bump, Reset Package Caches):
+FluidAudio's `NemoTextProcessing` and uzu both ship an xcframework with its own top-level `include/module.modulemap`, and Xcode refuses to build with two of them. The patch has to be applied again after every package resolve (a fresh clone, a version bump, Reset Package Caches):
 
 ```bash
 scripts/patch-artifacts.sh .build/xcode/SourcePackages
@@ -171,7 +171,7 @@ Unit tests say the logic holds. Every serious defect in this project was found o
 
 ## Built on
 
-[FluidAudio](https://github.com/FluidInference/FluidAudio) for Parakeet and the diarizer in CoreML, [WhisperKit](https://github.com/argmaxinc/WhisperKit) for Whisper, and Google's [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) for Gemma. The longer story of building it, including the model that turned a business meeting into a conversation about music production, is in the [build notes](https://ihnatov.nl/transcriber/macos/).
+[FluidAudio](https://github.com/FluidInference/FluidAudio) for Parakeet and the diarizer in CoreML, [WhisperKit](https://github.com/argmaxinc/WhisperKit) for Whisper, [MLX Swift LM](https://github.com/ml-explore/mlx-swift-lm) for Gemma and Mirai's [uzu](https://github.com/trymirai/uzu) for Qwen. The longer story of building it, including the model that turned a business meeting into a conversation about music production, is in the [build notes](https://ihnatov.nl/transcriber/macos/).
 
 Made by **Yuri Ihnatov**, [ihnatov.nl](https://ihnatov.nl) · [github.com/Ihnatov-yuri](https://github.com/Ihnatov-yuri)
 

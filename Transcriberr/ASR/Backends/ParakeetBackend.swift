@@ -127,7 +127,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// runner cannot tell which engine hung, so it asks every engine, and
     /// the healthy ones stay as they are.
     func recoverWedge(modelPath: URL?) async throws {
-        let stuck = inFlight.filter { Date().timeIntervalSince($0.value) >= InferenceGate.stuckCallAge }
+        let stuck = inFlight.filter { Date().timeIntervalSince($0.value) >= Self.stuckCallAge }
         guard !stuck.isEmpty else {
             try await load(modelPath: modelPath)
             return
@@ -135,8 +135,12 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         AppLog.warn("parakeet", "wedge recovery: \(stuck.count) call(s) stuck — rebuilding the manager")
         try await rebuild()
         for key in stuck.keys { inFlight[key] = nil }
-        await InferenceGate.shared.evictShared(owner: id)
     }
+
+    /// A native call running longer than this is taken for wedged. Healthy
+    /// calls on a 28 s chunk finish in seconds; the runner only declares a
+    /// wedge after 120 s.
+    static let stuckCallAge: TimeInterval = 60
 
     /// Native calls running now, by call id, with their start time.
     private var inFlight: [Int: Date] = [:]
@@ -186,10 +190,6 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         // LLM backends — Parakeet transcribes verbatim (translation happens
         // in post-processing via Gemma).
         var state = try TdtDecoderState()
-        // Shared hold: never overlaps LiteRT inference (see InferenceGate);
-        // pass-through when no LiteRT engine is live.
-        let gateStamp = try await InferenceGate.shared.acquire(owner: id)
-        defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let call = beginCall()
         defer { endCall(call) }
         let result = try await manager.transcribe(
@@ -224,7 +224,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// (nearest region when it falls in a gap), then group consecutive
     /// same-speaker tokens into "Speaker N: …" lines.
     static func labelSpeakers(timings: [TokenTiming], hints: [SpeakerHint]) -> String {
-        // "S3" / "SPEAKER_03" → 3; the same numbering LiteRT Gemma's hints use.
+        // "S3" / "SPEAKER_03" → 3.
         func speakerNumber(_ key: String) -> Int { SpeakerHint.number(fromKey: key) }
         func speakerFor(mid: TimeInterval) -> Int {
             var bestKey: String?
@@ -292,10 +292,6 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         }
         guard samples.count >= 8_000 else { return ("", []) }
         var state = try TdtDecoderState()
-        // Shared hold: never overlaps LiteRT inference (see InferenceGate);
-        // pass-through when no LiteRT engine is live.
-        let gateStamp = try await InferenceGate.shared.acquire(owner: id)
-        defer { Task { await InferenceGate.shared.release(gateStamp) } }
         let call = beginCall()
         defer { endCall(call) }
         let result = try await manager.transcribe(

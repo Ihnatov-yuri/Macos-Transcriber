@@ -4,9 +4,9 @@ import Foundation
 /// Mirror of `asr/AsrFactory.kt`.
 ///
 /// Local default: Parakeet v3 (FluidAudio / ANE) for *speech-to-text* —
-/// a dedicated ASR model with real accuracy. Gemma 4 (MLX) stays for all
-/// text generation (summaries, cleanup, translation, titles) and remains
-/// selectable as an experimental audio backend.
+/// a dedicated ASR model with real accuracy. The on-device text model
+/// (`ModelCatalog`: Gemma 4 on MLX, Qwen3.5 on uzu) does all text
+/// generation (summaries, cleanup, translation, titles, Super's arbiter).
 /// `@MainActor` dropped — same _SwiftData_SwiftUI crash story as the
 /// other store classes.
 nonisolated final class BackendFactory: @unchecked Sendable {
@@ -15,7 +15,9 @@ nonisolated final class BackendFactory: @unchecked Sendable {
         case parakeetV2 = "parakeet-v2"
         case parakeetUK = "parakeet-uk"
         case whisper    = "whisper-large-v3"
-        case gemmaLiteRT = "gemma4-litert"
+        /// The on-device text model picked in Settings → Models. The raw
+        /// value is the old LiteRT Gemma's, so saved choices still read.
+        case localText  = "gemma4-litert"
         case ensemble   = "ensemble"
         case openAI     = "openai"
         case anthropic  = "anthropic"
@@ -30,7 +32,7 @@ nonisolated final class BackendFactory: @unchecked Sendable {
                 // A run pins its model by language; outside one there are two.
                 return WhisperModel.inUse.map { Self.whisperLabel(WhisperModel.model($0)) }
                     ?? "Whisper (local, CoreML)"
-            case .gemmaLiteRT: return "Gemma 4 (Google LiteRT — as on Android)"
+            case .localText:  return "On-device model (\(ModelCatalog.chosen(.general).name))"
             case .ensemble:   return "Super · dual-engine merge (local)"
             case .openAI:     return "OpenAI (GPT-4o)"
             case .anthropic:  return "Anthropic Claude"
@@ -68,19 +70,17 @@ nonisolated final class BackendFactory: @unchecked Sendable {
 
         var isLocal: Bool {
             switch self {
-            case .parakeet, .parakeetV2, .parakeetUK, .whisper, .gemmaLiteRT, .ensemble: return true
+            case .parakeet, .parakeetV2, .parakeetUK, .whisper, .localText, .ensemble: return true
             default: return false
             }
         }
         /// The Parakeet family: one FluidAudio graph, different weights.
         var isParakeet: Bool { self == .parakeet || self == .parakeetV2 || self == .parakeetUK }
-        /// Engines that may TRANSCRIBE. Gemma 4 audio is selectable but
-        /// EXPERIMENTAL — its 8-bit MLX build was shown to hallucinate; it is
-        /// never the default and its display name says so. Gemma's primary
-        /// roles stay text-only: presets, titles, merge arbitration.
-        var supportsAudio: Bool { self != .anthropic }
+        /// Engines that may TRANSCRIBE. The on-device text models are
+        /// text-only (Gemma audio went with LiteRT in v5.4).
+        var supportsAudio: Bool { self != .anthropic && self != .localText }
         /// Backends that can run PostProcessor presets / title generation.
-        /// Acoustic models (and the merge wrapper) can't — text work goes to Gemma.
+        /// Acoustic models (and the merge wrapper) can't — text work goes to the local text model.
         var supportsTextGeneration: Bool {
             switch self {
             case .parakeet, .parakeetV2, .parakeetUK, .whisper, .ensemble: return false
@@ -88,18 +88,15 @@ nonisolated final class BackendFactory: @unchecked Sendable {
             }
         }
         /// Diarization is ALWAYS hybrid now: the FluidAudio diarizer pre-pass
-        /// runs for every engine (LiteRT Gemma consumes its regions as speaker
-        /// hints; acoustic engines get labels assigned from them).
+        /// runs for every engine (acoustic engines get labels assigned from it).
         var needsDiarizerForSpeakers: Bool { true }
-        /// Live captioning cycles through these. The ensemble merge and
-        /// Gemma audio (20–80 s per chunk) are far too slow for per-5-second
-        /// live captioning.
+        /// Live captioning cycles through these. The ensemble merge is far
+        /// too slow for per-5-second live captioning.
         var supportsLive: Bool {
-            supportsAudio && self != .ensemble && self != .gemmaLiteRT
+            supportsAudio && self != .ensemble
         }
     }
 
-    private let gemma: GemmaSettingsStore
     private let prompts: PromptStore
     private let apiKeys: APIKeyStore
 
@@ -116,11 +113,11 @@ nonisolated final class BackendFactory: @unchecked Sendable {
     private var sharedParakeetV2: ParakeetBackend?
     private var sharedParakeetUK: ParakeetBackend?
     private var sharedWhisper: WhisperBackend?
-    private var sharedLiteRT: GemmaLiteRTBackend?
+    /// Loaded text models by catalog id: Super's and the rest may differ.
+    private var sharedText: [String: any LocalTextBackend] = [:]
     private var sharedEnsemble: EnsembleBackend?
 
-    init(gemma: GemmaSettingsStore, prompts: PromptStore, apiKeys: APIKeyStore) {
-        self.gemma = gemma
+    init(prompts: PromptStore, apiKeys: APIKeyStore) {
         self.prompts = prompts
         self.apiKeys = apiKeys
     }
@@ -156,11 +153,8 @@ nonisolated final class BackendFactory: @unchecked Sendable {
             let b = WhisperBackend()
             sharedWhisper = b
             return b
-        case .gemmaLiteRT:
-            if let b = sharedLiteRT { return b }
-            let b = GemmaLiteRTBackend(onUse: { [weak self] in self?.noteLiteRTUse() })
-            sharedLiteRT = b
-            return b
+        case .localText:
+            return textBackendLocked(ModelCatalog.selected(.general))
         case .ensemble:
             if let b = sharedEnsemble { return b }
             let b = EnsembleBackend(factory: self)
@@ -171,84 +165,110 @@ nonisolated final class BackendFactory: @unchecked Sendable {
         }
     }
 
-    private func takeLocalBackends() -> (EnsembleBackend?, ParakeetBackend?, ParakeetBackend?, ParakeetBackend?, WhisperBackend?, GemmaLiteRTBackend?) {
+    /// The text model picked for `role` (Super's arbiter, or everything
+    /// else), loaded once and shared.
+    func textBackend(_ role: ModelCatalog.Role) -> ASRBackend {
+        cacheLock.withLock { textBackendLocked(ModelCatalog.selected(role)) }
+    }
+
+    private func textBackendLocked(_ entry: ModelEntry) -> any LocalTextBackend {
+        dropUnpickedTextLocked()
+        if let b = sharedText[entry.id] { return b }
+        let onUse: @Sendable () -> Void = { [weak self] in self?.noteTextUse() }
+        let b: any LocalTextBackend = switch entry.runtime {
+        case .mlx: MLXTextBackend(entry: entry, onUse: onUse)
+        case .uzu: UzuTextBackend(entry: entry, onUse: onUse)
+        }
+        sharedText[entry.id] = b
+        return b
+    }
+
+    /// A model the user just switched away from goes now, not at the idle
+    /// release: the new pick loads next to it, and 16 GB of 26B beside 7 GB
+    /// of Qwen plus Whisper is more than a 32 GB Mac can spare. A call
+    /// still running on it keeps it alive until it returns.
+    private func dropUnpickedTextLocked() {
+        let picked = Set(ModelCatalog.Role.allCases.map { ModelCatalog.selected($0).id })
+        for (id, b) in sharedText where !picked.contains(id) {
+            sharedText[id] = nil
+            Task {
+                if await !b.isBusy { await b.release() }
+                Self.returnFreedMemorySoon()
+            }
+        }
+    }
+
+    private func takeLocalBackends() -> (EnsembleBackend?, ParakeetBackend?, ParakeetBackend?, ParakeetBackend?, WhisperBackend?, [any LocalTextBackend]) {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        let taken = (sharedEnsemble, sharedParakeet, sharedParakeetV2, sharedParakeetUK, sharedWhisper, sharedLiteRT)
+        let taken = (sharedEnsemble, sharedParakeet, sharedParakeetV2, sharedParakeetUK, sharedWhisper, Array(sharedText.values))
         sharedEnsemble = nil
         sharedParakeet = nil
         sharedParakeetV2 = nil
         sharedParakeetUK = nil
         sharedWhisper = nil
-        sharedLiteRT = nil
+        sharedText = [:]
         return taken
     }
 
     func releaseLocalBackends() async {
-        let (ens, p3, p2, uk, whisper, litert) = takeLocalBackends()
+        let (ens, p3, p2, uk, whisper, text) = takeLocalBackends()
         await ens?.release()
         await p3?.release()
         await p2?.release()
         await uk?.release()
         await whisper?.release()
-        await litert?.release()
+        for b in text { await b.release() }
     }
 
-    /// Drop the LiteRT engine (and the ensemble that may hold a reference to
-    /// it) while leaving the cheap ANE engines loaded.
-    ///
-    /// Two reasons this has to happen when the queue goes idle. The bundle is
-    /// 3-5 GB of resident memory that nothing else was ever going to reclaim
-    /// — `releaseLocalBackends` has no call site at all. And LiteRT's
-    /// presence latches `InferenceGate.litertActive`; since the gate became
-    /// a readers-writer lock that no longer serializes the other engines
-    /// against each other, but it still costs every inference call an actor
-    /// hop for the rest of the session.
+    /// Drop the text models (and the ensemble that may hold one) while
+    /// leaving the cheap ANE engines loaded: 5-16 GB of resident memory that
+    /// nothing else was ever going to reclaim.
     /// Idle housekeeping: skip while a preset, auto-title or dictation polish
     /// is generating. Returns false when it skipped.
-    func releaseLiteRTIfIdle() async -> Bool {
-        let litert = cacheLock.withLock { sharedLiteRT }
-        if let litert, await litert.isBusy { return false }
-        await releaseLiteRT()
+    func releaseTextIfIdle() async -> Bool {
+        let text = cacheLock.withLock { Array(sharedText.values) }
+        for b in text where await b.isBusy { return false }
+        await releaseText()
         return true
     }
 
     // MARK: - Idle release
     //
-    // The transcription queue used to be the only thing that released
-    // LiteRT. Person briefs, the speech coach, presets, dictation polish and
-    // the launch title catch-up all load it outside that queue, and the
-    // engine then stayed resident until the next transcription: 2.5 GB of
-    // GPU memory plus the CPU copy's pages, in swap for hours.
+    // The transcription queue used to be the only thing that released the
+    // text model. Person briefs, the speech coach, presets, dictation polish
+    // and the launch title catch-up all load it outside that queue, and the
+    // engine then stayed resident until the next transcription, in swap for
+    // hours.
 
     /// Quiet spell after the last generation before the engine goes.
-    static let liteRTIdleSeconds: UInt64 = 180
+    static let textIdleSeconds: UInt64 = 180
     /// Set by AppContainer: false while a transcription job is queued or
-    /// running — a Super run calls Gemma minutes apart and must not reload
-    /// it between arbitrations.
-    var liteRTReleaseAllowed: (@MainActor () -> Bool)?
-    private var liteRTIdleTask: Task<Void, Never>?
+    /// running — a Super run calls the arbiter minutes apart and must not
+    /// reload it between arbitrations.
+    var textReleaseAllowed: (@MainActor () -> Bool)?
+    private var textIdleTask: Task<Void, Never>?
 
     /// Every generation restarts the countdown.
-    func noteLiteRTUse() {
+    func noteTextUse() {
         cacheLock.withLock {
-            liteRTIdleTask?.cancel()
-            liteRTIdleTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: Self.liteRTIdleSeconds * 1_000_000_000)
+            textIdleTask?.cancel()
+            textIdleTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: Self.textIdleSeconds * 1_000_000_000)
                 guard !Task.isCancelled, let self else { return }
-                await self.releaseLiteRTIfQuiet()
+                await self.releaseTextIfQuiet()
             }
         }
     }
 
     /// The idle release, also run on a memory-pressure warning. A busy
-    /// engine reschedules itself: its generation ends with noteLiteRTUse.
-    func releaseLiteRTIfQuiet() async {
-        if let allowed = liteRTReleaseAllowed, await !allowed() {
-            noteLiteRTUse()
+    /// engine reschedules itself: its generation ends with noteTextUse.
+    func releaseTextIfQuiet() async {
+        if let allowed = textReleaseAllowed, await !allowed() {
+            noteTextUse()
             return
         }
-        _ = await releaseLiteRTIfIdle()
+        _ = await releaseTextIfIdle()
     }
 
     /// Hands pages the allocator kept after a big free back to the system.
@@ -267,15 +287,15 @@ nonisolated final class BackendFactory: @unchecked Sendable {
         }
     }
 
-    func releaseLiteRT() async {
-        let (ens, litert) = cacheLock.withLock {
-            defer { sharedEnsemble = nil; sharedLiteRT = nil }
-            return (sharedEnsemble, sharedLiteRT)
+    func releaseText() async {
+        let (ens, text) = cacheLock.withLock {
+            defer { sharedEnsemble = nil; sharedText = [:] }
+            return (sharedEnsemble, Array(sharedText.values))
         }
-        guard litert != nil || ens != nil else { return }
+        guard !text.isEmpty || ens != nil else { return }
         await ens?.release()
-        await litert?.release()
+        for b in text { await b.release() }
         Self.returnFreedMemory()
-        AppLog.info("factory", "released LiteRT engine and lifted the inference gate")
+        AppLog.info("factory", "released the text model")
     }
 }

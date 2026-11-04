@@ -105,6 +105,10 @@ nonisolated struct RawSegment: Sendable {
     /// Human name inferred from self-introductions ("Hi, I'm Ahmed") —
     /// filled by the finalize pass, editable later in the UI.
     var speakerName: String?
+    /// The first-pass chunk this segment came from, when the runner knows
+    /// it: chunks share a 1 s recap, so time alone can't tell a chunk's
+    /// segments from its neighbour's in that second.
+    var chunkIndex: Int? = nil
 
     init(
         startSeconds: Double,

@@ -19,9 +19,10 @@ enum PeopleActions {
     }
 
     /// One person from two: the voice, history and lines of `source` become
-    /// `target`'s.
-    static func merge(_ source: Person, into target: Person, container: AppContainer) throws {
-        let old = try PeopleStore.shared.merge(source.id, into: target.id)
+    /// `target`'s. `force` merges voices the check says differ, once the
+    /// user has been told.
+    static func merge(_ source: Person, into target: Person, force: Bool = false, container: AppContainer) throws {
+        let old = try PeopleStore.shared.merge(source.id, into: target.id, force: force)
         rewrite(try container.repository.renameSpeakerEverywhere(old, to: target.name))
     }
 
@@ -219,26 +220,32 @@ enum VoiceImprover {
             .sorted { $0.seconds > $1.seconds }.prefix(maxRecordings)
 
         // Re-learned from each recording, on the call track, best stretches.
-        var fresh: [(recordingId: UUID?, earlier: Bool?, date: Date, print: Voiceprint)] = []
+        // One learn reads every key carrying their name as one speaker (see
+        // PeopleVoice.learn), so one key per meeting covers them all; the
+        // sample keeps all of them, for a voice model switch to rebuild from.
+        typealias Item = (recordingId: UUID?, earlier: Bool?, date: Date, print: Voiceprint, speakers: String?)
+        var fresh: [Item] = []
         for (i, m) in meetings.enumerated() {
             progress("Listening to \(i + 1) of \(meetings.count)…")
             guard let rec = try? container.repository.get(id: m.id), rec.modelContext != nil,
                   let key = m.keys.sorted(by: { a, b in
                       // A diarized speaker over a hand-tagged one: it has more speech.
-                      !a.hasPrefix(RecordingRepository.taggedKeyPrefix) && b.hasPrefix(RecordingRepository.taggedKeyPrefix)
+                      let ta = a.hasPrefix(RecordingRepository.taggedKeyPrefix), tb = b.hasPrefix(RecordingRepository.taggedKeyPrefix)
+                      return ta != tb ? !ta : a < b
                   }).first
             else { continue }
             let before = PeopleVoice.signature(rec)
             // Deleted or re-run in the main window meanwhile: skipped.
             if let p = try? await PeopleVoice.learn(speaker: key, in: rec),
                rec.modelContext != nil, PeopleVoice.signature(rec) == before {
-                fresh.append((m.id, nil, m.date, p))
+                fresh.append((recordingId: m.id, earlier: nil, date: m.date, print: p,
+                              speakers: Person.Sample.speakers(m.keys)))
             }
         }
 
         // Kept as they are: readings, and what was learned before 5.0 when
         // there is nothing fresh to replace it with.
-        var kept: [(recordingId: UUID?, earlier: Bool?, date: Date, print: Voiceprint)] = []
+        var kept: [Item] = []
         var start = 0
         let freshIDs = Set(fresh.compactMap(\.recordingId))
         for s in person.allSamples {
@@ -247,11 +254,11 @@ enum VoiceImprover {
                                   embeddings: Array(person.print.embeddings[start..<end]))
             start = end
             if s.recordingId == nil, s.earlier != true {
-                kept.append((nil, nil, s.date, part))                     // a reading
+                kept.append((recordingId: nil, earlier: nil, date: s.date, print: part, speakers: nil))          // a reading
             } else if let r = s.recordingId, !freshIDs.contains(r) {
-                kept.append((r, s.earlier, s.date, part))                 // not re-learned
+                kept.append((recordingId: r, earlier: s.earlier, date: s.date, print: part, speakers: s.speakers)) // not re-learned
             } else if s.earlier == true, fresh.isEmpty {
-                kept.append((nil, true, s.date, part))
+                kept.append((recordingId: nil, earlier: true, date: s.date, print: part, speakers: nil))
             }
         }
 
@@ -276,7 +283,8 @@ enum VoiceImprover {
                                  embeddings: chosen.flatMap(\.print.embeddings))
         trial.samples = chosen.map {
             Person.Sample(id: UUID(), recordingId: $0.recordingId, date: $0.date,
-                          seconds: $0.print.seconds, count: $0.print.embeddings.count, earlier: $0.earlier)
+                          seconds: $0.print.seconds, count: $0.print.embeddings.count, earlier: $0.earlier,
+                          speakers: $0.speakers)
         }
         trial.trim()
         trial.sources = chosen.count
@@ -286,7 +294,7 @@ enum VoiceImprover {
                            message: "Rebuilt from \(fresh.count) \(fresh.count == 1 ? "recording" : "recordings"), but it scored \(after.percent)% against \(before.percent)% now, so the current voice stays. A reading at this Mac, or more meetings with \(person.name), is what would help.")
         }
         do {
-            try PeopleStore.shared.replaceVoice(of: person.id, with: chosen, basedOn: person)
+            try PeopleStore.shared.replaceVoice(of: person.id, samples: chosen, basedOn: person)
         } catch {
             return Outcome(before: before, after: after, applied: false, used: 0, leftOut: leftOut,
                            message: error.localizedDescription)

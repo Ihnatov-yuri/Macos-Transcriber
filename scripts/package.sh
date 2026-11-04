@@ -9,9 +9,21 @@ APP="${1:-.build/xcode/Build/Products/Release/Transcriberr.app}"
 # any Apple Development cert) — a STABLE signature means macOS remembers
 # permission grants (mic, system audio) across versions instead of
 # re-prompting on every update. Falls back to ad-hoc when absent.
-IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep -oE '"[^"]+"' | head -1 | tr -d '"')"
+# scripts/make-signing-cert.sh creates "Transcriberr Signing"; it wins over
+# any other identity so a release is never signed with a stray certificate.
+IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"')"
+if print -r -- "$IDENTITIES" | grep -qx "Transcriberr Signing"; then
+  IDENTITY="Transcriberr Signing"
+else
+  IDENTITY="$(print -r -- "$IDENTITIES" | head -1)"
+fi
 SIGN="${IDENTITY:--}"
-[ "$SIGN" != "-" ] && echo "signing with stable identity: $SIGN" || echo "signing ad-hoc (no identity found — permissions re-prompt each version)"
+if [ "$SIGN" != "-" ]; then
+  echo "signing with stable identity: $SIGN"
+else
+  echo "signing AD-HOC: any binary signed with the same identifier inherits this app's" >&2
+  echo "  Microphone/Accessibility grants and Keychain items. Run scripts/make-signing-cert.sh once." >&2
+fi
 find "$APP/Contents/Frameworks" \( -name "*.dylib" -o -name "*.framework" \) -maxdepth 1 2>/dev/null | while read f; do
   codesign --force -s "$SIGN" "$f"
 done

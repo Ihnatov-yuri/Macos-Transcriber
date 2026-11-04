@@ -34,8 +34,13 @@ enum FocusedTextContext {
         guard selection.location >= 0 else { return nil }
 
         let start = max(0, selection.location - maxChars)
-        var window = CFRange(location: start, length: selection.location - start)
-        guard window.length > 0 else { return "" }   // caret at the very start
+        guard selection.location - start > 0 else { return "" }   // caret at the very start
+        // A few units more than asked for, so a window that starts inside a
+        // surrogate pair or a composed character (an emoji, an accent) can
+        // be moved to the next whole character: cut there, the first
+        // character read as a replacement mark.
+        let lead = max(0, start - Self.alignmentSlack)
+        var window = CFRange(location: lead, length: selection.location - lead)
 
         // Parameterized string-for-range avoids copying a whole document.
         if let param = AXValueCreate(.cfRange, &window) {
@@ -43,7 +48,9 @@ enum FocusedTextContext {
             if AXUIElementCopyParameterizedAttributeValue(
                 element, kAXStringForRangeParameterizedAttribute as CFString, param, &textRef
             ) == .success, let text = textRef as? String {
-                return text
+                // An app that returned other than the range asked for: as is.
+                guard (text as NSString).length == window.length else { return text }
+                return alignedTail(of: text, from: start - lead)
             }
         }
         // Fallback for elements that only expose the whole value.
@@ -51,8 +58,23 @@ enum FocusedTextContext {
         guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success,
               let value = valueRef as? String
         else { return nil }
-        let utf16 = Array(value.utf16)
-        guard selection.location <= utf16.count else { return nil }
-        return String(decoding: utf16[start ..< selection.location], as: UTF16.self)
+        let ns = value as NSString
+        guard selection.location <= ns.length else { return nil }
+        let text = ns.substring(with: NSRange(location: lead, length: selection.location - lead))
+        return alignedTail(of: text, from: start - lead)
+    }
+
+    /// UTF-16 units read before the window, to find a character boundary.
+    static let alignmentSlack = 8
+
+    /// `text` from UTF-16 offset `offset` on, moved forward to the next
+    /// whole composed character when `offset` falls inside one.
+    nonisolated static func alignedTail(of text: String, from offset: Int) -> String {
+        let ns = text as NSString
+        guard offset > 0 else { return text }
+        guard offset < ns.length else { return "" }
+        let r = ns.rangeOfComposedCharacterSequence(at: offset)
+        let from = r.location < offset ? NSMaxRange(r) : offset
+        return ns.substring(from: from)
     }
 }

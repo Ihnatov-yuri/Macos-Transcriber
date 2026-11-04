@@ -395,31 +395,13 @@ final class LiveTranscriber: @unchecked Sendable {
     struct ReadTimeout: Error {}
 
     /// Runs `op` and returns its result, or throws `ReadTimeout` after
-    /// `seconds` — without waiting for `op`, which may never return. A task
-    /// group would wait for it; this races two unstructured tasks instead.
+    /// `seconds` — without waiting for `op`, which may never return. A
+    /// cancelled caller (Stop) gets `CancellationError`. See `Deadline.run`.
     nonisolated static func withDeadline<T: Sendable>(
         _ seconds: TimeInterval,
         _ op: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        let claimed = OSAllocatedUnfairLock(initialState: false)
-        @Sendable func claim() -> Bool { claimed.withLock { done in defer { done = true }; return !done } }
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
-            let work = Task {
-                do {
-                    let value = try await op()
-                    if claim() { cont.resume(returning: value) }
-                } catch {
-                    if claim() { cont.resume(throwing: error) }
-                }
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                if claim() {
-                    work.cancel()
-                    cont.resume(throwing: ReadTimeout())
-                }
-            }
-        }
+        try await Deadline.run(seconds: seconds, timeoutError: ReadTimeout(), op)
     }
 
     // MARK: - Phrase finding (pure, tested)

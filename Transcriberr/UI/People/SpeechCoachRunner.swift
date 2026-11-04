@@ -8,10 +8,27 @@ nonisolated enum SpeechHistory {
     /// "lately" down (four 7-18 s tests on 27 Oct).
     static let minimumMeetingWords = 80
 
+    /// Who a line is by, for measuring: the split-track microphone's lines
+    /// ("ME") are the user's whatever name they carried when recorded
+    /// ("Me", an older name), so `micIsThem` counts them as `name` (the
+    /// user's own page) and `micAs` as the user's current name (a person
+    /// page, for "In meetings with you"). A microphone line carrying the
+    /// measured person's own name stays theirs.
+    static func speaker(key: String?, name lineName: String?, measuring name: String,
+                        micIsThem: Bool, micAs: String?) -> String? {
+        let named = lineName.flatMap { $0.isEmpty ? nil : $0 }
+        if key == TranscriptionRunner.micSpeakerKey {
+            if micIsThem { return name }
+            if let micAs, named.map({ $0.caseInsensitiveCompare(name) != .orderedSame }) ?? true { return micAs }
+        }
+        return named ?? key
+    }
+
     /// `meetings` when the caller already has them; `micIsThem` counts the
-    /// split-track microphone lines as `name` (the user's own page).
+    /// split-track microphone lines as `name` (the user's own page), `micAs`
+    /// as the user (see `speaker`).
     static func load(_ name: String, repository: RecordingRepository, meetings: [PersonMeeting]? = nil,
-                     micIsThem: Bool = false)
+                     micIsThem: Bool = false, micAs: String? = nil)
         -> (meetings: [MeetingSpeech], lines: [String]) {
         var out: [MeetingSpeech] = []
         var lines: [String] = []
@@ -24,9 +41,8 @@ nonisolated enum SpeechHistory {
         for m in list {
             guard let rec = try? repository.get(id: m.id), !rec.isDeleted else { continue }
             let all = rec.segments.compactMap { s -> SpeechLine? in
-                let who = micIsThem && s.speaker == TranscriptionRunner.micSpeakerKey
-                    ? name : s.speakerName.flatMap { $0.isEmpty ? nil : $0 } ?? s.speaker
-                guard let who else { return nil }
+                guard let who = speaker(key: s.speaker, name: s.speakerName, measuring: name,
+                                        micIsThem: micIsThem, micAs: micAs) else { return nil }
                 return SpeechLine(start: s.startSeconds, end: s.endSeconds, speaker: who, text: s.text)
             }
             if let measured = SpeechMeasure.measure(all, name: name, recordingId: m.id, title: m.title, date: m.date),

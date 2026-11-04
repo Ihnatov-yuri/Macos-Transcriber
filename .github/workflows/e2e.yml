@@ -1,0 +1,169 @@
+name: E2E
+
+# Headless end-to-end checks of transcriberrcli on a macOS runner: speech
+# made with `say`, run through the CLI's subcommands (scripts/ci-e2e.sh).
+# The build mirrors ci.yml (CLI only). Speech models are cached between
+# runs; Whisper (~3 GB) and Gemma (~2.6 GB) only run when asked for from
+# "Run workflow", so a push stays at Parakeet, the diarizer and the voice
+# model (~1 GB, cached).
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      whisper:
+        description: "Run Whisper large-v3, langid and Super (~3 GB download on a cold cache)"
+        type: boolean
+        default: true
+      parakeet_uk:
+        description: "Run Parakeet UK (~630 MB from Hugging Face)"
+        type: boolean
+        default: true
+      gemma:
+        description: "Download Gemma 4 E2B (~2.6 GB) and run litert, gentest, brief"
+        type: boolean
+        default: false
+      skip_models:
+        description: "Skip every model-dependent check"
+        type: boolean
+        default: false
+
+# The jobs only read the repository: a token that could push, or write
+# releases, issues or packages, is not handed to xcodebuild, Homebrew, the
+# resolved Swift packages and their build plugins.
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DD: ${{ github.workspace }}/.build/xcode
+  SIGN_FLAGS: >-
+    CODE_SIGN_IDENTITY=-
+    CODE_SIGN_STYLE=Manual
+    DEVELOPMENT_TEAM=
+    ENABLE_HARDENED_RUNTIME=NO
+  # Same LFS workaround as ci.yml (see setup.sh).
+  GIT_LFS_SKIP_SMUDGE: "1"
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: lfs.fetchexclude
+  GIT_CONFIG_VALUE_0: "*"
+
+jobs:
+  cli-e2e:
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      E2E_OUT: ${{ github.workspace }}/.build/e2e
+      E2E_SKIP_MODELS: ${{ (github.event_name == 'workflow_dispatch' && inputs.skip_models) && '1' || '0' }}
+      E2E_SKIP_WHISPER: ${{ (github.event_name == 'workflow_dispatch' && inputs.whisper) && '0' || '1' }}
+      E2E_SKIP_UK: ${{ (github.event_name == 'push' || inputs.parakeet_uk) && '0' || '1' }}
+      E2E_GEMMA: ${{ (github.event_name == 'workflow_dispatch' && inputs.gemma) && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .build/xcode/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Resolve and patch packages
+        run: |
+          xcodebuild -resolvePackageDependencies -project Transcriberr.xcodeproj \
+            -scheme Transcriberr -derivedDataPath "$DD"
+          scripts/patch-artifacts.sh "$DD/SourcePackages"
+
+      - name: Build CLI
+        run: |
+          set -o pipefail
+          xcodebuild build -project Transcriberr.xcodeproj -scheme TranscriberrCLI \
+            -destination "platform=macOS" -derivedDataPath "$DD" \
+            -skipPackagePluginValidation -skipMacroValidation \
+            $SIGN_FLAGS 2>&1 | tee cli-build.log | grep -E "error:|warning:|BUILD" || true
+          grep -q "BUILD SUCCEEDED" cli-build.log
+
+      # Where the code keeps its models:
+      #   FluidAudio (Parakeet v3, diarizer, Nemotron, WeSpeaker):
+      #     ~/Library/Application Support/FluidAudio/Models
+      #   Transcriberr's own (Parakeet UK, Whisper UK, Gemma, voice model):
+      #     ~/Library/Application Support/Transcriberr/models
+      #   WhisperKit (large-v3): ~/Documents/huggingface
+      # One cache per family, so a 3 GB Whisper entry never evicts the rest.
+      - name: Restore FluidAudio models
+        id: fluid
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Application Support/FluidAudio
+          key: models-fluidaudio-${{ hashFiles('project.yml') }}
+          restore-keys: models-fluidaudio-
+
+      - name: Restore Transcriberr models
+        id: own
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Application Support/Transcriberr/models
+          key: models-transcriberr-${{ env.E2E_SKIP_UK }}-${{ env.E2E_GEMMA }}-${{ hashFiles('Transcriberr/ASR/ParakeetUKModel.swift', 'Transcriberr/ASR/ModelCatalog.swift') }}
+          restore-keys: models-transcriberr-
+
+      - name: Restore WhisperKit models
+        id: whisperkit
+        if: env.E2E_SKIP_WHISPER != '1' && env.E2E_SKIP_MODELS != '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Documents/huggingface
+          key: models-whisperkit-large-v3-v1
+
+      - name: Run e2e checks
+        run: |
+          version="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"?([0-9.]+)"?.*/\1/p' project.yml | head -1)"
+          export E2E_EXPECT_VERSION="$version"
+          scripts/ci-e2e.sh "$DD/Build/Products/Debug/transcriberrcli"
+
+      # Saved even when a check failed: a model download that worked is
+      # worth keeping for the next run.
+      - name: Save FluidAudio models
+        if: always() && steps.fluid.outputs.cache-hit != 'true' && env.E2E_SKIP_MODELS != '1'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Application Support/FluidAudio
+          key: models-fluidaudio-${{ hashFiles('project.yml') }}
+
+      - name: Save Transcriberr models
+        if: always() && steps.own.outputs.cache-hit != 'true' && env.E2E_SKIP_MODELS != '1'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Application Support/Transcriberr/models
+          key: models-transcriberr-${{ env.E2E_SKIP_UK }}-${{ env.E2E_GEMMA }}-${{ hashFiles('Transcriberr/ASR/ParakeetUKModel.swift', 'Transcriberr/ASR/ModelCatalog.swift') }}
+
+      - name: Save WhisperKit models
+        if: always() && env.E2E_SKIP_WHISPER != '1' && env.E2E_SKIP_MODELS != '1' && steps.whisperkit.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Documents/huggingface
+          key: models-whisperkit-large-v3-v1
+
+      - name: Upload e2e output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-e2e
+          path: |
+            .build/e2e
+            cli-build.log
+          if-no-files-found: warn

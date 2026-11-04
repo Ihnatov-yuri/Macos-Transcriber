@@ -84,7 +84,7 @@ Before anything is pasted the text goes through the same cleanup as the transcri
 
 ![How a dictated passage goes from key press to pasted text](docs/images/dictation-flow.svg)
 
-Dictation needs the Microphone, Accessibility and Input Monitoring permissions once; the Dictate screen walks through them and shows the last key event it saw, so a hotkey that does nothing is easy to diagnose. There are Shortcuts actions, a menu bar item, a floating status strip, optional history saved as ordinary recordings, and a URL scheme (`transcriberr://dictate/start`, `/stop`, `/toggle`, `/cancel`) for Raycast or a Stream Deck.
+Dictation needs the Microphone, Accessibility and Input Monitoring permissions once; the Dictate screen walks through them and shows the last key event it saw, so a hotkey that does nothing is easy to diagnose. There are Shortcuts actions, a menu bar item, a floating status strip, optional history saved as ordinary recordings, and a URL scheme (`transcriberr://dictate/start`, `/stop`, `/toggle`, `/cancel`) for Raycast or a Stream Deck. Text from a session a link starts always goes to the Dictate screen, never into another app, since any app or web page can open the link; Settings › Dictation can turn the links off.
 
 ## People
 
@@ -162,6 +162,10 @@ xcodebuild test -project Transcriberr.xcodeproj -scheme Transcriberr -destinatio
 ```
 
 The unit tests cover the logic at the core: destutter, echo scrub and trim, the ROVER merge, chunk windowing, the NLMS canceller against synthetic ground truth, the dictation text stages, the voice gate, the repository, the compressor, the KB layer and the player. Every release passes the suite first. The test derived data lives outside `~/Documents` on purpose: launchd starts the test host, which would block on the "access your Documents folder" prompt with nobody there to answer it.
+
+Every push runs two GitHub Actions workflows on a macOS 26 runner. `ci.yml` builds the app and the CLI and runs the unit tests. `e2e.yml` runs `scripts/ci-e2e.sh`, which drives the CLI headlessly on speech generated with `say`: transcription in English and Ukrainian, diarization, echo cancellation, the split-track pipeline, voice prints, the knowledge base and the MCP server. Whisper and Gemma checks run when the workflow is started by hand. [docs/feature-coverage.md](docs/feature-coverage.md) lists every feature with the test that covers it, and a manual checklist for what needs a microphone, Accessibility or a real calendar.
+
+The app and the CLI build in Swift 6 language mode, main-actor by default. The test target stays in Swift 5 mode with complete concurrency checking, because XCTest's nonisolated initializers clash with a main-actor default in Swift 6 mode.
 
 Unit tests say the logic holds. Every serious defect in this project was found on real recordings, so two scripts check the whole pipeline against them. `scripts/realworld-test.sh <recording.m4a> <start-sec> <duration-sec> <Language>` cuts a slice from a real recording with its mic and system tracks, runs it headlessly through the full pipeline and counts the defects this project has been bitten by (subtitle sign-offs, seam repeats, word loops, script drift) next to the stored transcript. `scripts/eval-set.sh <label>` scores a build against a reference set of five-minute meeting slices, two English and two Ukrainian, kept outside the repo in `~/Documents/Transcriberr-eval`; two runs of the same build agree to about 0.2 WER points. Recordings are private and never belong in the repo.
 

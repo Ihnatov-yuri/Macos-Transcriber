@@ -83,7 +83,18 @@ func cmdRestoreBackups(dryRun: Bool) -> Int32 {
     var versionsRestored = 0, versionsSkipped = 0
     var outputsRestored = 0, outputsSkipped = 0
 
+    // Every recording's audio lives in the library folder (imports are
+    // copied in). A backup naming a file anywhere else is planted or
+    // corrupt, and migrate-audio or compression would later transcode and
+    // DELETE that file: such a recording is not restored.
+    let library = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Transcriberr/Recordings", isDirectory: true)
     for dto in backups.sorted(by: { $0.createdAtMillis < $1.createdAtMillis }) {
+        guard BackupService.isInsideLibrary(dto.audioPath, library: library) else {
+            print("[restore] ⚠️ skipping '\(dto.title)' (\(dto.id)): its audio path is outside \(library.path)")
+            recordingsSkipped += 1
+            continue
+        }
         var recording = existingRecording(dto.id)
         if recording == nil {
             recordingsRestored += 1

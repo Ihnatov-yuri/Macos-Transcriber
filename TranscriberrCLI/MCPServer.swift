@@ -76,24 +76,53 @@ final class MCPServer {
             unsetenv(Self.replayKey)
             buffer = data
         }
+        // Dropping the rest of an over-long line, up to its newline.
+        var discarding = false
         while true {
             if buffer.firstIndex(of: 0x0A) == nil {
                 let chunk = stdin.availableData
                 if chunk.isEmpty {   // EOF
                     // A final request with no trailing newline is still a request.
-                    if !buffer.isEmpty { handleLine(buffer) }
+                    if !buffer.isEmpty, !discarding { handleLine(buffer) }
                     return 0
                 }
                 buffer.append(chunk)
+            }
+            if discarding {
+                guard let nl = buffer.firstIndex(of: 0x0A) else {
+                    buffer.removeAll()
+                    continue
+                }
+                buffer.removeSubrange(buffer.startIndex...nl)
+                discarding = false
+            }
+            // A client (or anything else on the pipe) sending bytes with no
+            // newline grew this buffer without bound.
+            if buffer.firstIndex(of: 0x0A) == nil, buffer.count > Self.maxRequestBytes {
+                rejectOversized()
+                buffer.removeAll()
+                discarding = true
+                continue
             }
             if isStale { reexec(handingOver: buffer) }
             while let nl = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer.subdata(in: buffer.startIndex..<nl)
                 buffer.removeSubrange(buffer.startIndex...nl)
                 guard !lineData.isEmpty else { continue }
+                guard lineData.count <= Self.maxRequestBytes else { rejectOversized(); continue }
                 handleLine(lineData)
             }
         }
+    }
+
+    /// No request this server answers comes near it (tool arguments are a
+    /// query and a few ids).
+    static let maxRequestBytes = 8 << 20
+
+    private func rejectOversized() {
+        FileHandle.standardError.write("transcriberr mcp: request over \(Self.maxRequestBytes >> 20) MB dropped\n".data(using: .utf8)!)
+        send(["jsonrpc": "2.0", "id": NSNull(),
+              "error": ["code": -32700, "message": "Parse error: request larger than \(Self.maxRequestBytes >> 20) MB"]])
     }
 
     private func handleLine(_ data: Data) {

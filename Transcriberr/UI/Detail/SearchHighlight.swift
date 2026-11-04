@@ -2,9 +2,12 @@ import Foundation
 
 /// Where a Library search's words occur in a transcript line, so the
 /// recording it found can mark them. Same matching as the Library's
-/// `localizedStandardContains`: case- and accent-insensitive, locale-aware,
-/// the whole query as one phrase.
+/// `localizedStandardContains`: case-, accent- and width-insensitive
+/// (fullwidth "ＤＡＴＡ" finds "data"), locale-aware, the whole query as one
+/// phrase.
 nonisolated enum SearchHighlight {
+    static let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
+
     static func ranges(of query: String, in text: String) -> [NSRange] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !text.isEmpty else { return [] }
@@ -12,7 +15,7 @@ nonisolated enum SearchHighlight {
         var out: [NSRange] = []
         var from = 0
         while from < ns.length {
-            let r = ns.range(of: q, options: [.caseInsensitive, .diacriticInsensitive],
+            let r = ns.range(of: q, options: Self.options,
                              range: NSRange(location: from, length: ns.length - from), locale: .current)
             guard r.location != NSNotFound, r.length > 0 else { break }
             out.append(r)

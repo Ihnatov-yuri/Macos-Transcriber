@@ -74,6 +74,9 @@ func cmdKB(_ raw: [String]) -> Int32 {
     let rest = Array(parsed.positionals.dropFirst())
     // Before opening the store: help must work with no database present.
     if ["help", "-h", "--help"].contains(sub) { kbUsage(); return 0 }
+    // A missing argument is a usage error, also with no store present (and
+    // it is not a read of anything).
+    if ["search", "get", "outputs"].contains(sub), rest.isEmpty { kbUsage(); return 64 }
     guard AssistantAccess.isAllowed else {
         FileHandle.standardError.write(Data((AssistantAccess.refusal + "\n").utf8))
         return 77   // EX_NOPERM

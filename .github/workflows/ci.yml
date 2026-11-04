@@ -1,0 +1,130 @@
+name: CI
+
+# Build the app and the CLI and run the unit tests on every push and PR.
+# Ad-hoc signed, hardened runtime off: CI has no signing identity, and
+# library validation would refuse the Google-signed LiteRT-LM dylib in an
+# ad-hoc app (scripts/package.sh fixes that for release builds only).
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# The jobs only read the repository: a token that could push, or write
+# releases, issues or packages, is not handed to xcodebuild, Homebrew, the
+# resolved Swift packages and their build plugins.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A run in progress finishes; only a still-queued one is replaced.
+  cancel-in-progress: false
+
+env:
+  DD: ${{ github.workspace }}/.build/xcode
+  SIGN_FLAGS: >-
+    CODE_SIGN_IDENTITY=-
+    CODE_SIGN_STYLE=Manual
+    DEVELOPMENT_TEAM=
+    ENABLE_HARDENED_RUNTIME=NO
+  # LiteRT-LM keeps unused prebuilt libraries in Git LFS, one of them is gone
+  # from GitHub's LFS store (see setup.sh).
+  GIT_LFS_SKIP_SMUDGE: "1"
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: lfs.fetchexclude
+  GIT_CONFIG_VALUE_0: "*"
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .build/xcode/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Resolve and patch packages
+        run: |
+          xcodebuild -resolvePackageDependencies -project Transcriberr.xcodeproj \
+            -scheme Transcriberr -derivedDataPath "$DD"
+          scripts/patch-artifacts.sh "$DD/SourcePackages"
+
+      - name: Build CLI
+        run: |
+          set -o pipefail
+          xcodebuild build -project Transcriberr.xcodeproj -scheme TranscriberrCLI \
+            -destination "platform=macOS" -derivedDataPath "$DD" \
+            -skipPackagePluginValidation -skipMacroValidation \
+            $SIGN_FLAGS 2>&1 | tee cli-build.log | grep -E "error:|BUILD" || true
+          if ! grep -q "BUILD SUCCEEDED" cli-build.log; then
+            grep -nE "error|failed" cli-build.log | grep -v "warning:" | tail -150 || true
+            tail -80 cli-build.log
+            exit 1
+          fi
+
+      - name: Build and test app
+        run: |
+          set -o pipefail
+          xcodebuild test -project Transcriberr.xcodeproj -scheme Transcriberr \
+            -destination "platform=macOS" -derivedDataPath "$DD" \
+            -skipPackagePluginValidation -skipMacroValidation \
+            $SIGN_FLAGS 2>&1 | tee app-test.log | grep -E "error:|Test Case.*failed|Executed|TEST|BUILD" || true
+          if ! grep -q "TEST SUCCEEDED" app-test.log; then
+            echo "::group::Why it failed"
+            # xcodebuild's summary ("Testing failed:", indented reasons) has
+            # no "error:" prefix, so print it and the log's tail as well.
+            grep -nE "error:|Testing failed|Failing tests|XCTAssert|Fatal error|failed \(" app-test.log \
+              | grep -v "warning:" | cut -c1-600 | tail -150 || true
+            echo "----- compiler crash -----"
+            # A frontend crash prints the declaration it was in and a stack
+            # dump before "Please submit a bug report".
+            grep -n -B60 -A30 "Please submit a bug report" app-test.log | cut -c1-600 | head -200 || true
+            grep -nE "^[0-9]+\.\s+(While|Program arguments|Compiling with)" app-test.log | cut -c1-600 | head -40 || true
+            echo "----- errors with context -----"
+            grep -n -B3 -A8 " error: " app-test.log | cut -c1-600 | head -200 || true
+            echo "----- tail -----"
+            tail -120 app-test.log
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Concurrency warning count
+        if: always()
+        run: |
+          for f in cli-build.log app-test.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$f: warnings in our code"
+            grep -E 'warning:' "$f" | grep -viE 'SourcePackages|checkouts' | sed 's|.*Macos-Transcriber/||' | sort -u | cut -c1-300 | head -300
+            echo "::endgroup::"
+          done
+          for f in cli-build.log app-test.log; do
+            [ -f "$f" ] || continue
+            echo "$f: $(grep -E 'warning:' "$f" | grep -viE 'SourcePackages|checkouts' | sort -u | wc -l) project warnings"
+          done
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-logs
+          path: |
+            cli-build.log
+            app-test.log

@@ -12,6 +12,9 @@ struct DetailView: View {
     /// The Library search that found this recording: its words are marked
     /// in the transcript.
     var searchQuery: String = ""
+    /// A Library merge is reading this recording: not deletable or
+    /// splittable until it is done.
+    var isMerging: Bool = false
     @State private var focus: String?
     @Environment(AppContainer.self) private var container
     @Query(sort: \Folder.sortOrder) private var allFolders: [Folder]
@@ -90,6 +93,8 @@ struct DetailView: View {
         }
         .confirmationDialog("Delete “\(recording.title)”?", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
+                // A merge reading this recording would lose its source.
+                guard !isMerging else { return }
                 // Same reasoning as the library's Delete: a run still
                 // streaming into this recording must not outlive it.
                 container.jobManager.cancel(recording.id)
@@ -602,12 +607,13 @@ struct DetailView: View {
                 Button("Split recording…") {
                     showingSplit = true
                 }
-                .disabled(model?.isRunning ?? false)
+                .disabled((model?.isRunning ?? false) || isMerging)
                 Divider()
                 Button("Rename recording…") {
                     renameRecordingPrompt()
                 }
                 Button("Delete recording…", role: .destructive) { confirmingDelete = true }
+                    .disabled(isMerging)
             } label: {
                 Text("More ⋯").uiLabel(11, color: AppColor.ink2)
             }
@@ -1451,7 +1457,7 @@ struct TranscriptPane: View {
                     nearBottom = isNear
                 }
                 .task(id: disputeKey(segs)) { disputeRows = disputeHits(in: sortedSegments) }
-                .task(id: SearchKey(query: activeQuery, texts: disputeKey(segs).texts)) {
+                .task(id: SearchKey(query: activeQuery, style: style, texts: disputeKey(segs).texts)) {
                     let q = activeQuery
                     let segs = sortedSegments
                     let hits = q.isEmpty ? [] : segs.filter { SearchHighlight.matches(q, style.apply($0.text)) }.map(\.id)
@@ -1461,6 +1467,9 @@ struct TranscriptPane: View {
                     if first {
                         searchPosition = 0
                         searchTarget = hits.first
+                    } else if searchPosition >= hits.count {
+                        // Fewer hits after an edit or a new chunk: "5 of 3".
+                        searchPosition = max(0, hits.count - 1)
                     }
                 }
                 .onChange(of: searchTarget) { _, target in
@@ -1634,7 +1643,10 @@ struct TranscriptPane: View {
         .background(AppColor.base)
     }
 
-    private struct SearchKey: Hashable { let query: String; let texts: [Int] }
+    /// The style too: hits are found in the styled text, so switching
+    /// Clean/Verbatim must re-run the search (the "only in words the Clean
+    /// view leaves out" bar stayed up after turning Clean off).
+    private struct SearchKey: Hashable { let query: String; let style: TranscriptStyle; let texts: [Int] }
 
     private func searchBar(_ query: String) -> some View {
         let count = searchHits.count
@@ -1671,7 +1683,10 @@ struct TranscriptPane: View {
         searchPosition = (searchPosition + (forward ? 1 : n - 1)) % n
         // Re-set even when unchanged, so the same line scrolls back into view.
         searchTarget = nil
-        DispatchQueue.main.async { searchTarget = searchHits[searchPosition] }
+        DispatchQueue.main.async {
+            guard searchHits.indices.contains(searchPosition) else { return }
+            searchTarget = searchHits[searchPosition]
+        }
     }
 
     private func jump(in starts: [Double], forward: Bool) {
@@ -1820,6 +1835,10 @@ struct OutputPane: View {
                         .foregroundStyle(AppColor.ink)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
+                        // Model-written Markdown: only web links open (SafeLink).
+                        .environment(\.openURL, OpenURLAction { url in
+                            SafeLink.isOpenable(url) ? .systemAction : .discarded
+                        })
                         .padding(AppMetric.sheetPadding)
                 }
             } else {
@@ -1902,6 +1921,9 @@ private struct OutputHistoryList: View {
                     .foregroundStyle(AppColor.ink)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .environment(\.openURL, OpenURLAction { url in
+                        SafeLink.isOpenable(url) ? .systemAction : .discarded
+                    })
                 if showingPrompt == v.id, let user = v.userPrompt {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("System").uiLabel(9, color: AppColor.ink2)

@@ -7,14 +7,18 @@ import CoreText
 enum FontLoader {
     static func registerBundledFonts() {
         guard let resURL = Bundle.main.resourceURL else { return }
-        let fontsDir = resURL.appendingPathComponent("Fonts", isDirectory: true)
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: fontsDir,
-            includingPropertiesForKeys: nil
-        ) else { return }
-        for url in entries where url.pathExtension.lowercased() == "ttf"
-                            || url.pathExtension.lowercased() == "otf" {
-            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        // XcodeGen adds Resources/Fonts as a group, and Xcode copies group
+        // files flat into Contents/Resources, so the fonts were never found
+        // under Fonts/ and every custom face fell back to the system font.
+        // Both layouts are searched.
+        let dirs = [resURL.appendingPathComponent("Fonts", isDirectory: true), resURL]
+        for dir in dirs {
+            let entries = (try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil)) ?? []
+            for url in entries where url.pathExtension.lowercased() == "ttf"
+                                || url.pathExtension.lowercased() == "otf" {
+                CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+            }
         }
     }
 }

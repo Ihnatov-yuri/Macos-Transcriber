@@ -66,6 +66,22 @@ final class VoiceprintTests: XCTestCase {
         XCTAssertLessThan(VoiceActivity.rms(x[0..<16_000]), floor)
     }
 
+    /// Continuous speech with no pauses: every window is enrolled.
+    func testEnrollmentAcceptsSpeechWithoutPauses() {
+        var x = [Float](repeating: 0, count: 16_000 * 12)
+        for i in x.indices { x[i] = sin(Float(i) * 0.05) * (0.15 + 0.05 * sin(Float(i) / 4000)) }
+        XCTAssertGreaterThan(VoiceActivity.speechFloor(x), VoiceActivity.rms(x[0..<48_000]),
+                             "the usual floor rejects pause-free speech")
+        XCTAssertGreaterThanOrEqual(VoiceEmbedder.enrollClips(x).count, 6)
+    }
+
+    /// With real pauses the enrollment floor is the usual one.
+    func testEnrollmentFloorKeepsTheUsualFloorWithPauses() {
+        var x = [Float](repeating: 0.0005, count: 16_000 * 10)
+        for i in 16_000..<80_000 { x[i] = i % 2 == 0 ? 0.2 : -0.2 }
+        XCTAssertEqual(VoiceActivity.enrollFloor(x), VoiceActivity.speechFloor(x))
+    }
+
     // MARK: - The mic gate
 
     /// The coaching-call bug, at its root: the far side bleeding into the mic

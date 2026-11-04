@@ -16,10 +16,13 @@ final class VoiceSuggestionsTests: XCTestCase {
     func testARecurringVoiceInMyMeetingsIsSuggested() {
         let kate: [Float] = [1, 0.1, 0, 0]
         var f = UnknownVoiceStore.File()
-        f.entries = (0..<4).map { entry(kate, day: 190 - Double($0)) }
-            + [entry([0, 1, 0, 0], day: 195), entry([0, 1, 0, 0], day: 194)]          // only twice
-            + (0..<3).map { entry([0, 0, 1, 0], day: 190 - Double($0), withMe: false) } // not my meetings
-            + (0..<3).map { entry([0, 0, 0, 1], day: 10 + Double($0)) }                // long ago
+        // Built step by step: one `+` chain of four mapped arrays timed out
+        // the type checker in Xcode 26.6.
+        var entries: [UnknownVoiceStore.Entry] = (0..<4).map { entry(kate, day: 190 - Double($0)) }
+        entries += [entry([0, 1, 0, 0], day: 195), entry([0, 1, 0, 0], day: 194)]                   // only twice
+        entries += (0..<3).map { entry([0, 0, 1, 0], day: 190 - Double($0), withMe: false) }         // not my meetings
+        entries += (0..<3).map { entry([0, 0, 0, 1], day: 10 + Double($0)) }                         // long ago
+        f.entries = entries
         let g = VoiceSuggestions.groups(f, people: [], me: nil, now: now)
         XCTAssertEqual(g.count, 1)
         XCTAssertEqual(g.first?.members.count, 4)

@@ -5,11 +5,11 @@ import XCTest
 final class BenchmarkTests: XCTestCase {
     private var dir: URL!
 
-    override func setUp() {
+    override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("bench-\(UUID())")
     }
 
-    override func tearDown() { try? FileManager.default.removeItem(at: dir) }
+    override func tearDown() async throws { try? FileManager.default.removeItem(at: dir) }
 
     func testWordErrors() {
         XCTAssertEqual(Benchmark.wordErrors(ref: "We met Kaiko today.", hyp: "we met kaico today").errors, 1)

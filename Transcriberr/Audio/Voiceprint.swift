@@ -324,7 +324,7 @@ actor VoiceEmbedder {
     /// The voiced `enrollWindow`s of continuous speech, half overlapping.
     static func enrollClips(_ samples: [Float]) -> [ArraySlice<Float>] {
         let win = Int(VoiceActivity.enrollWindow * VoiceActivity.sampleRate)
-        let floor = VoiceActivity.speechFloor(samples)
+        let floor = VoiceActivity.enrollFloor(samples)
         var clips: [ArraySlice<Float>] = []
         var start = 0
         while start + win / 2 <= samples.count {
@@ -678,6 +678,27 @@ nonisolated enum VoiceActivity {
         levels.sort()
         let quiet = levels[levels.count / 5]
         return max(0.003, quiet * 3)
+    }
+
+    /// The floor for enrollment audio, which is meant to be speech. A fluent
+    /// reading or a trimmed clip has almost no pauses, so its 20th
+    /// percentile IS speech and `speechFloor` (three times that) sat above
+    /// every window: "Not enough speech" for 25 s of clean speech. Capped at
+    /// half the median level; with real pauses the usual floor is lower and
+    /// wins. Only for enrollment: on a meeting track the same cap would let a
+    /// noisy silent stretch pass as speech.
+    static func enrollFloor(_ samples: [Float]) -> Float {
+        let frame = 1600
+        let usual = speechFloor(samples)
+        guard samples.count >= frame else { return usual }
+        var levels: [Float] = []
+        var i = 0
+        while i + frame <= samples.count {
+            levels.append(rms(samples[i..<(i + frame)]))
+            i += frame
+        }
+        levels.sort()
+        return min(usual, max(0.003, levels[levels.count / 2] * 0.5))
     }
 
     /// Where a track has sound at all: 20 ms frames at or above

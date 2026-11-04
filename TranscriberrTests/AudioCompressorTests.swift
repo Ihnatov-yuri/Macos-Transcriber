@@ -8,7 +8,7 @@ import AVFoundation
 final class AudioCompressorTests: XCTestCase {
     var tempFiles: [URL] = []
 
-    override func tearDown() {
+    override func tearDown() async throws {
         for f in tempFiles { try? FileManager.default.removeItem(at: f) }
         tempFiles = []
     }

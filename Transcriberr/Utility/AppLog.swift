@@ -5,6 +5,13 @@ import OSLog
 /// AND appends to `~/Library/Logs/Transcriberr/transcriberr.log` so we can
 /// inspect it after a crash or silent failure. Callable from any thread:
 /// the file state below is only touched on `queue`.
+///
+/// The message goes to the unified log as PRIVATE (`<private>` in
+/// `log show` unless private data is enabled): messages carry transcript
+/// snippets, recording and meeting titles, attendee counts and app names,
+/// and the unified log is readable by every admin account on the Mac and
+/// travels in every sysdiagnose. The owner-only file below keeps the full
+/// text for diagnosis; the category stays public.
 nonisolated enum AppLog {
     private static let subsystem = "nl.ihnatov.Transcriberr"
     private static let queue = DispatchQueue(label: "AppLog.io")
@@ -32,19 +39,19 @@ nonisolated enum AppLog {
 
     static func info(_ category: String, _ message: @autoclosure () -> String) {
         let m = message()
-        osLogger.info("[\(category, privacy: .public)] \(m, privacy: .public)")
+        osLogger.info("[\(category, privacy: .public)] \(m, privacy: .private)")
         write(level: "INFO", category: category, message: m)
     }
 
     static func warn(_ category: String, _ message: @autoclosure () -> String) {
         let m = message()
-        osLogger.warning("[\(category, privacy: .public)] \(m, privacy: .public)")
+        osLogger.warning("[\(category, privacy: .public)] \(m, privacy: .private)")
         write(level: "WARN", category: category, message: m)
     }
 
     static func error(_ category: String, _ message: @autoclosure () -> String) {
         let m = message()
-        osLogger.error("[\(category, privacy: .public)] \(m, privacy: .public)")
+        osLogger.error("[\(category, privacy: .public)] \(m, privacy: .private)")
         write(level: "ERR ", category: category, message: m)
     }
 

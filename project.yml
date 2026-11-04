@@ -9,7 +9,7 @@ options:
 
 settings:
   base:
-    SWIFT_VERSION: "5"
+    SWIFT_VERSION: "6"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     DEVELOPMENT_TEAM: ""
@@ -45,6 +45,16 @@ targets:
     settings:
       TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Transcriberr.app/Contents/MacOS/Transcriberr"
       BUNDLE_LOADER: "$(TEST_HOST)"
+      # Same isolation defaults as the app: tests call main-actor-by-default
+      # app APIs from synchronous test methods. Swift 5 language mode with
+      # complete checking: in Swift 6 mode every XCTestCase subclass's
+      # inherited initializers become main-actor and clash with XCTest's
+      # nonisolated init(), init(invocation:) and init(selector:). The app
+      # and the CLI are Swift 6; modules may mix language modes.
+      SWIFT_VERSION: "5"
+      SWIFT_STRICT_CONCURRENCY: complete
+      SWIFT_APPROACHABLE_CONCURRENCY: YES
+      SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
   Transcriberr:
     type: application
     platform: macOS
@@ -84,7 +94,7 @@ targets:
         LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.productivity
         NSMicrophoneUsageDescription: Transcriberr records audio from your microphone to transcribe it locally on this Mac.
-        NSCalendarsFullAccessUsageDescription: Transcriberr reads the invite of the meeting you recorded (its title and attendees) so their names are spelled right in the transcript. Nothing leaves this Mac.
+        NSCalendarsFullAccessUsageDescription: Transcriberr reads the invite of the meeting you recorded (its title and attendees) so their names are spelled right in the transcript. The invite is used on this Mac, and is sent to a cloud engine only when you choose one for a run.
         NSAudioCaptureUsageDescription: Meeting mode records the audio other apps play (your meeting participants) so calls can be transcribed locally on this Mac.
         NSDocumentsFolderUsageDescription: Transcriberr saves recordings, transcripts, and sidecar files alongside your audio.
         NSHumanReadableCopyright: ""
@@ -104,9 +114,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: nl.ihnatov.Transcriberr
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
-        # Swift 6 step 2: still Swift 5 mode, but every data race the Swift 6
-        # checker would reject shows up as a warning. Code is main-actor by
-        # default; audio, engine and helper code opts out with `nonisolated`.
+        # Swift 6 language mode: every data race the checker finds is an
+        # error. Code is main-actor by default; audio, engine and helper code
+        # opts out with `nonisolated`.
         SWIFT_STRICT_CONCURRENCY: complete
         SWIFT_APPROACHABLE_CONCURRENCY: YES
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor

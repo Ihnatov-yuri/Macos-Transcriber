@@ -239,14 +239,9 @@ nonisolated enum Benchmark {
         do { try f.read(into: input, frameCount: count) } catch { return nil }
         let outCap = AVAudioFrameCount(Double(input.frameLength) * AudioDecoder.sampleRate / rate) + 1024
         guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: outCap) else { return nil }
-        var fed = false
+        let feed = ConverterInput(once: input, whenDone: .endOfStream)
         var error: NSError?
-        let status = converter.convert(to: output, error: &error) { _, inStatus in
-            if fed { inStatus.pointee = .endOfStream; return nil }
-            fed = true
-            inStatus.pointee = .haveData
-            return input
-        }
+        let status = converter.convert(to: output, error: &error) { _, inStatus in feed.next(inStatus) }
         guard status != .error, let p = output.floatChannelData?[0] else { return nil }
         return Array(UnsafeBufferPointer(start: p, count: Int(output.frameLength)))
     }

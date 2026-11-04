@@ -148,7 +148,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
     /// Whether starting capture would put a Bluetooth link into hands-free
     /// mode — see `AudioInputDevices.captureWouldDisturbBluetooth`.
     static func captureDisturbsBluetooth() -> Bool {
-        AudioInputDevices.captureWouldDisturbBluetooth(uid: RecorderSettings.shared.inputDeviceUID)
+        AudioInputDevices.captureWouldDisturbBluetooth(uid: RecorderSettings.inputDeviceUIDNow)
     }
 
     /// Grab the input node (raw — voice processing is handled by
@@ -159,7 +159,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         // Chosen microphone FIRST — see `AudioInputDevices.apply`. Touching
         // `inputNode` before this opens whatever macOS calls the default
         // input, which is exactly what we are trying not to do.
-        AudioInputDevices.apply(uid: RecorderSettings.shared.inputDeviceUID, to: engine)
+        AudioInputDevices.apply(uid: RecorderSettings.inputDeviceUIDNow, to: engine)
         var grabbedInput: AVAudioInputNode?
         do {
             try ExceptionTrap.run { grabbedInput = self.engine.inputNode }
@@ -254,7 +254,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         do {
             try ExceptionTrap.run {
                 input.removeTap(onBus: 0)
-                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buf, _ in
+                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { @Sendable [weak self] buf, _ in
                     self?.ingest(buffer: buf)
                 }
             }
@@ -366,7 +366,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         do {
             try ExceptionTrap.run {
                 input.removeTap(onBus: 0)
-                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { [weak self] buf, _ in
+                input.installTap(onBus: 0, bufferSize: 4096, format: nativeFormat) { @Sendable [weak self] buf, _ in
                     self?.ingest(buffer: buf)
                 }
             }

@@ -26,7 +26,7 @@ nonisolated enum SpeechMetric: String, Codable, CaseIterable, Identifiable, Send
 
     var unit: String {
         switch self {
-        case .talkShare: return "% of a fair share"
+        case .talkShare: return "% of a fair share, by words"
         case .pace: return "words/min"
         case .longestTurn: return "s"
         case .interruptions: return "per 10 min"
@@ -103,7 +103,8 @@ nonisolated struct MeetingSpeech: Equatable, Identifiable, Sendable {
     /// Everyone who said a word, them included: a quiet side of a 1:1 is
     /// still half of it.
     var participants: Int
-    /// Seconds of their lines: generous, for weighting and display only.
+    /// Seconds covered by their lines (overlapping lines counted once):
+    /// still generous, since lines are padded, so for display only.
     var talkSeconds: Double
     /// First line to last: the meeting's length.
     var spanSeconds: Double
@@ -163,7 +164,7 @@ nonisolated enum SpeechMeasure {
 
         var wordsBy: [String: Int] = [:]
         for l in sorted { wordsBy[l.speaker, default: 0] += SpeechLexicon.words(l.text).count }
-        let talk = mine.map { $0.end - $0.start }.reduce(0, +)
+        let talk = unionSeconds(mine.map { (start: $0.start, end: $0.end) })
         let tight = mine.filter { tightLine.contains($0.end - $0.start) && SpeechLexicon.words($0.text).count >= 4 }
 
         // Turns: runs of one speaker, merged over short gaps, and ended
@@ -214,6 +215,24 @@ nonisolated enum SpeechMeasure {
             fillers: SpeechLexicon.count(SpeechLexicon.fillers[language ?? ""] ?? [], in: text),
             hedges: SpeechLexicon.count(SpeechLexicon.hedges[language ?? ""] ?? [], in: text),
             others: wordsBy.filter { !isThem($0.key) }.mapValues(Double.init))
+    }
+
+    /// Seconds covered by a set of intervals, each stretch counted once: two
+    /// lines of one person that overlap (a split speaker, a tagged line over
+    /// a diarized one) are not twice the talk.
+    static func unionSeconds(_ intervals: [(start: Double, end: Double)]) -> Double {
+        var total = 0.0
+        var run: (start: Double, end: Double)?
+        for i in intervals.filter({ $0.end > $0.start }).sorted(by: { $0.start < $1.start }) {
+            if let r = run, i.start <= r.end {
+                run = (start: r.start, end: max(r.end, i.end))
+            } else {
+                if let r = run { total += r.end - r.start }
+                run = i
+            }
+        }
+        if let r = run { total += r.end - r.start }
+        return total
     }
 
     /// Meetings a number on a page is read from, newest: the headline, the

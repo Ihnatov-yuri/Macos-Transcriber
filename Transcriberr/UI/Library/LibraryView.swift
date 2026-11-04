@@ -49,7 +49,8 @@ struct LibraryView: View {
                 if let selection {
                     DetailView(recording: selection,
                                onClose: { self.selection = nil },
-                               searchQuery: transcriptMatches.contains(selection.id) ? appliedQuery : "")
+                               searchQuery: transcriptMatches.contains(selection.id) ? appliedQuery : "",
+                               isMerging: mergingIDs.contains(selection.id))
                 } else {
                     emptyState
                 }

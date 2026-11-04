@@ -122,11 +122,14 @@ final class PersonBriefTests: XCTestCase {
         XCTAssertTrue(PersonBriefBuilder.systemPrompt(name: "Kate").contains("Write in the language of the transcript."))
     }
 
-    func testCacheKeyChangesWithInputAndName() {
-        let k = PersonBriefBuilder.key(transcript: "a", name: "Kate")
-        XCTAssertEqual(k, PersonBriefBuilder.key(transcript: "a", name: "Kate"))
-        XCTAssertNotEqual(k, PersonBriefBuilder.key(transcript: "b", name: "Kate"))
-        XCTAssertNotEqual(k, PersonBriefBuilder.key(transcript: "a", name: "Anna"))
+    func testCacheKeyChangesWithInputButNotWithARename() {
+        let k = PersonBriefBuilder.key(transcript: "[00:01] Kate: a", name: "Kate")
+        XCTAssertEqual(k, PersonBriefBuilder.key(transcript: "[00:01] Kate: a", name: "Kate"))
+        XCTAssertNotEqual(k, PersonBriefBuilder.key(transcript: "[00:01] Kate: b", name: "Kate"))
+        XCTAssertEqual(k, PersonBriefBuilder.key(transcript: "[00:01] Katie: a", name: "Katie"),
+                       "a rename relabels their lines; nothing to read again")
+        XCTAssertNotEqual(k, PersonBriefBuilder.key(transcript: "[00:01] Kate: a", name: "Anna"),
+                          "about someone else, the same lines are another read")
     }
 
     func testCombineIsNewestFirstAndKeepsTheLastWordOnATopic() {

@@ -117,6 +117,8 @@ struct DictationSettingsTab: View {
                        isOn: Binding(get: { s.showMenuBar }, set: { s.showMenuBar = $0 }))
                 Toggle("Start / stop sounds",
                        isOn: Binding(get: { s.playSounds }, set: { s.playSounds = $0 }))
+                Toggle("Allow transcriberr://dictate links (text goes to the Dictate screen)",
+                       isOn: Binding(get: { s.urlActions }, set: { s.urlActions = $0 }))
                 Text("Text is inserted with ⌘V into whatever has keyboard focus; the previous clipboard contents come back 0.8 s later. Automatic spacing reads the characters before the cursor through Accessibility (a space only after a word, a capital only at a sentence start) and falls back to a trailing space where an app hides its text. Say “scratch that” to take the last passage back. When Transcriberr itself is in front with the Dictate screen open, text goes to its scratch pad instead.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
@@ -148,7 +150,7 @@ struct AppRulesEditor: View {
                     .frame(minWidth: 160, alignment: .leading)
                     Picker("", selection: Binding(
                         get: { rule.mode },
-                        set: update(rule.id) { $0.mode = $1 }
+                        set: { mode in update(rule.id) { $0.mode = mode } }
                     )) {
                         ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
                     }
@@ -156,7 +158,7 @@ struct AppRulesEditor: View {
                     .frame(width: 210)
                     Picker("", selection: Binding(
                         get: { rule.tone },
-                        set: update(rule.id) { $0.tone = $1 }
+                        set: { tone in update(rule.id) { $0.tone = tone } }
                     )) {
                         ForEach(DictationSettings.Tone.allCases, id: \.rawValue) { Text($0.label).tag($0) }
                     }
@@ -200,12 +202,13 @@ struct AppRulesEditor: View {
             .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
     }
 
-    private func update<T>(_ id: UUID, _ change: @escaping @Sendable (inout DictationSettings.AppRule, T) -> Void) -> @MainActor @Sendable (T) -> Void {
-        { value in
-            guard let idx = settings.appRules.firstIndex(where: { $0.id == id }) else { return }
-            var rule = settings.appRules[idx]
-            change(&rule, value)
-            settings.appRules[idx] = rule
-        }
+    /// Plain closures at the call sites: a generic helper returning a
+    /// `@MainActor @Sendable (T) -> Void` for `Binding.set` crashed the
+    /// Swift 6.3 compiler in Swift 6 mode (IRGen of its reabstraction thunk).
+    private func update(_ id: UUID, _ change: (inout DictationSettings.AppRule) -> Void) {
+        guard let idx = settings.appRules.firstIndex(where: { $0.id == id }) else { return }
+        var rule = settings.appRules[idx]
+        change(&rule)
+        settings.appRules[idx] = rule
     }
 }

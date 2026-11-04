@@ -15,9 +15,28 @@ struct YouDashboard: View {
     @State private var state = CoachStore.State()
     @State private var language: String?
     @State private var voice = VoiceprintStore.load()
+    /// The user's print in People's voice model, read off disk once and
+    /// again only when a voice changes, never in the body.
+    @State private var mine = PeopleEmbedder.myVoice()
+    /// Recordings come and go (and are re-run) while the page is open. A
+    /// COUNT on each library save, not an @Query that loaded every
+    /// Recording on the main context and re-ran on every save.
+    @Environment(\.modelContext) private var modelContext
+    @State private var recordingCount = 0
+    @AppStorage("ui.myName") private var myName = ""
     @State private var addingReading = false
     @State private var confirmReset = false
     @State private var loaded = false
+    private struct RefreshKey: Equatable {
+        let recordings: Int
+        let jobs: Int
+        let name: String
+    }
+
+    private func countRecordings() {
+        let n = (try? modelContext.fetchCount(FetchDescriptor<Recording>())) ?? recordingCount
+        if n != recordingCount { recordingCount = n }
+    }
 
     private var me: String { TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName")) }
     private var languages: [String] {
@@ -53,10 +72,27 @@ struct YouDashboard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .task { reload() }
+        // Measured on open, and again when the library changes under it:
+        // a recording added or deleted, a run started or finished (a re-run
+        // replaces the lines), the user's name changed. Debounced after the
+        // first, so a burst of changes measures once it pauses.
+        .onAppear { countRecordings() }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in countRecordings() }
+        .task(id: RefreshKey(recordings: recordingCount, jobs: container.jobManager.statuses.count, name: myName)) {
+            if loaded {
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { return }
+            }
+            await reload()
+        }
         .onChange(of: coach.revision) { state = CoachStore.shared.load() }
         .onReceive(NotificationCenter.default.publisher(for: VoiceprintStore.didChange)) { _ in
             voice = VoiceprintStore.load()
+            mine = PeopleEmbedder.myVoice()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PeopleStore.didChange)) { _ in
+            // A voice model switch re-embeds the user's reading too.
+            mine = PeopleEmbedder.myVoice()
         }
         .sheet(isPresented: $addingReading) { AddPersonSheet(myVoice: true) { addingReading = false } }
         .confirmationDialog("Start your goals over?", isPresented: $confirmReset, titleVisibility: .visible) {
@@ -74,9 +110,10 @@ struct YouDashboard: View {
         guard !meetings.isEmpty else {
             return "Your lines are the ones named \(me): meetings recorded with your microphone, or speakers you renamed to \(me)."
         }
-        let talk = meetings.map(\.talkSeconds).reduce(0, +)
+        let talk = PersonMeetings.talk(seconds: meetings.map(\.talkSeconds).reduce(0, +),
+                                       words: meetings.map(\.words).reduce(0, +))
         let shown = min(meetings.count, SpeechMeasure.window)
-        return "Each number is the average of your last \(shown == 1 ? "meeting" : "\(shown) meetings") (\(meetings.count) measured, \(PersonPage.duration(talk)) of your lines). Numbers come from the transcripts only; the text engine writes the goals' wording and tips."
+        return "Each number is the average of your last \(shown == 1 ? "meeting" : "\(shown) meetings"). In all, \(meetings.count) measured, \(talk) of your lines. Numbers come from the transcripts only; the text engine writes the goals' wording and tips."
     }
 
     private var emptyCard: some View {
@@ -248,7 +285,6 @@ struct YouDashboard: View {
             if let voice {
                 // Compared in People's voice model: the same reading
                 // re-embedded when another model is picked.
-                let mine = PeopleEmbedder.myVoice()
                 let me = Person(id: UUID(), name: "You", created: voice.created, updated: voice.created,
                                 print: mine ?? voice, sources: 1)
                 let c = PeopleConfidence.assess(me, others: mine == nil && VoiceModel.current != .standard ? [] : others,
@@ -288,19 +324,19 @@ struct YouDashboard: View {
     ///
     /// Every meeting is measured (0.9 s for 73 on 27 Oct), on a background
     /// context of the same store so the page never stalls while it runs.
-    private func reload() {
+    private func reload() async {
         state = CoachStore.shared.load()
         let store = container.modelContainer, name = me
-        Task {
-            let t0 = Date()
-            let history = await Task.detached(priority: .userInitiated) {
-                SpeechHistory.load(name, repository: RecordingRepository(context: ModelContext(store)), micIsThem: true)
-            }.value
-            AppLog.info("you", String(format: "measured %d meetings in %.2f s (background)", history.meetings.count, Date().timeIntervalSince(t0)))
-            meetings = history.meetings
-            lines = history.lines
-            loaded = true
-        }
+        let t0 = Date()
+        let history = await Task.detached(priority: .userInitiated) {
+            SpeechHistory.load(name, repository: RecordingRepository(context: ModelContext(store)), micIsThem: true)
+        }.value
+        // A newer refresh started meanwhile: it sets the page.
+        if Task.isCancelled { return }
+        AppLog.info("you", String(format: "measured %d meetings in %.2f s (background)", history.meetings.count, Date().timeIntervalSince(t0)))
+        meetings = history.meetings
+        lines = history.lines
+        loaded = true
     }
 }
 

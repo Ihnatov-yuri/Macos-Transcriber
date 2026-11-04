@@ -512,6 +512,9 @@ struct SplitRecordingSheet: View {
             .padding(AppMetric.l)
         }
         .frame(minWidth: 420, minHeight: 280)
+        // Esc or a sheet dismissal other than Cancel would leave the split
+        // running unattended, as above: not while it works.
+        .interactiveDismissDisabled(isWorking)
     }
 
     private func split() {

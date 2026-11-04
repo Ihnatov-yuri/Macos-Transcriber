@@ -10,13 +10,13 @@ import SwiftData
 final class WavRepairTests: XCTestCase {
     var dir: URL!
 
-    override func setUp() {
+    override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("transcriberr-wavrepair-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
     }
 

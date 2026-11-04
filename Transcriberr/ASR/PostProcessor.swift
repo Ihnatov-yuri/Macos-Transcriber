@@ -2,19 +2,6 @@ import Foundation
 import Observation
 import SwiftData
 
-/// First-wins claim for the generation timeout race (file scope because
-/// Swift forbids type declarations inside generic functions).
-nonisolated private final class PostProcTimeoutClaim: @unchecked Sendable {
-    private let lock = NSLock()
-    private var claimed = false
-    func take() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if claimed { return false }
-        claimed = true
-        return true
-    }
-}
-
 /// Mirror of `asr/PostProcessor.kt`.
 ///
 /// Runs a preset template (Summary / Clean / Translate-Polish / Context-rewrite,
@@ -410,29 +397,13 @@ nonisolated final class PostProcessor: @unchecked Sendable {
     }
 
     /// Wall-clock guard so a wedged MLX generation can't hang a preset
-    /// forever (first-wins race; the loser's resume attempt is dropped).
+    /// forever: throws `ASRError.chunkTimeout` after `seconds` without
+    /// waiting for `op`. See `Deadline.run`.
     private static func withTimeout<T: Sendable>(
         seconds: TimeInterval,
         _ op: @Sendable @escaping () async throws -> T
     ) async throws -> T {
-        let claim = PostProcTimeoutClaim()
-        return try await withCheckedThrowingContinuation { cont in
-            let work = Task.detached(priority: .userInitiated) {
-                do {
-                    let v = try await op()
-                    if claim.take() { cont.resume(returning: v) }
-                } catch {
-                    if claim.take() { cont.resume(throwing: error) }
-                }
-            }
-            Task.detached(priority: .utility) {
-                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                if claim.take() {
-                    work.cancel()
-                    cont.resume(throwing: ASRError.chunkTimeout)
-                }
-            }
-        }
+        try await Deadline.run(seconds: seconds, timeoutError: ASRError.chunkTimeout, op)
     }
 
     /// Replace any existing OutputDoc for this preset and persist via the

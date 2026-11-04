@@ -85,5 +85,11 @@ struct TranscriberrShortcuts: AppShortcutsProvider {
             shortTitle: "Stop & Insert",
             systemImageName: "text.cursor"
         )
+        AppShortcut(
+            intent: CancelDictationIntent(),
+            phrases: ["Cancel dictation in \(.applicationName)"],
+            shortTitle: "Cancel Dictation",
+            systemImageName: "xmark.circle"
+        )
     }
 }

@@ -130,9 +130,14 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
             release()
             return false
         }
-        configObserver = NotificationCenter.default.addObserver(
+        let observer = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
         ) { [weak self] _ in self?.restartAfterConfigurationChange() }
+        // Under the lock, like every other `configObserver` access: a release
+        // on the notification thread could run at this very moment.
+        controlLock.lock()
+        if released { NotificationCenter.default.removeObserver(observer) } else { configObserver = observer }
+        controlLock.unlock()
         AppLog.info("meeting", String(format: "%@ (%.0f Hz) in %.2fs",
                                       voiceProcessing ? "echo filter on (Apple voice processing)" : "raw mic on (headphones)",
                                       sourceRate, Date().timeIntervalSince(t0)))
@@ -156,7 +161,7 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
         let sourceRate = format.sampleRate
         try ExceptionTrap.run {
             input.removeTap(onBus: 0)
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buf, _ in
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak self] buf, _ in
                 guard let p = buf.floatChannelData?[0] else { return }
                 self?.push(UnsafeBufferPointer(start: p, count: Int(buf.frameLength)), sourceRate: sourceRate)
             }
@@ -421,14 +426,9 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
         else { return [] }
         inBuf.frameLength = AVAudioFrameCount(samples.count)
         inBuf.floatChannelData![0].update(from: samples.baseAddress!, count: samples.count)
-        var fed = false
+        let feed = ConverterInput(once: inBuf, whenDone: .noDataNow)
         var err: NSError?
-        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in
-            if fed { outStatus.pointee = .noDataNow; return nil }
-            fed = true
-            outStatus.pointee = .haveData
-            return inBuf
-        }
+        let status = converter.convert(to: outBuf, error: &err) { _, outStatus in feed.next(outStatus) }
         guard status != .error, let p = outBuf.floatChannelData?[0] else { return [] }
         return Array(UnsafeBufferPointer(start: p, count: Int(outBuf.frameLength)))
     }

@@ -4,6 +4,38 @@ import Foundation
 import Observation
 import SwiftUI
 
+/// Block-based notification observers, removed from their centre when the
+/// bag is released. `NotificationCenter.removeObserver` is thread-safe, so
+/// the nonisolated deinit may run anywhere.
+nonisolated final class NotificationObserverBag: @unchecked Sendable {
+    private let center: NotificationCenter
+    private let lock = NSLock()
+    private var tokens: [NSObjectProtocol] = []
+
+    init(center: NotificationCenter) { self.center = center }
+
+    func add(_ token: NSObjectProtocol) {
+        lock.lock(); defer { lock.unlock() }
+        tokens.append(token)
+    }
+
+    /// Removes every observer now (also done on release).
+    func removeAll() {
+        lock.lock()
+        let gone = tokens
+        tokens = []
+        lock.unlock()
+        for t in gone { center.removeObserver(t) }
+    }
+
+    var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return tokens.count
+    }
+
+    deinit { for t in tokens { center.removeObserver(t) } }
+}
+
 /// Mirror of `ui/record/RecordViewModel.kt`.
 @Observable
 @MainActor
@@ -59,7 +91,10 @@ final class RecordModel {
     /// When the Mac went to sleep mid-recording; nil otherwise. Only a pause
     /// the app made for sleep is resumed on wake — never the user's own.
     private var sleptAt: Date?
-    private var powerObservers: [NSObjectProtocol] = []
+    /// Removes the sleep/wake observers when this model goes away (one
+    /// model per window: they used to pile up in the workspace centre).
+    /// A box with its own deinit, so no main-actor deinit is needed here.
+    private let powerObservers = NotificationObserverBag(center: NSWorkspace.shared.notificationCenter)
 
     init(container: AppContainer) {
         self.container = container
@@ -81,12 +116,12 @@ final class RecordModel {
     /// Now the recording pauses for the sleep and carries on after wake.
     private func watchSleep() {
         let center = NSWorkspace.shared.notificationCenter
-        powerObservers.append(center.addObserver(
+        powerObservers.add(center.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.handleWillSleep() }
         })
-        powerObservers.append(center.addObserver(
+        powerObservers.add(center.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.handleDidWake() }

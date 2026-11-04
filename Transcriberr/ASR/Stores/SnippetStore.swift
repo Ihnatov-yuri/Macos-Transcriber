@@ -3,10 +3,22 @@ import Observation
 
 /// Mirror of `asr/SnippetStore.kt`.
 /// Named text fragments referenced in preset templates via `{snippet:name}`.
-struct Snippet: Sendable, Codable, Identifiable, Equatable {
+nonisolated struct Snippet: Sendable, Codable, Identifiable, Equatable {
     var name: String
     var body: String
     var id: String { name }
+    /// Identity for editing only (the name changes as it is typed, and two
+    /// new rows share "name-me"): never stored, not part of equality.
+    var uid = UUID()
+
+    init(name: String, body: String) {
+        self.name = name
+        self.body = body
+    }
+
+    private enum CodingKeys: String, CodingKey { case name, body }
+
+    static func == (a: Snippet, b: Snippet) -> Bool { a.name == b.name && a.body == b.body }
 }
 
 @Observable

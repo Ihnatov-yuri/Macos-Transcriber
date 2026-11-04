@@ -15,63 +15,6 @@ import os
 ///  4. Parse per-line speaker labels + assemble RawSegments
 ///
 /// Returns `AsyncThrowingStream<ASREvent>` (swap of Kotlin's `channelFlow`).
-/// One-shot race between the three ways a chunk can end — inference
-/// finishing, the deadline expiring, and the whole job being cancelled.
-/// Whoever settles first delivers the result; every later attempt is
-/// dropped. Holding the continuation here (rather than in a bare
-/// first-wins flag) is what lets the cancellation handler, which never sees
-/// the continuation itself, unblock the caller.
-nonisolated private final class ChunkRace<T: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cont: CheckedContinuation<T, Error>?
-    private var work: Task<Void, Never>?
-    private var settled = false
-    /// A result that arrived before the continuation was installed — the
-    /// cancellation handler can fire that early.
-    private var pending: Result<T, Error>?
-
-    func attach(_ c: CheckedContinuation<T, Error>) {
-        lock.lock()
-        if let p = pending {
-            pending = nil
-            lock.unlock()
-            c.resume(with: p)
-            return
-        }
-        cont = c
-        lock.unlock()
-    }
-
-    func setWork(_ t: Task<Void, Never>) {
-        lock.lock()
-        let alreadyOver = settled
-        work = t
-        lock.unlock()
-        if alreadyOver { t.cancel() }
-    }
-
-    func settle(_ result: Result<T, Error>) {
-        lock.lock()
-        if settled { lock.unlock(); return }
-        settled = true
-        let c = cont
-        cont = nil
-        if c == nil { pending = result }
-        lock.unlock()
-        c?.resume(with: result)
-    }
-
-    /// Best-effort: a native inference call already inside MLX/LiteRT may
-    /// ignore this and run to completion — but it stops being something the
-    /// caller waits on.
-    func cancelWork() {
-        lock.lock()
-        let t = work
-        lock.unlock()
-        t?.cancel()
-    }
-}
-
 nonisolated final class TranscriptionRunner: @unchecked Sendable {
     static let chunkTimeoutSeconds: TimeInterval = 120
     /// Wedge recoveries observed in the current run (drives Gemma probation).
@@ -618,7 +561,11 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 }
                 deduped.append(seg)
             }
-            parsed = deduped
+            parsed = deduped.map { seg in
+                var s = seg
+                s.chunkIndex = idx
+                return s
+            }
             perChunkParsed[idx] = parsed
             allSegments.append(contentsOf: parsed)
             // Build the cross-chunk continuation tail from the *parsed* text,
@@ -855,7 +802,11 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                         return s
                     }
                 }
-                perChunkParsed[idx] = seamTrimmed(parsed, idx: idx)
+                perChunkParsed[idx] = seamTrimmed(parsed, idx: idx).map { seg in
+                    var s = seg
+                    s.chunkIndex = idx
+                    return s
+                }
             }
             if !disputes.isEmpty {
                 // Rebuild in chunk order (already time-sorted across tracks)
@@ -1436,16 +1387,16 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             AppLog.info("runner", "refine chunk \(entry.idx + 1) improved \(String(format: "%.2f", firstConf.score)) → \(String(format: "%.2f", retryConf.score))")
 
             // Splice replacement into allSegments + tell JobManager to do the
-            // same in SwiftData.
-            allSegments.removeAll { seg in
-                guard seg.startSeconds >= entry.chunk.startSeconds,
-                      seg.endSeconds <= entry.chunk.endSeconds else { return false }
-                // Same-track only: mic and sys chunks share one timeline —
-                // splicing by time alone deleted the OTHER track's segments.
-                if splitTracks {
-                    return isMicChunk ? seg.speakerKey == "ME" : seg.speakerKey != "ME"
-                }
-                return true
+            // same in SwiftData (its splice is a preview: `.done` reconciles
+            // the store to this list).
+            parsed = parsed.map { seg in
+                var s = seg
+                s.chunkIndex = entry.idx
+                return s
+            }
+            allSegments.removeAll {
+                Self.refinementRemoves($0, chunkIndex: entry.idx, chunk: entry.chunk,
+                                       splitTracks: splitTracks, isMicChunk: isMicChunk)
             }
             allSegments.append(contentsOf: parsed)
             allSegments.sort { $0.startSeconds < $1.startSeconds }
@@ -1456,6 +1407,22 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             ))
         }
         return allSegments
+    }
+
+    /// Whether a refinement of chunk `chunkIndex` replaces `seg`. By origin
+    /// when the segment knows its chunk: chunks overlap by a 1 s recap, and
+    /// the time-window rule removed the NEIGHBOUR's segments lying in it.
+    /// Untagged segments fall back to that rule: fully inside the window,
+    /// and same-track only (mic and sys chunks share one timeline).
+    static func refinementRemoves(_ seg: RawSegment, chunkIndex: Int, chunk: AudioDecoder.Chunk,
+                                  splitTracks: Bool, isMicChunk: Bool) -> Bool {
+        if let origin = seg.chunkIndex { return origin == chunkIndex }
+        guard seg.startSeconds >= chunk.startSeconds,
+              seg.endSeconds <= chunk.endSeconds else { return false }
+        if splitTracks {
+            return isMicChunk ? seg.speakerKey == "ME" : seg.speakerKey != "ME"
+        }
+        return true
     }
 
     /// Build a context block for the refinement pass from the segments
@@ -1588,6 +1555,14 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 AppLog.error("runner", "Whisper ran out of time on the same part twice; it has no text")
                 RunGapLog.record(.outOfTime)
                 return ""
+            } catch ASRError.chunkTimeout {
+                // The retry hung instead: thrown from here it skipped the
+                // wedge ladder below and ended the whole run over one part.
+                AppLog.error("runner", "chunk wedged on its retry — skipping it, recovering engine for the rest")
+                RunGapLog.record(.wedged)
+                await noteWedge(backend: backend, continuation: continuation)
+                try? await backend.recoverWedge(modelPath: params.modelDirectory)
+                return ""
             }
         } catch ASRError.chunkTimeout {
             // Surgical: rebuild only the wedged engine. A full ensemble
@@ -1687,49 +1662,18 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         }
     }
 
-    /// Run `op` with a wall-clock deadline. MLX inference doesn't cooperate
-    /// with Swift cancellation (it blocks its worker thread), so both sides
-    /// run as detached tasks racing on a first-wins continuation.
-    ///
-    /// NOT a task group: a group must await ALL children before returning, so
-    /// a detached 120 s deadline child pinned every chunk to the full timeout
-    /// even when inference finished in 0.25 s — the runner was sleeping
-    /// 99.8% of the time with Parakeet. The continuation returns the moment
-    /// the winner resumes it; the loser's late resume attempt is dropped by
-    /// the claim flag.
+    /// Run `op` with a wall-clock deadline: `ASRError.chunkTimeout` after
+    /// `seconds`, `CancellationError` when the job is cancelled. MLX
+    /// inference doesn't cooperate with Swift cancellation (it blocks its
+    /// worker thread), so `Deadline.run` races detached tasks instead of a
+    /// task group — a group would pin every chunk to the full timeout, and
+    /// a Cancel would otherwise leave abandoned inference holding the
+    /// ANE/GPU while the next queued job waited.
     private func withChunkTimeout<T: Sendable>(
         seconds: TimeInterval,
         _ op: @Sendable @escaping () async throws -> T
     ) async throws -> T {
-        let race = ChunkRace<T>()
-        // A DETACHED task inherits nothing from its parent — cancellation
-        // included. Without this handler, Cancel resumed nobody: the consumer
-        // walked away, the job manager started the NEXT queued job, and up to
-        // three abandoned inference tasks kept the ANE/GPU busy for as long as
-        // the two-minute deadline while the new job sat at "Queued…" with no
-        // explanation. The same stall followed any thrown error in the
-        // pipeline group, which must await children it could not cancel.
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
-                race.attach(cont)
-                let work = Task.detached(priority: .userInitiated) {
-                    do {
-                        race.settle(.success(try await op()))
-                    } catch {
-                        race.settle(.failure(error))
-                    }
-                }
-                race.setWork(work)
-                Task.detached(priority: .utility) {
-                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    race.cancelWork()
-                    race.settle(.failure(ASRError.chunkTimeout))
-                }
-            }
-        } onCancel: {
-            race.cancelWork()
-            race.settle(.failure(CancellationError()))
-        }
+        try await Deadline.run(seconds: seconds, timeoutError: ASRError.chunkTimeout, op)
     }
 
     // MARK: - Segment parsing

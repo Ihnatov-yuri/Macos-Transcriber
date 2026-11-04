@@ -1,6 +1,8 @@
 import Foundation
 @preconcurrency import AVFoundation
 import CoreAudio
+import CryptoKit
+import Security
 import Synchronization
 
 /// The Transcriberr Microphone: Apple's echo filter on the real mic, passed
@@ -90,7 +92,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         micDevice = AudioObjectID(kAudioObjectUnknown)
         callInUse = false
         ring.reset()
-        if hadFeed || RecorderSettings.shared.virtualMicrophone {
+        if hadFeed || RecorderSettings.virtualMicrophoneNow {
             // The plug-in may take a moment to come back after the restart.
             queue.asyncAfter(deadline: .now() + 1) { self.reconcile() }
         }
@@ -161,7 +163,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     // MARK: - Reconcile (on `queue`)
 
     private func reconcile() {
-        let wanted = RecorderSettings.shared.virtualMicrophone && Self.isInstalled
+        let wanted = RecorderSettings.virtualMicrophoneNow && Self.isInstalled
         if !wanted {
             stopUnit()
             stopFeed()
@@ -251,7 +253,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         // itself). Naming the default device explicitly instead failed on a
         // USB webcam mic with voice processing (-10851, 2026-10-27) and fell
         // back to the default anyway.
-        let chosen = RecorderSettings.shared.inputDeviceUID
+        let chosen = RecorderSettings.inputDeviceUIDNow
         let mic = AudioInputDevices.effective(uid: chosen)
         let why = recordingHolds > 0 ? "a meeting records" : "a call uses '\(Self.micName)'"
         AppLog.info("virtual-mic", "\(why) — starting the mic on '\(mic?.name ?? "default")', output '\(route.name)'")
@@ -394,14 +396,13 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     /// for a second). `remove: true` takes it out again. Returns an error
     /// message, or nil on success.
     static func install(remove: Bool = false) async -> String? {
-        let dest = installedURL.path
-        var script = "/bin/rm -rf \(shellQuoted(dest))"
-        if !remove {
+        let script: String
+        if remove {
+            script = "/bin/rm -rf \(shellQuoted(installedURL.path)) && /usr/bin/killall coreaudiod"
+        } else {
             guard let source = bundledDriverURL?.path else { return "The plug-in is missing from this copy of Transcriberr." }
-            script += " && /usr/bin/ditto \(shellQuoted(source)) \(shellQuoted(dest))"
-                + " && /usr/sbin/chown -R root:wheel \(shellQuoted(dest))"
+            script = installScript(source: source, dest: installedURL.path)
         }
-        script += " && /usr/bin/killall coreaudiod"
         let apple = "do shell script \"\(appleScriptEscaped(script))\" with administrator privileges"
         return await Task.detached {
             let p = Process()
@@ -421,6 +422,79 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
             AppLog.info("virtual-mic", remove ? "driver removed" : "driver installed")
             return nil
         }.value
+    }
+
+    /// The bundle identifier the plug-in is signed with (MicDriver/Info.plist).
+    static let driverIdentifier = "nl.ihnatov.Transcriberr.MicDriver"
+
+    /// Runs as root. The source sits in a user-writable app bundle, so it is
+    /// first copied into a fresh root-owned directory (mktemp: mode 700,
+    /// nothing else can touch it), made root:wheel and not group/world
+    /// writable, and its signature checked THERE — after which nobody but
+    /// root can change what gets moved into /Library. A failed copy or
+    /// signature check leaves the installed plug-in and coreaudiod as they
+    /// were; the staging directory is removed either way.
+    static func installScript(source: String, dest: String, team: String? = ownTeamIdentifier(),
+                              leaf: String? = ownLeafCertificateSHA1()) -> String {
+        let staged = "\"$T\"/TranscriberrMic.driver"
+        let requirement = shellQuoted("=" + driverRequirement(team: team, leaf: leaf))
+        return "T=$(/usr/bin/mktemp -d /private/var/tmp/TranscriberrMic.XXXXXX) || exit 1; "
+            + "/usr/bin/ditto \(shellQuoted(source)) \(staged)"
+            + " && /usr/sbin/chown -R root:wheel \"$T\""
+            // No setuid/setgid bit survives into a root-owned bundle.
+            + " && /bin/chmod -R u-s,g-s,go-w \(staged)"
+            + " && /usr/bin/codesign --verify --strict -R \(requirement) \(staged)"
+            + " && /bin/rm -rf \(shellQuoted(dest))"
+            + " && /bin/mv \(staged) \(shellQuoted(dest)); "
+            + "S=$?; /bin/rm -rf \"$T\"; [ $S -eq 0 ] || exit $S; "
+            + "/usr/bin/killall coreaudiod"
+    }
+
+    /// What the staged plug-in's signature must satisfy. Signed by a real
+    /// team (a Developer ID or Apple Development certificate), it must come
+    /// from the SAME team as this app. Signed with a certificate that has no
+    /// team (the self-signed one scripts/make-signing-cert.sh creates), it
+    /// must carry the SAME leaf certificate. Either way a bundle re-signed
+    /// by anyone else is refused. Ad-hoc builds can only be held to the
+    /// identifier, which any re-signed bundle can claim.
+    static func driverRequirement(team: String?, leaf: String? = nil) -> String {
+        let id = "identifier \"\(driverIdentifier)\""
+        if let team, !team.isEmpty, team.allSatisfy({ $0.isLetter || $0.isNumber }) {
+            return "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and \(id)"
+        }
+        if let leaf, leaf.count == 40, leaf.allSatisfy({ $0.isHexDigit }) {
+            return "certificate leaf = H\"\(leaf.lowercased())\" and \(id)"
+        }
+        return id
+    }
+
+    /// SHA-1 of this app's leaf signing certificate (the hash the code
+    /// requirement language pins with `H"…"`), or nil when ad-hoc.
+    static func ownLeafCertificateSHA1() -> String? {
+        guard let dict = ownSigningInformation(),
+              let certs = dict[kSecCodeInfoCertificates as String] as? [SecCertificate],
+              let leaf = certs.first else { return nil }
+        let der = SecCertificateCopyData(leaf) as Data
+        return Insecure.SHA1.hash(data: der).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func ownSigningInformation() -> [String: Any]? {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        var info: CFDictionary?
+        // kSecCSSigningInformation (1 << 1): include the certificate details.
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: 1 << 1), &info) == errSecSuccess else {
+            return nil
+        }
+        return info as? [String: Any]
+    }
+
+    /// The team identifier of this app's own code signature, or nil for an
+    /// ad-hoc or unsigned build.
+    static func ownTeamIdentifier() -> String? {
+        ownSigningInformation()?[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
     static func shellQuoted(_ s: String) -> String {

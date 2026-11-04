@@ -198,7 +198,8 @@ nonisolated struct MeetingContext: Codable, Sendable, Equatable {
     /// say when they were made in the library, not when anyone spoke.
     static func recordedInterval(audioPath: String, createdAtMillis: Int64, duration: Double) -> DateInterval? {
         let name = URL(fileURLWithPath: audioPath).lastPathComponent
-        let length = max(duration, 1)
+        // max(NaN, 1) is NaN, and DateInterval traps on a NaN duration.
+        let length = duration.isFinite ? max(duration, 1) : 1
         if name.hasPrefix("meeting_") {
             let parts = name.split(separator: "_")
             guard parts.count >= 2, let ms = Double(parts[1]), ms > 1_000_000_000_000 else { return nil }
@@ -221,24 +222,67 @@ nonisolated struct MeetingContext: Codable, Sendable, Equatable {
         return nil
     }
 
+    /// One overlapping invite as the pick sees it: plain values, so the
+    /// choice is testable without a calendar.
+    struct Candidate: Equatable {
+        var start: Date
+        var end: Date
+        /// The user accepted the invite or organised it.
+        var accepted: Bool
+        /// The invite lists other people.
+        var hasPeople: Bool
+    }
+
+    /// Which candidate the recording belongs to, or nil. A candidate must
+    /// cover most of the recording or ten minutes of it. Among those, the
+    /// best match of the two time spans wins (overlap over union), so a
+    /// three-hour focus block or an all-day-ish workshop no longer beats the
+    /// half-hour call that starts and ends with the recording: the longest
+    /// overlap used to win, and a long block overlaps everything inside it.
+    /// Double-booked slots match equally; then an accepted invite beats a
+    /// tentative or unanswered one, and one with people beats a bare block.
+    static func bestCandidate(_ candidates: [Candidate], start: Date, end: Date) -> Int? {
+        let duration = end.timeIntervalSince(start)
+        guard duration > 0 else { return nil }
+        var best: (index: Int, score: Double)?
+        for (i, c) in candidates.enumerated() {
+            let overlap = min(end, c.end).timeIntervalSince(max(start, c.start))
+            guard overlap >= min(600, duration * 0.5) else { continue }
+            let union = max(end, c.end).timeIntervalSince(min(start, c.start))
+            let match = union > 0 ? overlap / union : 0
+            let score = match + (c.accepted ? 0.1 : 0) + (c.hasPeople ? 0.05 : 0)
+            if best == nil || score > best!.score { best = (i, score) }
+        }
+        return best?.index
+    }
+
+    /// The user accepted the event or organised it. An event without
+    /// attendees is the user's own and counts as accepted.
+    static func isAccepted(_ e: EKEvent) -> Bool {
+        guard let people = e.attendees, !people.isEmpty else { return true }
+        if e.organizer?.isCurrentUser == true { return true }
+        return people.first(where: \.isCurrentUser)?.participantStatus == .accepted
+    }
+
     /// The invite the recording belongs to: a timed event with other people
-    /// in it (or at least a title) that covers most of the recording, or
-    /// ten minutes of it. Several candidates → the longest overlap.
+    /// in it (or at least a title), chosen by `bestCandidate`.
     @concurrent
     static func lookup(start: Date, end: Date, store: EKEventStore = EKEventStore(),
                        ask: Bool = false) async -> MeetingContext? {
         guard end.timeIntervalSince(start) >= 60, await requestAccess(store, ask: ask) else { return nil }
         let pred = store.predicateForEvents(withStart: start.addingTimeInterval(-3600),
                                             end: end.addingTimeInterval(3600), calendars: nil)
-        let duration = end.timeIntervalSince(start)
-        let best = store.events(matching: pred)
+        let events = store.events(matching: pred)
             .filter { !$0.isAllDay && $0.availability != .free && isUsersMeeting($0) }
-            .map { e -> (EKEvent, TimeInterval) in
-                (e, min(end, e.endDate).timeIntervalSince(max(start, e.startDate)))
-            }
-            .filter { $0.1 >= min(600, duration * 0.5) }
-            .max { $0.1 < $1.1 }?.0
-        guard let event = best else { return nil }
+        let candidates = events.map { e in
+            Candidate(start: e.startDate, end: e.endDate, accepted: isAccepted(e),
+                      hasPeople: !(e.attendees ?? []).filter { !$0.isCurrentUser }.isEmpty)
+        }
+        guard let i = bestCandidate(candidates, start: start, end: end) else { return nil }
+        let event = events[i]
+        if candidates.count > 1 {
+            AppLog.info("context", "\(candidates.count) invites overlap the recording; picked '\(event.title ?? "?")'")
+        }
         let mc = context(of: event)
         // A personal block ("Gathering thoughts", "Picking up my daughter")
         // has nobody in it and nothing to spell.

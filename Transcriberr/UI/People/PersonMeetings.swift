@@ -8,13 +8,16 @@ nonisolated struct PersonMeeting: Identifiable, Equatable, Sendable {
     let id: UUID
     let title: String
     let date: Date
-    /// Their talk time.
+    /// Their talk time: the stretches their lines cover, overlapping lines
+    /// counted once. Line timestamps include pauses, so it is generous.
     let seconds: Double
     let lines: Int
     let firstLine: Double
     /// Speaker keys that carry their name in this recording.
     let keys: Set<String>
     let lastSaid: String
+    /// Words in their lines: the measure that padding does not inflate.
+    var words: Int = 0
 }
 
 nonisolated enum PersonMeetings {
@@ -45,11 +48,98 @@ nonisolated enum PersonMeetings {
             return PersonMeeting(
                 id: r.id, title: r.title,
                 date: Date(timeIntervalSince1970: TimeInterval(r.createdAtMillis) / 1000),
-                seconds: sorted.map { max(0, $0.endSeconds - $0.startSeconds) }.reduce(0, +),
+                seconds: SpeechMeasure.unionSeconds(sorted.map { (start: $0.startSeconds, end: $0.endSeconds) }),
                 lines: sorted.count, firstLine: first.startSeconds,
-                keys: Set(sorted.compactMap(\.speaker)), lastSaid: last.text)
+                keys: Set(sorted.compactMap(\.speaker)), lastSaid: last.text,
+                words: sorted.map { SpeechLexicon.words($0.text).count }.reduce(0, +))
         }
         .sorted { $0.date > $1.date }
+    }
+
+    /// "45 s", "12 min", "1 h 05 min".
+    static func duration(_ seconds: Double) -> String {
+        let s = Int(seconds.rounded())
+        if s < 60 { return "\(s) s" }
+        if s < 3600 { return "\(s / 60) min" }
+        return String(format: "%d h %02d min", s / 3600, (s / 60) % 60)
+    }
+
+    /// Talk as every page shows it: the time their lines cover, marked as
+    /// approximate (timestamps include pauses), and the words, which are exact.
+    static func talk(seconds: Double, words: Int) -> String {
+        "~\(duration(seconds)) · \(words == 1 ? "1 word" : "\(words) words")"
+    }
+
+    static func talk(_ meetings: [PersonMeeting]) -> String {
+        talk(seconds: meetings.map(\.seconds).reduce(0, +), words: meetings.map(\.words).reduce(0, +))
+    }
+}
+
+/// What a person page shows from the library, read on a background context
+/// and handed to the page as plain values.
+nonisolated struct PersonPageData: Sendable {
+    struct Candidate: Sendable {
+        let hearing: Person.Hearing
+        let title: String
+        let date: Date
+    }
+    var meetings: [PersonMeeting] = []
+    var speech: [MeetingSpeech] = []
+    var candidates: [Candidate] = []
+
+    /// `me` is the user's name: microphone-track lines count as theirs
+    /// whatever name they carried when recorded.
+    static func load(name: String, me: String, candidates: [Person.Hearing],
+                     repository: RecordingRepository) -> PersonPageData {
+        var out = PersonPageData()
+        out.meetings = PersonMeetings.load(name, repository: repository)
+        out.candidates = candidates.reversed().compactMap { h in
+            guard let rec = try? repository.get(id: h.recordingId), !rec.isDeleted else { return nil }
+            return Candidate(hearing: h, title: rec.title,
+                             date: Date(timeIntervalSince1970: TimeInterval(rec.createdAtMillis) / 1000))
+        }
+        out.speech = SpeechHistory.load(name, repository: repository, meetings: out.meetings, micAs: me).meetings
+        return out
+    }
+}
+
+/// What the People overview shows from the library, read the same way.
+nonisolated struct PeopleOverviewData: Sendable {
+    /// Each saved person's meetings, by person id.
+    var meetings: [UUID: [PersonMeeting]] = [:]
+    /// Recordings the user was in: a microphone track, or a line under their name.
+    var withMe: Set<UUID> = []
+    var named: [VoiceSuggestions.Named] = []
+    var groups: [VoiceSuggestions.Group] = []
+    var titles: [UUID: String] = [:]
+    var scanned = false
+
+    static func load(people: [(id: UUID, name: String, centroid: [Float])], me: String,
+                     repository: RecordingRepository) -> PeopleOverviewData {
+        var out = PeopleOverviewData()
+        // One fetch of every named line, however many people are saved.
+        let byName = (try? repository.segmentsByNamedSpeaker()) ?? [:]
+        for p in people { out.meetings[p.id] = PersonMeetings.group(byName[p.name.lowercased()] ?? []) }
+        let mic = (try? repository.segments(speakerKey: TranscriptionRunner.micSpeakerKey)) ?? []
+        out.withMe = Set((mic + (byName[me.lowercased()] ?? [])).compactMap { s -> UUID? in
+            guard let r = s.recording, !r.isDeleted else { return nil }
+            return r.id
+        })
+        // Suggestions: hand-typed names without a voice, recurring unnamed voices.
+        out.named = VoiceSuggestions.named(
+            byName.values.flatMap { $0 }.compactMap { s in
+                guard let n = s.speakerName, let r = s.recording, !r.isDeleted else { return nil }
+                return (n, r.id, max(0, s.endSeconds - s.startSeconds))
+            },
+            saved: Set(people.map { $0.name.lowercased() }), me: me)
+        let unknown = UnknownVoiceStore.shared.load()
+        out.scanned = !unknown.entries.isEmpty
+        out.groups = VoiceSuggestions.groups(unknown, people: people.map { (name: $0.name, centroid: $0.centroid) },
+                                             me: PeopleEmbedder.myVoice()?.centroid)
+        out.titles = Dictionary(out.groups.flatMap(\.members).compactMap { m in
+            (try? repository.get(id: m.recordingId)).map { (m.recordingId, $0.title) }
+        }, uniquingKeysWith: { a, _ in a })
+        return out
     }
 }
 
@@ -125,6 +215,13 @@ final class PersonBriefRunner {
             guard !transcript.isEmpty else { continue }
             let key = PersonBriefBuilder.key(transcript: transcript, name: name)
             if cached[meeting.id] == key { continue }
+            // Cached under the older key, which held the name: still fresh,
+            // and re-keyed so a later rename does not read it again.
+            if let old = cached[meeting.id], old == PersonBriefBuilder.legacyKey(transcript: transcript, name: name),
+               let entry = store.entries(for: id).first(where: { $0.recordingId == meeting.id }) {
+                try? store.save(.init(recordingId: meeting.id, key: key, built: entry.built, brief: entry.brief), for: id)
+                continue
+            }
             progress = prefix + "Reading meeting \(i + 1) of \(recent.count): \(meeting.title)"
             let starts = lines.filter { $0.speaker.caseInsensitiveCompare(name) == .orderedSame }.map(\.start)
             // Fetched per meeting: housekeeping may release the shared
@@ -255,8 +352,9 @@ struct PersonBriefView: Equatable {
     static let sameItem = 0.6
 
     /// `closed` are the rows marked Done or Not relevant; they are counted,
-    /// not shown.
+    /// and listed apart (`closedRows`) so a mark can be undone.
     var closedCount = 0
+    var closedRows: [Row] = []
 
     /// The meetings of a period, newest first. Nil is every meeting.
     static func meetings(_ all: [PersonMeeting], in period: Period?, now: Date = Date()) -> [PersonMeeting] {
@@ -276,6 +374,7 @@ struct PersonBriefView: Equatable {
         // Row ids key the page's ForEach and Done: the same text twice in
         // one meeting (too short to have meaning words) is shown once.
         var seenIds = Set<String>()
+        var seenClosed = Set<String>()
         func words(_ s: String) -> Set<String> { PersonBriefStore.meaningWords(s) }
         /// Said before in a newer meeting already shown.
         func repeated(_ kind: Row.Kind, _ text: String) -> Bool {
@@ -292,12 +391,16 @@ struct PersonBriefView: Equatable {
             }
             for c in e.brief.commitments {
                 let row = Row(kind: .commitment, item: c, meeting: m)
-                if closed.contains(row.id) { out.closedCount += 1 }
+                if closed.contains(row.id) {
+                    if seenClosed.insert(row.id).inserted { out.closedCount += 1; out.closedRows.append(row) }
+                }
                 else if seenIds.insert(row.id).inserted, !repeated(.commitment, c.text) { out.commitments.append(row) }
             }
             for q in e.brief.questions {
                 let row = Row(kind: .question, item: q, meeting: m)
-                if closed.contains(row.id) { out.closedCount += 1 }
+                if closed.contains(row.id) {
+                    if seenClosed.insert(row.id).inserted { out.closedCount += 1; out.closedRows.append(row) }
+                }
                 else if seenIds.insert(row.id).inserted, !repeated(.question, q.text) { out.questions.append(row) }
             }
             // Newest meeting first: the first word on a topic is the last said.

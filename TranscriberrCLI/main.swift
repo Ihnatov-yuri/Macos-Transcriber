@@ -63,6 +63,24 @@ func usage() {
                                             (silent; quit Transcriberr first)
       transcriberrcli help                 this message
 
+    DIAGNOSTICS
+      transcriberrcli run <file> [speakers] [backend] [engineA] [engineB] [Language]
+                                            the app's whole pipeline headlessly; TSV of segments
+      transcriberrcli whisper <file> [Language]   Whisper ASR on a file
+      transcriberrcli langid <file> [window-sec]  language of each window
+      transcriberrcli aec <base>           offline echo cancellation of <base>.mic/.sys tracks
+      transcriberrcli superdiar <file>     Super-mode diarization on a file
+      transcriberrcli refinalize <file>    rerun the finalize pass on a saved run dump
+      transcriberrcli brief <file>         the meeting brief for a transcript
+      transcriberrcli litert <file>        run Gemma (LiteRT-LM) on a prompt file
+      transcriberrcli gentest              Gemma generation smoke test
+      transcriberrcli thinkab <out> [titles] [people] [maxLines]
+                                            A/B of Gemma thinking on library samples
+      transcriberrcli whisperbench <placement> <Language> <files…>
+                                            Whisper compute placement benchmark
+      transcriberrcli whisperloop <meeting.m4a> <seconds> <model-id> [fallbacks]
+                                            Whisper word-loop check at one moment of a meeting
+
     Each command exits 0 on success, non-zero on failure.
     """)
 }
@@ -444,11 +462,19 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
 /// Gemma via Google's LiteRT-LM runtime — the Android-proven stack.
 @MainActor
 func cmdLitert(path: String) async -> Int32 {
-    let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Transcriberr/models/litert-community/gemma-4-E2B-it-litert-lm")
-    guard let model = (try? FileManager.default.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil))?
-        .first(where: { $0.pathExtension == "litertlm" }) else {
-        print("[litert] ❌ no .litertlm bundle in \(modelDir.path)"); return 1
+    // Every LiteRT Gemma the app can download (E2B, E4B, …), in catalog
+    // order: the E2B folder alone missed a Mac that only has E4B.
+    let modelDirs = ModelCatalog.entries
+        .filter { $0.backend == .gemmaLiteRT }
+        .compactMap { ModelCatalog.cachedRepoDirectory(huggingFaceID: $0.huggingFaceID) }
+    let found = modelDirs.lazy.compactMap { dir in
+        (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+            .first(where: { $0.pathExtension == "litertlm" })
+    }.first
+    guard let model = found else {
+        let searched = ModelCatalog.entries.filter { $0.backend == .gemmaLiteRT }.compactMap(\.huggingFaceID)
+        print("[litert] ❌ no .litertlm bundle in \(ModelCatalog.durableModelsDirectory().path) (looked for \(searched.joined(separator: ", ")))")
+        return 1
     }
     let url = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
     let decoder = AudioDecoder()

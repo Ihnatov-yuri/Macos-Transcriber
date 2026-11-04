@@ -103,8 +103,12 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
         attemptCounter += 1
         let attempt = attemptCounter
         streamingAttempt[entry.id] = attempt
+        // A pinned file is its catalog size (its hash is checked after): a
+        // server that streams far more is refused as it arrives, not after
+        // it has filled the disk.
+        let cap = Self.downloadCap(sizeBytes: entry.sizeBytes, pinned: entry.sha256 != nil)
         do {
-            written = try await StreamingDownload(handle: handle) { [weak self] got, expected in
+            written = try await StreamingDownload(handle: handle, maxBytes: cap) { [weak self] got, expected in
                 guard reported.shouldReport(got, every: 16 << 20) else { return }
                 let total = expected > 0 ? expected : fallbackTotal
                 Task { @MainActor in
@@ -160,6 +164,21 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
             status: "Downloaded.")
         AppLog.info("models", "direct download done: \(target.lastPathComponent) (\(written) bytes)")
         return dir
+    }
+
+    /// The most bytes a download of a `sizeBytes` catalog entry may bring:
+    /// its size plus 5 % for a hash-pinned file (the hash decides the rest;
+    /// the slack only covers a catalog size that is slightly off), twice it
+    /// (and at least 64 MB) for one whose size is only an estimate.
+    nonisolated static func downloadCap(sizeBytes: Int64, pinned: Bool) -> Int64 {
+        let floor: Int64 = 64 << 20
+        guard sizeBytes > 0 else { return floor }
+        if pinned {
+            let slack = max(sizeBytes / 20, 1 << 20)
+            return sizeBytes > Int64.max - slack ? Int64.max : sizeBytes + slack
+        }
+        let doubled = sizeBytes.multipliedReportingOverflow(by: 2)
+        return doubled.overflow ? Int64.max : max(doubled.partialValue, floor)
     }
 
     nonisolated static func sha256(of url: URL) throws -> String {
@@ -248,6 +267,7 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
 /// multi-gigabyte.
 nonisolated private final class StreamingDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let handle: FileHandle
+    private let maxBytes: Int64
     private let onProgress: @Sendable (Int64, Int64) -> Void
     private let lock = NSLock()
     private var cont: CheckedContinuation<Int64, Error>?
@@ -263,9 +283,16 @@ nonisolated private final class StreamingDownload: NSObject, URLSessionDataDeleg
     /// end for a result nobody would keep.
     private var cancelled = false
 
-    init(handle: FileHandle, onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
+    init(handle: FileHandle, maxBytes: Int64, onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
         self.handle = handle
+        self.maxBytes = maxBytes
         self.onProgress = onProgress
+    }
+
+
+    private func tooLarge() -> NSError {
+        NSError(domain: "Transcriberr.ModelDownloader", code: -7,
+                userInfo: [NSLocalizedDescriptionKey: "Download is larger than the model it should be — discarded."])
     }
 
     func run(url: URL) async throws -> Int64 {
@@ -327,10 +354,20 @@ nonisolated private final class StreamingDownload: NSObject, URLSessionDataDeleg
             return
         }
         expected = response.expectedContentLength
+        guard expected <= maxBytes else {
+            completionHandler(.cancel)
+            settle(.failure(tooLarge()))
+            return
+        }
         completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard written + Int64(data.count) <= maxBytes else {
+            dataTask.cancel()
+            settle(.failure(tooLarge()))
+            return
+        }
         do {
             try handle.write(contentsOf: data)
             written += Int64(data.count)

@@ -46,7 +46,12 @@ targets:
       TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Transcriberr.app/Contents/MacOS/Transcriberr"
       BUNDLE_LOADER: "$(TEST_HOST)"
       # Same isolation defaults as the app: tests call main-actor-by-default
-      # app APIs from synchronous test methods, an error in Swift 6.
+      # app APIs from synchronous test methods. Swift 5 language mode with
+      # complete checking: in Swift 6 mode every XCTestCase subclass's
+      # inherited initializers become main-actor and clash with XCTest's
+      # nonisolated init(), init(invocation:) and init(selector:). The app
+      # and the CLI are Swift 6; modules may mix language modes.
+      SWIFT_VERSION: "5"
       SWIFT_STRICT_CONCURRENCY: complete
       SWIFT_APPROACHABLE_CONCURRENCY: YES
       SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor

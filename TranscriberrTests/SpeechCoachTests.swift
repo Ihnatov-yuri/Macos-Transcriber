@@ -17,7 +17,8 @@ final class SpeechCoachTests: XCTestCase {
             line(70, 100, "Kate", "Some long words from Kate that go on for quite a while here"),
         ]
         let m = try XCTUnwrap(SpeechMeasure.measure(lines, name: "yuri", recordingId: UUID(), title: "t", date: Date()))
-        XCTAssertEqual(m.talkSeconds, 30 + 19 + 11, accuracy: 0.001)
+        // Each line at most its words at 90 a minute: 18, 6 and 6 words.
+        XCTAssertEqual(m.talkSeconds, (18 + 6 + 6) * 60 / 90, accuracy: 0.001)
         XCTAssertEqual(m.spanSeconds, 100, accuracy: 0.001)
         XCTAssertEqual(m.words, 30)
         XCTAssertEqual(m.meetingWords, 30 + 10 + 13)

@@ -463,7 +463,7 @@ struct PeopleOverview: View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
             Text("Most meetings with you, last \(Int(Self.recentDays)) days").cardTitle()
             let top = rows.filter { !$0.recent.isEmpty }.sorted { $0.recent.count > $1.recent.count }.prefix(8)
-            Text("Recordings you were in too (your microphone, or a line under your name)\(confirmedOnly ? ", where you named or confirmed them" : ""). Talk is the time their lines cover, and their words.")
+            Text("Recordings you were in too (your microphone, or a line under your name)\(confirmedOnly ? ", where you named or confirmed them" : ""). Talk is the time their lines cover, at most what their words take at a slow pace, and their words.")
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 .fixedSize(horizontal: false, vertical: true)
             if top.isEmpty {

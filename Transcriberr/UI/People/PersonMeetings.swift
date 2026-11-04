@@ -9,7 +9,8 @@ nonisolated struct PersonMeeting: Identifiable, Equatable, Sendable {
     let title: String
     let date: Date
     /// Their talk time: the stretches their lines cover, overlapping lines
-    /// counted once. Line timestamps include pauses, so it is generous.
+    /// counted once, each line at most what its words take at a slow pace
+    /// (`SpeechMeasure.talkSeconds`). Still generous, so shown with a "~".
     let seconds: Double
     let lines: Int
     let firstLine: Double
@@ -48,7 +49,7 @@ nonisolated enum PersonMeetings {
             return PersonMeeting(
                 id: r.id, title: r.title,
                 date: Date(timeIntervalSince1970: TimeInterval(r.createdAtMillis) / 1000),
-                seconds: SpeechMeasure.unionSeconds(sorted.map { (start: $0.startSeconds, end: $0.endSeconds) }),
+                seconds: SpeechMeasure.talkSeconds(sorted.map { (start: $0.startSeconds, end: $0.endSeconds, text: $0.text) }),
                 lines: sorted.count, firstLine: first.startSeconds,
                 keys: Set(sorted.compactMap(\.speaker)), lastSaid: last.text,
                 words: sorted.map { SpeechLexicon.words($0.text).count }.reduce(0, +))
@@ -64,8 +65,8 @@ nonisolated enum PersonMeetings {
         return String(format: "%d h %02d min", s / 3600, (s / 60) % 60)
     }
 
-    /// Talk as every page shows it: the time their lines cover, marked as
-    /// approximate (timestamps include pauses), and the words, which are exact.
+    /// Talk as every page shows it: the time their lines cover, bounded by
+    /// their words, marked as approximate, and the words, which are exact.
     static func talk(seconds: Double, words: Int) -> String {
         "~\(duration(seconds)) · \(words == 1 ? "1 word" : "\(words) words")"
     }
@@ -129,7 +130,7 @@ nonisolated struct PeopleOverviewData: Sendable {
         out.named = VoiceSuggestions.named(
             byName.values.flatMap { $0 }.compactMap { s in
                 guard let n = s.speakerName, let r = s.recording, !r.isDeleted else { return nil }
-                return (n, r.id, max(0, s.endSeconds - s.startSeconds))
+                return (n, r.id, max(0, SpeechMeasure.creditedEnd(start: s.startSeconds, end: s.endSeconds, text: s.text) - s.startSeconds))
             },
             saved: Set(people.map { $0.name.lowercased() }), me: me)
         let unknown = UnknownVoiceStore.shared.load()

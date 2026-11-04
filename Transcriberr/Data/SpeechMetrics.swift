@@ -83,6 +83,10 @@ nonisolated struct SpeechLine: Equatable, Sendable {
     var end: Double
     var speaker: String
     var text: String
+    /// Whether the speaker has a name (or is the microphone, the user):
+    /// false for a diarizer's raw key, which may be a stray piece of
+    /// someone else's voice (see `SpeechMeasure.strayVoiceShare`).
+    var named = true
 }
 
 /// One person in one meeting.
@@ -100,11 +104,12 @@ nonisolated struct MeetingSpeech: Equatable, Identifiable, Sendable {
     var date: Date
     /// "en", "uk" or nil when the script does not tell (see `language`).
     var language: String?
-    /// Everyone who said a word, them included: a quiet side of a 1:1 is
-    /// still half of it.
+    /// Everyone named who said a word, them included: a quiet side of a
+    /// 1:1 is still half of it. An unnamed voice counts only with at least
+    /// `SpeechMeasure.strayVoiceShare` of the words.
     var participants: Int
-    /// Seconds covered by their lines (overlapping lines counted once):
-    /// still generous, since lines are padded, so for display only.
+    /// Seconds their lines cover, each line at most what its words take
+    /// at a slow pace (see `SpeechMeasure.talkSeconds`): for display only.
     var talkSeconds: Double
     /// First line to last: the meeting's length.
     var spanSeconds: Double
@@ -153,6 +158,22 @@ nonisolated enum SpeechMeasure {
     /// pace, so padded timestamps do not water them down.
     static let wordsPerMinute = 140.0
     static var wordsPerTenMinutes: Double { wordsPerMinute * 10 }
+    /// The slowest pace a line's talk time is credited at. Most lines are
+    /// 25-60 s transcription chunks, and on a split-track call the far
+    /// side's chunks run on through the other side's speech: Iryna's
+    /// "Дякую." held 29 s, and her lines covered 73 of a 75 min 1:1 in
+    /// which she said a third of the words. Tight lines in the library
+    /// run at a median 129 (Ukrainian) and 154 (English) words a minute,
+    /// with a tenth at 81-96 or slower (2026-11-04).
+    static let slowPace = 90.0
+    /// An unnamed voice with less than this share of a meeting's words is
+    /// a stray piece of someone's voice (a diarizer split, a few "Угу" in
+    /// a 1:1), not one more participant: counted as one, it shrank the
+    /// fair share and made a quiet side of a 1:1 read as dominating it
+    /// (33 words of "Угу" took Iryna from 85 to 128). Its words still
+    /// count towards the meeting's. In the library, real unnamed voices
+    /// had at least 1.3% of their meeting's words, strays at most 0.5%.
+    static let strayVoiceShare = 0.01
 
     /// Measures `name` (any case) in one meeting; nil when they did not speak.
     static func measure(_ lines: [SpeechLine], name: String, recordingId: UUID,
@@ -163,8 +184,17 @@ nonisolated enum SpeechMeasure {
         guard !mine.isEmpty else { return nil }
 
         var wordsBy: [String: Int] = [:]
-        for l in sorted { wordsBy[l.speaker, default: 0] += SpeechLexicon.words(l.text).count }
-        let talk = unionSeconds(mine.map { (start: $0.start, end: $0.end) })
+        var named = Set<String>()
+        for l in sorted {
+            wordsBy[l.speaker, default: 0] += SpeechLexicon.words(l.text).count
+            if l.named { named.insert(l.speaker) }
+        }
+        let meetingWords = wordsBy.values.reduce(0, +)
+        let present = wordsBy.filter { who, words in
+            words > 0 && (isThem(who) || named.contains(who)
+                          || Double(words) >= strayVoiceShare * Double(meetingWords))
+        }
+        let talk = talkSeconds(mine.map { (start: $0.start, end: $0.end, text: $0.text) })
         let tight = mine.filter { tightLine.contains($0.end - $0.start) && SpeechLexicon.words($0.text).count >= 4 }
 
         // Turns: runs of one speaker, merged over short gaps, and ended
@@ -202,11 +232,11 @@ nonisolated enum SpeechMeasure {
         let language = SpeechLexicon.language(of: text)
         return MeetingSpeech(
             recordingId: recordingId, title: title, date: date, language: language,
-            participants: max(1, wordsBy.values.filter { $0 > 0 }.count),
+            participants: max(1, present.count),
             talkSeconds: talk,
             spanSeconds: (sorted.map(\.end).max() ?? 0) - (sorted.first?.start ?? 0),
             words: SpeechLexicon.words(text).count,
-            meetingWords: wordsBy.values.reduce(0, +),
+            meetingWords: meetingWords,
             paceWords: tight.map { SpeechLexicon.words($0.text).count }.reduce(0, +),
             paceSeconds: tight.map { $0.end - $0.start }.reduce(0, +),
             turns: theirTurns.count, longestTurn: theirTurns.map { $0.end - $0.start }.max() ?? 0,
@@ -215,6 +245,22 @@ nonisolated enum SpeechMeasure {
             fillers: SpeechLexicon.count(SpeechLexicon.fillers[language ?? ""] ?? [], in: text),
             hedges: SpeechLexicon.count(SpeechLexicon.hedges[language ?? ""] ?? [], in: text),
             others: wordsBy.filter { !isThem($0.key) }.mapValues(Double.init))
+    }
+
+    /// Talk time of a person's lines: the time they cover, overlapping
+    /// lines counted once, each line at most what its words take at
+    /// `slowPace`. A line's timestamps include its pauses, and chunked
+    /// lines the silence around them, so the bound is what keeps a padded
+    /// "Thanks." from counting as half a minute. Still generous: shown as
+    /// approximate.
+    static func talkSeconds(_ lines: [(start: Double, end: Double, text: String)]) -> Double {
+        unionSeconds(lines.map { (start: $0.start, end: creditedEnd(start: $0.start, end: $0.end, text: $0.text)) })
+    }
+
+    /// Where a line's credited talk ends: its end, or sooner when its
+    /// words take less time at `slowPace`.
+    static func creditedEnd(start: Double, end: Double, text: String) -> Double {
+        min(end, start + Double(SpeechLexicon.words(text).count) * 60 / slowPace)
     }
 
     /// Seconds covered by a set of intervals, each stretch counted once: two

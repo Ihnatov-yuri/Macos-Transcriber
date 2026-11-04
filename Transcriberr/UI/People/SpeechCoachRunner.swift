@@ -43,7 +43,10 @@ nonisolated enum SpeechHistory {
             let all = rec.segments.compactMap { s -> SpeechLine? in
                 guard let who = speaker(key: s.speaker, name: s.speakerName, measuring: name,
                                         micIsThem: micIsThem, micAs: micAs) else { return nil }
-                return SpeechLine(start: s.startSeconds, end: s.endSeconds, speaker: who, text: s.text)
+                // A name, or the microphone (the user): a known person,
+                // however little they said.
+                let named = !(s.speakerName ?? "").isEmpty || s.speaker == TranscriptionRunner.micSpeakerKey
+                return SpeechLine(start: s.startSeconds, end: s.endSeconds, speaker: who, text: s.text, named: named)
             }
             if let measured = SpeechMeasure.measure(all, name: name, recordingId: m.id, title: m.title, date: m.date),
                measured.meetingWords >= minimumMeetingWords {

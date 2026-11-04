@@ -277,12 +277,12 @@ final class PeopleV5Tests: XCTestCase {
     func testMeetingsOfAPersonNewestFirst() throws {
         let old = try recording("old", [(0, 10, "one", "S1", "Kate"), (10, 30, "two", "S2", "Anna")])
         old.createdAtMillis = 1_000
-        _ = try recording("new", [(0, 4, "a", "S1", "kate"), (6, 8, "b", "S1", "Kate")])
+        _ = try recording("new", [(0, 4, "a b c d e f", "S1", "kate"), (6, 8, "b c d", "S1", "Kate")])
         let m = PersonMeetings.load("Kate", repository: repo)
         XCTAssertEqual(m.map(\.title), ["new", "old"])
         XCTAssertEqual(m.first?.seconds ?? 0, 6, accuracy: 0.001)
         XCTAssertEqual(m.first?.lines, 2)
-        XCTAssertEqual(m.first?.lastSaid, "b")
+        XCTAssertEqual(m.first?.lastSaid, "b c d")
     }
 
     // MARK: Brief store

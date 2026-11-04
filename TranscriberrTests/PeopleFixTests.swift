@@ -61,25 +61,78 @@ final class PeopleFixTests: XCTestCase {
     }
 
     func testAMeetingsTalkIsTheTimeItsLinesCoverAndCarriesWords() throws {
-        _ = try recording("m", [(0, 10, "one two three", "S1", "Kate"),
-                                (5, 12, "four five", "TAGGED_1", "Kate"),     // tagged over her own line
-                                (20, 25, "six", "S1", "Kate"),
+        // Enough words for each line's span at a slow pace (15, 11, 8).
+        _ = try recording("m", [(0, 10, words(15), "S1", "Kate"),
+                                (5, 12, words(11), "TAGGED_1", "Kate"),     // tagged over her own line
+                                (20, 25, words(8), "S1", "Kate"),
                                 (25, 40, "not hers at all", "S2", "Anna")])
         let m = try XCTUnwrap(PersonMeetings.load("Kate", repository: repo).first)
         XCTAssertEqual(m.seconds, 17, accuracy: 0.001, "0-12 and 20-25, not 10 + 7 + 5")
-        XCTAssertEqual(m.words, 6)
+        XCTAssertEqual(m.words, 34)
         XCTAssertEqual(m.lines, 3)
-        XCTAssertEqual(PersonMeetings.talk(seconds: m.seconds, words: m.words), "~17 s · 6 words")
+        XCTAssertEqual(PersonMeetings.talk(seconds: m.seconds, words: m.words), "~17 s · 34 words")
         XCTAssertEqual(PersonMeetings.talk(seconds: 125, words: 1), "~2 min · 1 word")
-        XCTAssertEqual(PersonMeetings.talk([m, m]), "~34 s · 12 words")
+        XCTAssertEqual(PersonMeetings.talk([m, m]), "~34 s · 68 words")
     }
 
     func testMeasuredTalkCountsOverlappingLinesOnce() throws {
-        let lines = [SpeechLine(start: 0, end: 20, speaker: "Kate", text: words(20)),
-                     SpeechLine(start: 10, end: 30, speaker: "Kate", text: words(20)),
+        let lines = [SpeechLine(start: 0, end: 20, speaker: "Kate", text: words(30)),
+                     SpeechLine(start: 10, end: 30, speaker: "Kate", text: words(30)),
                      SpeechLine(start: 30, end: 40, speaker: "Anna", text: words(20))]
         let m = try XCTUnwrap(SpeechMeasure.measure(lines, name: "Kate", recordingId: UUID(), title: "t", date: Date()))
         XCTAssertEqual(m.talkSeconds, 30, accuracy: 0.001)
+    }
+
+    /// A split-track 1:1 as stored (Iryna, 26 Aug): the far side comes in
+    /// 30-60 s chunks that run on through the other side's speech, so a
+    /// lone "Дякую." held 29 s and her lines covered 73 of 75 minutes.
+    func testPaddedChunksDoNotCountAsTalk() throws {
+        _ = try recording("1:1", [(0, 56, words(60), "SPEAKER_01", "Iryna"),
+                                  (55, 84.7, "Дякую.", "SPEAKER_01", "Iryna"),
+                                  (83.7, 110.8, "Угу.", "SPEAKER_01", "Iryna"),
+                                  (0, 110.8, words(250), "ME", "Yuri")])
+        let m = try XCTUnwrap(PersonMeetings.load("Iryna", repository: repo).first)
+        XCTAssertEqual(m.seconds, 40 + 2 * 60.0 / 90, accuracy: 0.001,
+                       "60 words take 40 s at a slow pace; each one-word line 0.67 s, not 30")
+        XCTAssertEqual(SpeechMeasure.talkSeconds([(start: 0, end: 30, text: "...")]), 0, "no words, no talk")
+        XCTAssertEqual(SpeechMeasure.talkSeconds([(start: 0, end: 3, text: words(20))]), 3, accuracy: 0.001,
+                       "a fast line keeps its own span")
+
+        let lines = [SpeechLine(start: 0, end: 56, speaker: "Iryna", text: words(60)),
+                     SpeechLine(start: 55, end: 84.7, speaker: "Iryna", text: "Дякую.")]
+        let measured = try XCTUnwrap(SpeechMeasure.measure(lines, name: "Iryna", recordingId: UUID(), title: "t", date: Date()))
+        XCTAssertEqual(measured.talkSeconds, 40 + 60.0 / 90, accuracy: 0.001, "the person page tiles agree with the list")
+    }
+
+    /// Iryna, 30 Oct: a 1:1 with 33 words of "Угу" under an unnamed
+    /// diarizer key read as a three-person meeting, and her 43% of the
+    /// words as 128% of a fair share.
+    func testAStrayUnnamedVoiceIsNotAParticipant() throws {
+        func measure(_ lines: [SpeechLine]) throws -> MeetingSpeech {
+            try XCTUnwrap(SpeechMeasure.measure(lines, name: "Iryna", recordingId: UUID(), title: "t", date: Date()))
+        }
+        let pair = [SpeechLine(start: 0, end: 10, speaker: "Iryna", text: words(430)),
+                    SpeechLine(start: 10, end: 20, speaker: "Yuri", text: words(567))]
+        let stray = SpeechLine(start: 20, end: 21, speaker: "SPEAKER_02", text: words(3), named: false)
+        let m = try measure(pair + [stray])
+        XCTAssertEqual(m.participants, 2, "0.3% of the words: a piece of someone's voice")
+        XCTAssertEqual(m.meetingWords, 1000, "its words still count")
+        XCTAssertEqual(m.value(.talkShare) ?? 0, 86, accuracy: 0.01, "43% of a 1:1 is under half")
+
+        let third = SpeechLine(start: 20, end: 30, speaker: "SPEAKER_02", text: words(20), named: false)
+        XCTAssertEqual(try measure(pair + [third]).participants, 3, "2% of the words: someone else")
+        let quietGuest = SpeechLine(start: 20, end: 21, speaker: "Anna", text: words(3))
+        XCTAssertEqual(try measure(pair + [quietGuest]).participants, 3, "a named person counts however little they said")
+    }
+
+    func testHistoryKnowsNamedFromUnnamedVoices() throws {
+        let rec = try recording("1:1", [(0, 10, words(430), "SPEAKER_01", "Iryna"),
+                                        (10, 20, words(567), "ME", nil),
+                                        (20, 21, words(3), "SPEAKER_02", nil)])
+        let speech = SpeechHistory.load("Iryna", repository: repo, micAs: "Yuri").meetings
+        let m = try XCTUnwrap(speech.first { $0.recordingId == rec.id })
+        XCTAssertEqual(m.participants, 2, "the unnamed microphone is the user; the 3-word key is a stray")
+        XCTAssertEqual(m.others["Yuri"], 567)
     }
 
     // MARK: Provenance (P3)

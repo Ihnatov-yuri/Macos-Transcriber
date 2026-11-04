@@ -161,40 +161,94 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
     /// Streamed to disk with the size cap enforced as it arrives: a whole
     /// download first and the check after let a hostile or broken server
     /// fill the disk before anything looked. A declared Content-Length over
-    /// the cap is refused before a byte is read.
+    /// the cap is refused before a byte is read. Chunks come from a data
+    /// delegate (the per-byte AsyncBytes loop cost seconds of CPU per
+    /// 100 MB update).
     private static func download(_ url: URL, into stage: URL) async throws -> URL {
-        let (bytes, response) = try await UpdateChecker.session.bytes(for: UpdateChecker.request(for: url, timeout: 60))
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            bytes.task.cancel()
-            throw Failure("The download failed")
-        }
-        guard declaredSizeAllowed(response.expectedContentLength) else {
-            bytes.task.cancel()
-            throw Failure("The download has the wrong size")
-        }
         let dest = stage.appendingPathComponent("update.zip")
-        guard FileManager.default.createFile(atPath: dest.path, contents: nil) else { throw Failure("The download failed") }
-        let handle = try FileHandle(forWritingTo: dest)
-        defer { try? handle.close() }
-        var pending = Data()
-        pending.reserveCapacity(1 << 20)
-        var total = 0
-        for try await byte in bytes {
-            pending.append(byte)
-            if pending.count >= 1 << 20 {
-                total += pending.count
-                guard total < maxZipBytes else {
-                    bytes.task.cancel()
-                    throw Failure("The download has the wrong size")
+        try await CappedDownload.run(UpdateChecker.request(for: url, timeout: 60), to: dest, cap: maxZipBytes,
+                                     configuration: UpdateChecker.session.configuration)
+        return dest
+    }
+
+    /// One download into a file, refused or cut off at `cap` bytes. Every
+    /// delegate callback runs on one serial queue, which also owns the
+    /// state below (hence `@unchecked Sendable`).
+    nonisolated private final class CappedDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+        private let dest: URL
+        private let cap: Int
+        private var handle: FileHandle?
+        private var total = 0
+        private var failure: Error?
+        private var continuation: CheckedContinuation<Void, Error>?
+
+        private init(dest: URL, cap: Int) {
+            self.dest = dest
+            self.cap = cap
+        }
+
+        static func run(_ request: URLRequest, to dest: URL, cap: Int,
+                        configuration: URLSessionConfiguration) async throws {
+            let delegate = CappedDownload(dest: dest, cap: cap)
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1
+            let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: queue)
+            defer { session.finishTasksAndInvalidate() }
+            let task = session.dataTask(with: request)
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                    // On the delegate queue, so no callback can run before
+                    // the continuation is in place.
+                    queue.addOperation {
+                        delegate.continuation = c
+                        task.resume()
+                    }
                 }
-                try handle.write(contentsOf: pending)
-                pending.removeAll(keepingCapacity: true)
+            } onCancel: {
+                task.cancel()
             }
         }
-        total += pending.count
-        guard total > 0, total < maxZipBytes else { throw Failure("The download has the wrong size") }
-        try handle.write(contentsOf: pending)
-        return dest
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                        completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                failure = Failure("The download failed"); completionHandler(.cancel); return
+            }
+            guard UpdateInstaller.declaredSizeAllowed(response.expectedContentLength) else {
+                failure = Failure("The download has the wrong size"); completionHandler(.cancel); return
+            }
+            guard FileManager.default.createFile(atPath: dest.path, contents: nil),
+                  let h = try? FileHandle(forWritingTo: dest) else {
+                failure = Failure("The download failed"); completionHandler(.cancel); return
+            }
+            handle = h
+            completionHandler(.allow)
+        }
+
+        func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+            guard failure == nil else { return }
+            total += data.count
+            guard total < cap else {
+                failure = Failure("The download has the wrong size")
+                dataTask.cancel()
+                return
+            }
+            do { try handle?.write(contentsOf: data) } catch {
+                failure = error
+                dataTask.cancel()
+            }
+        }
+
+        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+            try? handle?.close()
+            handle = nil
+            let c = continuation
+            continuation = nil
+            if let failure { c?.resume(throwing: failure) }
+            else if let error { c?.resume(throwing: error) }
+            else if total == 0 { c?.resume(throwing: Failure("The download has the wrong size")) }
+            else { c?.resume() }
+        }
     }
 
     /// A Content-Length the cap allows; -1 (not sent) is checked while streaming.

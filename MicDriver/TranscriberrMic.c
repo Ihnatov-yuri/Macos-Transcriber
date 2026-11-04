@@ -29,12 +29,14 @@
 // (48 kHz, mono, Float32), no controls.
 
 #include <CoreAudio/AudioServerPlugIn.h>
+#include <Security/Security.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 #include <os/log.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 // MARK: - Objects and constants
@@ -187,6 +189,82 @@ static bool IsTranscriberrBundle(CFStringRef bundle) {
         || CFStringCompare(bundle, CFSTR(kCLIBundleID), 0) == kCFCompareEqualTo;
 }
 
+/// A client's bundle ID is whatever its Info.plist says, so any app can
+/// claim Transcriberr's. When this plug-in is signed by a team (a real
+/// certificate), the client process must ALSO carry a valid signature from
+/// that same team under Transcriberr's identifier, which nobody else can
+/// produce. Built at Initialize; NULL for an ad-hoc plug-in, where only the
+/// bundle ID can be checked (see scripts/package.sh: sign with a
+/// certificate to close that).
+static SecRequirementRef gClientRequirement = NULL;
+
+static void LoadClientRequirement(void) {
+    CFBundleRef bundle = CFBundleGetBundleWithIdentifier(CFSTR(kPlugInBundleID));
+    if (bundle == NULL) return;
+    CFURLRef url = CFBundleCopyBundleURL(bundle);
+    if (url == NULL) return;
+    SecStaticCodeRef code = NULL;
+    OSStatus st = SecStaticCodeCreateWithPath(url, kSecCSDefaultFlags, &code);
+    CFRelease(url);
+    if (st != errSecSuccess || code == NULL) return;
+    CFDictionaryRef info = NULL;
+    st = SecCodeCopySigningInformation(code, kSecCSSigningInformation, &info);
+    CFRelease(code);
+    if (st != errSecSuccess || info == NULL) return;
+    CFStringRef team = CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier);
+    char teamID[64] = {0};
+    bool ok = team != NULL && CFGetTypeID(team) == CFStringGetTypeID()
+        && CFStringGetCString(team, teamID, sizeof teamID, kCFStringEncodingUTF8);
+    CFRelease(info);
+    if (!ok || teamID[0] == 0) {
+        os_log(gLog, "ad-hoc signed: feed clients are checked by bundle ID only");
+        return;
+    }
+    for (const char* p = teamID; *p; p++) {
+        bool alnum = (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9');
+        if (!alnum) return;
+    }
+    char text[512];
+    snprintf(text, sizeof text,
+             "anchor apple generic and certificate leaf[subject.OU] = \"%s\" and "
+             "(identifier \"%s\" or identifier \"%s\")", teamID, kAppBundleID, kCLIBundleID);
+    CFStringRef req = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+    if (req == NULL) return;
+    SecRequirementRef r = NULL;
+    if (SecRequirementCreateWithString(req, kSecCSDefaultFlags, &r) == errSecSuccess) gClientRequirement = r;
+    CFRelease(req);
+    os_log(gLog, "feed clients must be signed by team %{public}s", teamID);
+}
+
+/// The running process `pid` satisfies gClientRequirement. True when there
+/// is no requirement (ad-hoc build). A lookup the host's sandbox refuses is
+/// logged and falls back to the bundle-ID check rather than breaking the
+/// microphone; a signature that does not satisfy the requirement is refused.
+static bool ClientSignatureAllowed(pid_t pid) {
+    if (gClientRequirement == NULL) return true;
+    int value = (int)pid;
+    CFNumberRef n = CFNumberCreate(NULL, kCFNumberIntType, &value);
+    if (n == NULL) return true;
+    const void* keys[] = { kSecGuestAttributePid };
+    const void* values[] = { n };
+    CFDictionaryRef attrs = CFDictionaryCreate(NULL, keys, values, 1,
+                                               &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFRelease(n);
+    if (attrs == NULL) return true;
+    SecCodeRef code = NULL;
+    OSStatus st = SecCodeCopyGuestWithAttributes(NULL, attrs, kSecCSDefaultFlags, &code);
+    CFRelease(attrs);
+    if (st != errSecSuccess || code == NULL) {
+        os_log_error(gLog, "could not look up pid %d's signature (%d); bundle ID only", (int)pid, (int)st);
+        return true;
+    }
+    st = SecCodeCheckValidity(code, kSecCSDefaultFlags, gClientRequirement);
+    CFRelease(code);
+    if (st == errSecSuccess) return true;
+    os_log(gLog, "feed client pid %d is not signed by Transcriberr's team (%d)", (int)pid, (int)st);
+    return false;
+}
+
 /// Called with gStateMutex held.
 static FeedClient* FeedClientLocked(UInt32 client) {
     for (int i = 0; i < kMaxFeedClients; i++) {
@@ -302,6 +380,7 @@ static OSStatus Initialize(AudioServerPlugInDriverRef inDriver, AudioServerPlugI
     if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
     gHost = inHost;
     gHostTicksPerFrame = HostTicksPerFrame();
+    LoadClientRequirement();
     os_log(gLog, "loaded; microphone hidden until Transcriberr feeds it");
     return noErr;
 }
@@ -320,7 +399,7 @@ static OSStatus AddDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID id, 
     if (d != gDriverRef) return kAudioHardwareBadObjectError;
     if (!IsDevice(id)) return kAudioHardwareBadObjectError;
     if (id != kObjectID_Feed || c == NULL) return noErr;
-    if (!IsTranscriberrBundle(c->mBundleID)) {
+    if (!IsTranscriberrBundle(c->mBundleID) || !ClientSignatureAllowed(c->mProcessID)) {
         os_log(gLog, "feed client pid %d is not Transcriberr: its IO will be refused", (int)c->mProcessID);
         return noErr;
     }

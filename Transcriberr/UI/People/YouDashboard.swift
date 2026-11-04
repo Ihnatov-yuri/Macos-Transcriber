@@ -18,8 +18,11 @@ struct YouDashboard: View {
     /// The user's print in People's voice model, read off disk once and
     /// again only when a voice changes, never in the body.
     @State private var mine = PeopleEmbedder.myVoice()
-    /// Recordings come and go (and are re-run) while the page is open.
-    @Query private var recordings: [Recording]
+    /// Recordings come and go (and are re-run) while the page is open. A
+    /// COUNT on each library save, not an @Query that loaded every
+    /// Recording on the main context and re-ran on every save.
+    @Environment(\.modelContext) private var modelContext
+    @State private var recordingCount = 0
     @AppStorage("ui.myName") private var myName = ""
     @State private var addingReading = false
     @State private var confirmReset = false
@@ -28,6 +31,11 @@ struct YouDashboard: View {
         let recordings: Int
         let jobs: Int
         let name: String
+    }
+
+    private func countRecordings() {
+        let n = (try? modelContext.fetchCount(FetchDescriptor<Recording>())) ?? recordingCount
+        if n != recordingCount { recordingCount = n }
     }
 
     private var me: String { TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName")) }
@@ -68,7 +76,9 @@ struct YouDashboard: View {
         // a recording added or deleted, a run started or finished (a re-run
         // replaces the lines), the user's name changed. Debounced after the
         // first, so a burst of changes measures once it pauses.
-        .task(id: RefreshKey(recordings: recordings.count, jobs: container.jobManager.statuses.count, name: myName)) {
+        .onAppear { countRecordings() }
+        .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in countRecordings() }
+        .task(id: RefreshKey(recordings: recordingCount, jobs: container.jobManager.statuses.count, name: myName)) {
             if loaded {
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled { return }

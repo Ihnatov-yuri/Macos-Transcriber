@@ -13,7 +13,7 @@ mkdir -p "$DRIVER/Contents/MacOS"
 cp "$ROOT/MicDriver/Info.plist" "$DRIVER/Contents/Info.plist"
 xcrun clang -std=c17 -O2 -Wall -Wextra -Werror -Wno-unused-parameter \
   -arch arm64 -arch x86_64 -mmacosx-version-min=26.0 \
-  -bundle -framework CoreAudio -framework CoreFoundation \
+  -bundle -framework CoreAudio -framework CoreFoundation -framework Security \
   -o "$DRIVER/Contents/MacOS/TranscriberrMic" "$ROOT/MicDriver/TranscriberrMic.c"
 codesign --force -s "$SIGN" "$DRIVER"
 echo "built $DRIVER"

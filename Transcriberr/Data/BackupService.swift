@@ -138,6 +138,15 @@ nonisolated enum BackupService {
     /// existed (a merge rolled back after its row was saved). Queued behind
     /// any pending write for the same id so the write can't land after the
     /// removal and resurrect the row through `restore-backups`.
+    /// `path` names a file inside `library` once `..` and symlinks are
+    /// resolved. A backup's audio path is restored only when it does.
+    static func isInsideLibrary(_ path: String, library: URL) -> Bool {
+        guard !path.isEmpty else { return false }
+        let file = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+        let root = library.standardizedFileURL.resolvingSymlinksInPath().path
+        return file.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+
     static func removeBackups(for recordingId: UUID) {
         let dir = dir(for: recordingId)
         ioQueue.sync {

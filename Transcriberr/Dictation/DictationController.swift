@@ -568,15 +568,36 @@ nonisolated final class DictationController: @unchecked Sendable {
             return
         }
         AppLog.info("dictation", "url action: \(action.isEmpty ? "toggle" : action)")
+        // A link only ends a session a link started: a web page opening
+        // /stop or /cancel must not cut off what the user is dictating with
+        // the hotkey.
+        let linkOwnsSession = linkSessionID == sessionID
         switch action {
-        case "start", "begin":  if canBegin { begin(target: .pane) }
-        case "stop", "finish":  finish()
-        case "cancel":          cancel()
+        case "start", "begin":
+            beginFromLink()
+        case "stop", "finish":
+            if linkOwnsSession { finish() } else { AppLog.info("dictation", "url stop ignored: not a link's session") }
+        case "cancel":
+            if linkOwnsSession { cancel() } else { AppLog.info("dictation", "url cancel ignored: not a link's session") }
         case "pane", "show":
             NSApp.activate(ignoringOtherApps: true)
             onShowPane?()
-        default:                toggle(target: .pane)
+        default:
+            if canBegin { beginFromLink() }
+            else if linkOwnsSession { toggle(target: .pane) }
+            else { AppLog.info("dictation", "url toggle ignored: not a link's session") }
         }
+    }
+
+    /// The session a `transcriberr://dictate` link started, if any.
+    private var linkSessionID: Int?
+
+    @MainActor
+    private func beginFromLink() {
+        guard canBegin else { return }
+        let before = sessionID
+        begin(target: .pane)
+        if sessionID != before { linkSessionID = sessionID }
     }
 
     @MainActor

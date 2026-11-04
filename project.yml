@@ -94,7 +94,7 @@ targets:
         LSMinimumSystemVersion: "26.0"
         LSApplicationCategoryType: public.app-category.productivity
         NSMicrophoneUsageDescription: Transcriberr records audio from your microphone to transcribe it locally on this Mac.
-        NSCalendarsFullAccessUsageDescription: Transcriberr reads the invite of the meeting you recorded (its title and attendees) so their names are spelled right in the transcript. Nothing leaves this Mac.
+        NSCalendarsFullAccessUsageDescription: Transcriberr reads the invite of the meeting you recorded (its title and attendees) so their names are spelled right in the transcript. The invite is used on this Mac, and is sent to a cloud engine only when you choose one for a run.
         NSAudioCaptureUsageDescription: Meeting mode records the audio other apps play (your meeting participants) so calls can be transcribed locally on this Mac.
         NSDocumentsFolderUsageDescription: Transcriberr saves recordings, transcripts, and sidecar files alongside your audio.
         NSHumanReadableCopyright: ""

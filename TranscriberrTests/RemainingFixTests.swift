@@ -118,7 +118,7 @@ final class RemainingFixTests: XCTestCase {
 
     func testDriverInstallVerifiesARootOwnedCopyBeforeReplacing() {
         let script = VirtualMicrophone.installScript(source: "/Applications/My App's.app/Contents/Resources/TranscriberrMic.driver",
-                                                     dest: "/Library/Audio/Plug-Ins/HAL/TranscriberrMic.driver", team: nil)
+                                                     dest: "/Library/Audio/Plug-Ins/HAL/TranscriberrMic.driver", team: nil, leaf: nil)
         XCTAssertTrue(script.contains("/bin/chmod -R u-s,g-s,go-w"), "setuid/setgid bits are cleared")
         XCTAssertTrue(script.hasPrefix("T=$(/usr/bin/mktemp -d /private/var/tmp/"))
         XCTAssertTrue(script.contains("'/Applications/My App'\\''s.app/Contents/Resources/TranscriberrMic.driver'"),

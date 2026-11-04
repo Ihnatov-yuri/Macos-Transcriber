@@ -155,6 +155,15 @@ enum TextInserter {
         if secret { pb.setString("", forType: concealedType) }
 
         guard HotkeyMonitor.isTrusted(), postPaste() else {
+            if secret {
+                // A password is never left on the clipboard: Accessibility
+                // went away mid-session, so it is dropped and the user's own
+                // clipboard put back.
+                AppLog.warn("dictation", "no Accessibility trust — secure passage dropped, clipboard restored")
+                if let snapshot { snapshot.restore(to: pb) } else { pb.clearContents() }
+                pendingSnapshot = nil
+                return .copiedOnly
+            }
             AppLog.warn("dictation", "no Accessibility trust — text left on clipboard")
             return .copiedOnly
         }

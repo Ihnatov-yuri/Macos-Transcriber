@@ -108,4 +108,24 @@ final class SecuritySweepTests: XCTestCase {
         let m = try ParakeetUKModel.manifest(revision: rev, tree: parakeetTree(extra: [negative, huge]))
         XCTAssertThrowsError(try ParakeetUKModel.validate(m))
     }
+
+    /// restore-backups only restores audio inside the library folder.
+    func testBackupAudioMustBeInsideTheLibrary() {
+        let lib = URL(fileURLWithPath: "/Users/x/Documents/Transcriberr/Recordings", isDirectory: true)
+        XCTAssertTrue(BackupService.isInsideLibrary(lib.path + "/meeting_1.m4a", library: lib))
+        XCTAssertFalse(BackupService.isInsideLibrary(lib.path + "/../../Secret.wav", library: lib))
+        XCTAssertFalse(BackupService.isInsideLibrary("/Users/x/Music/song.wav", library: lib))
+        XCTAssertFalse(BackupService.isInsideLibrary(lib.path + "-evil/a.wav", library: lib))
+        XCTAssertFalse(BackupService.isInsideLibrary("", library: lib))
+    }
+
+    /// A self-signed build pins the driver to its own leaf certificate.
+    func testDriverRequirementPinsTheLeafWithoutATeam() {
+        let sha = String(repeating: "ab", count: 20)
+        XCTAssertEqual(VirtualMicrophone.driverRequirement(team: nil, leaf: sha),
+                       "certificate leaf = H\"\(sha)\" and identifier \"nl.ihnatov.Transcriberr.MicDriver\"")
+        XCTAssertEqual(VirtualMicrophone.driverRequirement(team: nil, leaf: "not-a-hash"),
+                       "identifier \"nl.ihnatov.Transcriberr.MicDriver\"")
+        XCTAssertTrue(VirtualMicrophone.driverRequirement(team: "AB12CD34EF", leaf: sha).hasPrefix("anchor apple generic"))
+    }
 }

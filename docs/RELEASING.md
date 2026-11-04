@@ -27,6 +27,16 @@ security add-generic-password -s nl.ihnatov.Transcriberr.update-signing -a relea
     -l "Transcriberr update signing key" -w "<private key>"
 ```
 
+### Code-signing identity
+
+Run `scripts/make-signing-cert.sh` once. It creates the self-signed
+"Transcriberr Signing" identity, and `scripts/package.sh` signs with it from
+then on. Without it a release is ad hoc and held only to its identifier: any
+binary signed ad hoc as `nl.ihnatov.Transcriberr` inherits the Microphone and
+Accessibility grants and can read the API keys from the Keychain. The first
+release signed with the certificate asks once more for those permissions.
+Export the identity (.p12) to the password manager with the update key.
+
 ## Steps
 
 1. **Start from an up-to-date main.**

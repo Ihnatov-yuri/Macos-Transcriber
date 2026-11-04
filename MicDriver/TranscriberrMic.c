@@ -190,13 +190,24 @@ static bool IsTranscriberrBundle(CFStringRef bundle) {
 }
 
 /// A client's bundle ID is whatever its Info.plist says, so any app can
-/// claim Transcriberr's. When this plug-in is signed by a team (a real
-/// certificate), the client process must ALSO carry a valid signature from
-/// that same team under Transcriberr's identifier, which nobody else can
-/// produce. Built at Initialize; NULL for an ad-hoc plug-in, where only the
-/// bundle ID can be checked (see scripts/package.sh: sign with a
-/// certificate to close that).
-static SecRequirementRef gClientRequirement = NULL;
+/// claim Transcriberr's. When this plug-in is signed with a certificate (a
+/// Developer ID, an Apple Development certificate or the self-signed one
+/// scripts/make-signing-cert.sh creates), the client process must ALSO
+/// carry a valid signature, under Transcriberr's identifier, by the very
+/// same leaf certificate, whose private key nobody else has. Loaded at
+/// Initialize; NULL for an ad-hoc plug-in, where only the bundle ID can be
+/// checked.
+static CFDataRef gSignerCertificate = NULL;
+
+/// The DER bytes of the leaf certificate `info` (signing information) names,
+/// retained, or NULL when the code is ad-hoc or unsigned.
+static CFDataRef CopyLeafCertificate(CFDictionaryRef info) {
+    CFArrayRef certs = CFDictionaryGetValue(info, kSecCodeInfoCertificates);
+    if (certs == NULL || CFGetTypeID(certs) != CFArrayGetTypeID() || CFArrayGetCount(certs) == 0) return NULL;
+    SecCertificateRef leaf = (SecCertificateRef)CFArrayGetValueAtIndex(certs, 0);
+    if (leaf == NULL || CFGetTypeID(leaf) != SecCertificateGetTypeID()) return NULL;
+    return SecCertificateCopyData(leaf);
+}
 
 static void LoadClientRequirement(void) {
     CFBundleRef bundle = CFBundleGetBundleWithIdentifier(CFSTR(kPlugInBundleID));
@@ -211,37 +222,22 @@ static void LoadClientRequirement(void) {
     st = SecCodeCopySigningInformation(code, kSecCSSigningInformation, &info);
     CFRelease(code);
     if (st != errSecSuccess || info == NULL) return;
-    CFStringRef team = CFDictionaryGetValue(info, kSecCodeInfoTeamIdentifier);
-    char teamID[64] = {0};
-    bool ok = team != NULL && CFGetTypeID(team) == CFStringGetTypeID()
-        && CFStringGetCString(team, teamID, sizeof teamID, kCFStringEncodingUTF8);
+    gSignerCertificate = CopyLeafCertificate(info);
     CFRelease(info);
-    if (!ok || teamID[0] == 0) {
+    if (gSignerCertificate == NULL) {
         os_log(gLog, "ad-hoc signed: feed clients are checked by bundle ID only");
-        return;
+    } else {
+        os_log(gLog, "feed clients must be signed with this plug-in's certificate");
     }
-    for (const char* p = teamID; *p; p++) {
-        bool alnum = (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9');
-        if (!alnum) return;
-    }
-    char text[512];
-    snprintf(text, sizeof text,
-             "anchor apple generic and certificate leaf[subject.OU] = \"%s\" and "
-             "(identifier \"%s\" or identifier \"%s\")", teamID, kAppBundleID, kCLIBundleID);
-    CFStringRef req = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
-    if (req == NULL) return;
-    SecRequirementRef r = NULL;
-    if (SecRequirementCreateWithString(req, kSecCSDefaultFlags, &r) == errSecSuccess) gClientRequirement = r;
-    CFRelease(req);
-    os_log(gLog, "feed clients must be signed by team %{public}s", teamID);
 }
 
-/// The running process `pid` satisfies gClientRequirement. True when there
-/// is no requirement (ad-hoc build). A lookup the host's sandbox refuses is
-/// logged and falls back to the bundle-ID check rather than breaking the
-/// microphone; a signature that does not satisfy the requirement is refused.
+/// The running process `pid` has a valid signature under Transcriberr's
+/// identifier by gSignerCertificate. True when there is no certificate
+/// (ad-hoc build). A lookup the host's sandbox refuses is logged and falls
+/// back to the bundle-ID check rather than breaking the microphone; a
+/// signature that does not match is refused.
 static bool ClientSignatureAllowed(pid_t pid) {
-    if (gClientRequirement == NULL) return true;
+    if (gSignerCertificate == NULL) return true;
     int value = (int)pid;
     CFNumberRef n = CFNumberCreate(NULL, kCFNumberIntType, &value);
     if (n == NULL) return true;
@@ -258,11 +254,21 @@ static bool ClientSignatureAllowed(pid_t pid) {
         os_log_error(gLog, "could not look up pid %d's signature (%d); bundle ID only", (int)pid, (int)st);
         return true;
     }
-    st = SecCodeCheckValidity(code, kSecCSDefaultFlags, gClientRequirement);
+    bool allowed = false;
+    st = SecCodeCheckValidity(code, kSecCSDefaultFlags, NULL);
+    CFDictionaryRef info = NULL;
+    if (st == errSecSuccess
+        && SecCodeCopySigningInformation(code, kSecCSSigningInformation, &info) == errSecSuccess && info != NULL) {
+        CFStringRef ident = CFDictionaryGetValue(info, kSecCodeInfoIdentifier);
+        bool ours = ident != NULL && CFGetTypeID(ident) == CFStringGetTypeID() && IsTranscriberrBundle(ident);
+        CFDataRef leaf = CopyLeafCertificate(info);
+        allowed = ours && leaf != NULL && CFEqual(leaf, gSignerCertificate);
+        if (leaf != NULL) CFRelease(leaf);
+        CFRelease(info);
+    }
     CFRelease(code);
-    if (st == errSecSuccess) return true;
-    os_log(gLog, "feed client pid %d is not signed by Transcriberr's team (%d)", (int)pid, (int)st);
-    return false;
+    if (!allowed) os_log(gLog, "feed client pid %d is not signed by Transcriberr's certificate (%d)", (int)pid, (int)st);
+    return allowed;
 }
 
 /// Called with gStateMutex held.

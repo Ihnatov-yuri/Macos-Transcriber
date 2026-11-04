@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import AVFoundation
 import CoreAudio
+import CryptoKit
 import Security
 import Synchronization
 
@@ -433,9 +434,10 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     /// root can change what gets moved into /Library. A failed copy or
     /// signature check leaves the installed plug-in and coreaudiod as they
     /// were; the staging directory is removed either way.
-    static func installScript(source: String, dest: String, team: String? = ownTeamIdentifier()) -> String {
+    static func installScript(source: String, dest: String, team: String? = ownTeamIdentifier(),
+                              leaf: String? = ownLeafCertificateSHA1()) -> String {
         let staged = "\"$T\"/TranscriberrMic.driver"
-        let requirement = shellQuoted("=" + driverRequirement(team: team))
+        let requirement = shellQuoted("=" + driverRequirement(team: team, leaf: leaf))
         return "T=$(/usr/bin/mktemp -d /private/var/tmp/TranscriberrMic.XXXXXX) || exit 1; "
             + "/usr/bin/ditto \(shellQuoted(source)) \(staged)"
             + " && /usr/sbin/chown -R root:wheel \"$T\""
@@ -450,28 +452,49 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
 
     /// What the staged plug-in's signature must satisfy. Signed by a real
     /// team (a Developer ID or Apple Development certificate), it must come
-    /// from the SAME team as this app, so a bundle re-signed by anyone else
-    /// is refused. Ad-hoc builds (no team) can only be held to the
-    /// identifier, which any re-signed bundle can claim: those need a
-    /// signing certificate to be safe (see scripts/package.sh).
-    static func driverRequirement(team: String?) -> String {
+    /// from the SAME team as this app. Signed with a certificate that has no
+    /// team (the self-signed one scripts/make-signing-cert.sh creates), it
+    /// must carry the SAME leaf certificate. Either way a bundle re-signed
+    /// by anyone else is refused. Ad-hoc builds can only be held to the
+    /// identifier, which any re-signed bundle can claim.
+    static func driverRequirement(team: String?, leaf: String? = nil) -> String {
         let id = "identifier \"\(driverIdentifier)\""
-        guard let team, !team.isEmpty, team.allSatisfy({ $0.isLetter || $0.isNumber }) else { return id }
-        return "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and \(id)"
+        if let team, !team.isEmpty, team.allSatisfy({ $0.isLetter || $0.isNumber }) {
+            return "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and \(id)"
+        }
+        if let leaf, leaf.count == 40, leaf.allSatisfy({ $0.isHexDigit }) {
+            return "certificate leaf = H\"\(leaf.lowercased())\" and \(id)"
+        }
+        return id
     }
 
-    /// The team identifier of this app's own code signature, or nil for an
-    /// ad-hoc or unsigned build.
-    static func ownTeamIdentifier() -> String? {
+    /// SHA-1 of this app's leaf signing certificate (the hash the code
+    /// requirement language pins with `H"…"`), or nil when ad-hoc.
+    static func ownLeafCertificateSHA1() -> String? {
+        guard let dict = ownSigningInformation(),
+              let certs = dict[kSecCodeInfoCertificates as String] as? [SecCertificate],
+              let leaf = certs.first else { return nil }
+        let der = SecCertificateCopyData(leaf) as Data
+        return Insecure.SHA1.hash(data: der).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func ownSigningInformation() -> [String: Any]? {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
         var info: CFDictionary?
         // kSecCSSigningInformation (1 << 1): include the certificate details.
-        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: 1 << 1), &info) == errSecSuccess,
-              let dict = info as? [String: Any] else { return nil }
-        return dict[kSecCodeInfoTeamIdentifier as String] as? String
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: 1 << 1), &info) == errSecSuccess else {
+            return nil
+        }
+        return info as? [String: Any]
+    }
+
+    /// The team identifier of this app's own code signature, or nil for an
+    /// ad-hoc or unsigned build.
+    static func ownTeamIdentifier() -> String? {
+        ownSigningInformation()?[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
     static func shellQuoted(_ s: String) -> String {

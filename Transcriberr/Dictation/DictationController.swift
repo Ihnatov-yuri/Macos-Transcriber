@@ -1086,7 +1086,7 @@ nonisolated final class DictationController: @unchecked Sendable {
             preceding = nil
         }
         let payload = secret ? text : DictationText.forInsertion(text, spacing: settings.spacing, preceding: preceding)
-        switch TextInserter.insert(payload, restoreClipboard: settings.restoreClipboard || secret) {
+        switch TextInserter.insert(payload, restoreClipboard: settings.restoreClipboard || secret, secret: secret) {
         case .pasted:
             lastInsertion = LastInsertion(
                 target: .frontmostApp, inserted: payload, paneLength: 0,
@@ -1112,9 +1112,12 @@ nonisolated final class DictationController: @unchecked Sendable {
             while TextInserter.isPasteInFlight, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(50))
             }
-            if TextInserter.isPasteInFlight {
-                AppLog.warn("dictation", "scratch that → the paste is still pending, not removing")
+            if TextInserter.isPasteInFlight || TextInserter.lastQueuedWasDiverted {
+                // Pending, or never pasted at all (its app went away while it
+                // waited): Backspace would delete the user's own text.
+                AppLog.warn("dictation", "scratch that → the passage is not in the app, not removing")
                 lastText = ""
+                lastInsertion = nil
                 if final { finalMessage("Couldn't remove the last passage") }
                 return
             }

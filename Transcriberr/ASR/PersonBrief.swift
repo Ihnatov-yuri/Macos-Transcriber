@@ -446,11 +446,10 @@ nonisolated struct PersonBriefStore {
         let movingClosed = file.closed?.removeValue(forKey: source) ?? []
         guard !moving.isEmpty || !movingClosed.isEmpty else { return }
         let have = Set((file.people[target] ?? []).map(\.recordingId))
-        // Kept under no key: the target's name is on those lines now, so a
-        // refresh reads them again and carries the done marks onto the new read.
-        file.people[target, default: []] += moving.filter { !have.contains($0.recordingId) }.map {
-            Entry(recordingId: $0.recordingId, key: "", built: $0.built, brief: $0.brief)
-        }
+        // Kept with their keys: the key hashes the transcript with the
+        // person's own label masked, so lines renamed to the target read the
+        // same and nothing is sent to the model again after a merge.
+        file.people[target, default: []] += moving.filter { !have.contains($0.recordingId) }
         if !movingClosed.isEmpty {
             var closed = file.closed ?? [:]
             closed[target] = Array(Set((closed[target] ?? []) + movingClosed))

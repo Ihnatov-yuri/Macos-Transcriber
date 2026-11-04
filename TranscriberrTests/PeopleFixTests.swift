@@ -198,7 +198,7 @@ final class PeopleFixTests: XCTestCase {
         XCTAssertTrue(store.briefs.closed(for: k2.id).isEmpty)
         let moved = store.briefs.entries(for: k.id)
         XCTAssertEqual(moved.map(\.recordingId), [rec])
-        XCTAssertEqual(moved.first?.key, "", "read again under the new name, carrying the marks")
+        XCTAssertEqual(moved.first?.key, "k", "kept: the key masks the name, so no re-read after a merge")
         XCTAssertTrue(store.briefs.entries(for: k2.id).isEmpty)
         let p = try XCTUnwrap(store.load().first)
         XCTAssertEqual(p.provenance(of: "S1", in: rec), .invite, "provenance joins too")

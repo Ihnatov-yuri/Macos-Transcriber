@@ -95,7 +95,8 @@ final class RemainingFixTests: XCTestCase {
 
     func testDriverInstallVerifiesARootOwnedCopyBeforeReplacing() {
         let script = VirtualMicrophone.installScript(source: "/Applications/My App's.app/Contents/Resources/TranscriberrMic.driver",
-                                                     dest: "/Library/Audio/Plug-Ins/HAL/TranscriberrMic.driver")
+                                                     dest: "/Library/Audio/Plug-Ins/HAL/TranscriberrMic.driver", team: nil)
+        XCTAssertTrue(script.contains("/bin/chmod -R u-s,g-s,go-w"), "setuid/setgid bits are cleared")
         XCTAssertTrue(script.hasPrefix("T=$(/usr/bin/mktemp -d /private/var/tmp/"))
         XCTAssertTrue(script.contains("'/Applications/My App'\\''s.app/Contents/Resources/TranscriberrMic.driver'"),
                       "the source stays shell-quoted")
@@ -234,4 +235,15 @@ nonisolated private final class RFTCounter: @unchecked Sendable {
     private var n = 0
     func bump() { lock.lock(); n += 1; lock.unlock() }
     var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+
+    /// A team-signed app pins the driver to its own team; ad-hoc builds can
+    /// only check the identifier; a malformed team never reaches the shell.
+    func testDriverRequirementPinsTheTeam() {
+        XCTAssertEqual(VirtualMicrophone.driverRequirement(team: nil),
+                       "identifier \"nl.ihnatov.Transcriberr.MicDriver\"")
+        XCTAssertEqual(VirtualMicrophone.driverRequirement(team: "AB12CD34EF"),
+                       "anchor apple generic and certificate leaf[subject.OU] = \"AB12CD34EF\" and identifier \"nl.ihnatov.Transcriberr.MicDriver\"")
+        XCTAssertEqual(VirtualMicrophone.driverRequirement(team: "X\" or true"),
+                       "identifier \"nl.ihnatov.Transcriberr.MicDriver\"")
+    }
 }

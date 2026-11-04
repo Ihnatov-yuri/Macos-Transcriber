@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import AVFoundation
 import CoreAudio
+import Security
 import Synchronization
 
 /// The Transcriberr Microphone: Apple's echo filter on the real mic, passed
@@ -432,18 +433,45 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
     /// root can change what gets moved into /Library. A failed copy or
     /// signature check leaves the installed plug-in and coreaudiod as they
     /// were; the staging directory is removed either way.
-    static func installScript(source: String, dest: String) -> String {
+    static func installScript(source: String, dest: String, team: String? = ownTeamIdentifier()) -> String {
         let staged = "\"$T\"/TranscriberrMic.driver"
-        let requirement = shellQuoted("=identifier \"\(driverIdentifier)\"")
+        let requirement = shellQuoted("=" + driverRequirement(team: team))
         return "T=$(/usr/bin/mktemp -d /private/var/tmp/TranscriberrMic.XXXXXX) || exit 1; "
             + "/usr/bin/ditto \(shellQuoted(source)) \(staged)"
             + " && /usr/sbin/chown -R root:wheel \"$T\""
-            + " && /bin/chmod -R go-w \(staged)"
+            // No setuid/setgid bit survives into a root-owned bundle.
+            + " && /bin/chmod -R u-s,g-s,go-w \(staged)"
             + " && /usr/bin/codesign --verify --strict -R \(requirement) \(staged)"
             + " && /bin/rm -rf \(shellQuoted(dest))"
             + " && /bin/mv \(staged) \(shellQuoted(dest)); "
             + "S=$?; /bin/rm -rf \"$T\"; [ $S -eq 0 ] || exit $S; "
             + "/usr/bin/killall coreaudiod"
+    }
+
+    /// What the staged plug-in's signature must satisfy. Signed by a real
+    /// team (a Developer ID or Apple Development certificate), it must come
+    /// from the SAME team as this app, so a bundle re-signed by anyone else
+    /// is refused. Ad-hoc builds (no team) can only be held to the
+    /// identifier, which any re-signed bundle can claim: those need a
+    /// signing certificate to be safe (see scripts/package.sh).
+    static func driverRequirement(team: String?) -> String {
+        let id = "identifier \"\(driverIdentifier)\""
+        guard let team, !team.isEmpty, team.allSatisfy({ $0.isLetter || $0.isNumber }) else { return id }
+        return "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and \(id)"
+    }
+
+    /// The team identifier of this app's own code signature, or nil for an
+    /// ad-hoc or unsigned build.
+    static func ownTeamIdentifier() -> String? {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        var info: CFDictionary?
+        // kSecCSSigningInformation (1 << 1): include the certificate details.
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: 1 << 1), &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return nil }
+        return dict[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
     static func shellQuoted(_ s: String) -> String {

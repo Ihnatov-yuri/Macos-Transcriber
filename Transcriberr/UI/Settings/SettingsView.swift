@@ -42,6 +42,7 @@ struct EnginesSettingsTab: View {
     @AppStorage("ui.superGemmaRulings") private var gemmaRulings = "english"
     @Environment(AppContainer.self) private var container
     @AppStorage("ui.myName") private var myName = ""
+    @Environment(\.settingsFilter) private var filter
 
     private var audioEngines: [BackendFactory.Kind] {
         BackendFactory.Kind.allCases.filter(\.supportsAudio)
@@ -55,110 +56,140 @@ struct EnginesSettingsTab: View {
 
     var body: some View {
         Form {
-            Section {
-                TextField("My name", text: $myName, prompt: Text("e.g. Yuri"))
-            } header: {
-                Text("You")
-            } footer: {
-                Text("Meeting mode knows which voice came from your microphone — it labels that speaker with this name automatically.")
-            }
-            Section("Speech-to-text") {
-                EnginePicker(title: "Default engine", kinds: audioEngines, selection: Binding(
-                    get: { container.uiPrefs.defaultBackend },
-                    set: { container.uiPrefs.defaultBackend = $0 }
-                ))
-                Picker("Live captions engine", selection: Binding(
-                    get: { container.uiPrefs.liveEngine },
-                    set: { container.uiPrefs.liveEngine = $0 }
-                )) {
-                    ForEach(liveEngines, id: \.rawValue) { Text($0.displayName).tag($0) }
+            if filter.shows(.myName) {
+                Section {
+                    TextField("My name", text: $myName, prompt: Text("e.g. Yuri"))
+                } header: {
+                    Text("You")
+                } footer: {
+                    Text(SettingID.myName.help)
                 }
-                WhisperModelPickers()
-                Text("Whisper uses the first model when a recording's languages are English only, the second for anything else, auto-detect included. On the reference set, turbo compressed made English Super about 4x faster at the same accuracy; in Ukrainian every model but large-v3 lost 5-15 points. Speech models download automatically on first use: Parakeet v3/v2/UK (~0.6-1 GB each, Neural Engine) and the Whisper models picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models.")
-                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
-            Section("Super · dual-engine merge") {
-                EnginePicker(title: "Merge engine A", kinds: mergeOptions, selection: Binding(
-                    get: { container.uiPrefs.ensembleEngineA },
-                    set: { newValue in
-                        // Keep A ≠ B: picking B's engine swaps them.
-                        if newValue == container.uiPrefs.ensembleEngineB {
-                            container.uiPrefs.ensembleEngineB = container.uiPrefs.ensembleEngineA
+            if filter.showsAny(.defaultEngine, .liveEngine, .whisperModels) {
+                Section("Speech-to-text") {
+                    if filter.shows(.defaultEngine) {
+                        EnginePicker(title: "Default engine", kinds: audioEngines, selection: Binding(
+                            get: { container.uiPrefs.defaultBackend },
+                            set: { container.uiPrefs.defaultBackend = $0 }
+                        ))
+                    }
+                    if filter.shows(.liveEngine) {
+                        Picker("Live captions engine", selection: Binding(
+                            get: { container.uiPrefs.liveEngine },
+                            set: { container.uiPrefs.liveEngine = $0 }
+                        )) {
+                            ForEach(liveEngines, id: \.rawValue) { Text($0.displayName).tag($0) }
                         }
-                        container.uiPrefs.ensembleEngineA = newValue
                     }
-                ))
-                EnginePicker(title: "Merge engine B", kinds: mergeOptions, selection: Binding(
-                    get: { container.uiPrefs.ensembleEngineB },
-                    set: { newValue in
-                        if newValue == container.uiPrefs.ensembleEngineA {
-                            container.uiPrefs.ensembleEngineA = container.uiPrefs.ensembleEngineB
+                    if filter.shows(.whisperModels) {
+                        WhisperModelPickers()
+                        Text(SettingID.whisperModels.help)
+                            .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                    }
+                }
+            }
+            if filter.showsAny(.mergeEngines, .superMaxQuality, .meetingSuperFollowUp, .calendarContext, .recordingBrief, .textModelRulings) {
+                Section("Super · dual-engine merge") {
+                    if filter.shows(.mergeEngines) {
+                        EnginePicker(title: "Merge engine A", kinds: mergeOptions, selection: Binding(
+                            get: { container.uiPrefs.ensembleEngineA },
+                            set: { newValue in
+                                // Keep A ≠ B: picking B's engine swaps them.
+                                if newValue == container.uiPrefs.ensembleEngineB {
+                                    container.uiPrefs.ensembleEngineB = container.uiPrefs.ensembleEngineA
+                                }
+                                container.uiPrefs.ensembleEngineA = newValue
+                            }
+                        ))
+                        EnginePicker(title: "Merge engine B", kinds: mergeOptions, selection: Binding(
+                            get: { container.uiPrefs.ensembleEngineB },
+                            set: { newValue in
+                                if newValue == container.uiPrefs.ensembleEngineA {
+                                    container.uiPrefs.ensembleEngineA = container.uiPrefs.ensembleEngineB
+                                }
+                                container.uiPrefs.ensembleEngineB = newValue
+                            }
+                        ))
+                    }
+                    if filter.shows(.superMaxQuality) {
+                        Toggle("Max quality: arbitrate every disputed chunk with surrounding context + vocabulary", isOn: Binding(
+                            get: { container.uiPrefs.superMaxQuality },
+                            set: { container.uiPrefs.superMaxQuality = $0 }
+                        ))
+                    }
+                    if filter.shows(.meetingSuperFollowUp) {
+                        Toggle("Refine meetings with Super in the background", isOn: Binding(
+                            get: { container.uiPrefs.meetingSuperFollowUp },
+                            set: { container.uiPrefs.meetingSuperFollowUp = $0 }
+                        ))
+                        Text(SettingID.meetingSuperFollowUp.help)
+                            .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                    }
+                    if filter.shows(.calendarContext) {
+                        Toggle("Use the meeting's calendar invite", isOn: $meetingContext)
+                            .onChange(of: meetingContext) { _, on in
+                                if on { Task { _ = await MeetingContext.requestAccess(EKEventStore(), ask: true) } }
+                            }
+                        if meetingContext, EKEventStore.authorizationStatus(for: .event) == .denied {
+                            Text("Calendar access is off for Transcriberr. Turn it on in System Settings → Privacy & Security → Calendars.")
+                                .font(AppFont.text(12)).foregroundStyle(AppColor.statusError)
                         }
-                        container.uiPrefs.ensembleEngineB = newValue
+                        Text(SettingID.calendarContext.help)
+                            .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                     }
-                ))
-                Toggle("Max quality: arbitrate every disputed chunk with surrounding context + vocabulary", isOn: Binding(
-                    get: { container.uiPrefs.superMaxQuality },
-                    set: { container.uiPrefs.superMaxQuality = $0 }
-                ))
-                Toggle("Refine meetings with Super in the background", isOn: Binding(
-                    get: { container.uiPrefs.meetingSuperFollowUp },
-                    set: { container.uiPrefs.meetingSuperFollowUp = $0 }
-                ))
-                Text("When a meeting recording stops, the default engine writes a quick draft you can read at once; Super then runs in the background and replaces it when it finishes. The draft stays in VERSIONS.")
-                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-                Toggle("Use the meeting's calendar invite", isOn: $meetingContext)
-                    .onChange(of: meetingContext) { _, on in
-                        if on { Task { _ = await MeetingContext.requestAccess(EKEventStore(), ask: true) } }
+                    if filter.shows(.recordingBrief) {
+                        Toggle("The text model reads the whole transcript first (recording brief)", isOn: $meetingBrief)
+                        Text(SettingID.recordingBrief.help)
+                            .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                     }
-                if meetingContext, EKEventStore.authorizationStatus(for: .event) == .denied {
-                    Text("Calendar access is off for Transcriberr. Turn it on in System Settings → Privacy & Security → Calendars.")
-                        .font(AppFont.text(12)).foregroundStyle(AppColor.statusError)
-                }
-                Text("Before a recording is transcribed, the invite it was made in (its title, attendees and the names in its notes) and the names that recur in your earlier meetings with the same people become vocabulary for that run. Read from the Calendar app on this Mac; nothing leaves it.")
-                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-                Toggle("The text model reads the whole transcript first (recording brief)", isOn: $meetingBrief)
-                Text("A few extra reads (about a minute per hour of recording) give the text model the topic, the people and the names as spelled in this recording. Max-quality arbitration and the Clean / Context rewrite / Translate presets all use it, and a name spelled inconsistently is unified when the correction sounds the same.")
-                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-                Picker("Text model rules on disputed chunks", selection: $gemmaRulings) {
-                    Text("English runs (measured to help)").tag("english")
-                    Text("All languages").tag("all")
-                    Text("Never").tag("off")
-                }
-                Text("Both engines transcribe every chunk in parallel; disagreements are settled word by word by recognizer confidence. With Max quality on, the whole recording is also read at once (long-form Whisper, English stretches re-read in English, echo removed by timing). The text model's rulings on disputed chunks helped in English and hurt in Ukrainian when measured against checked transcripts, so by default they run for English only.")
-                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-            }
-            Section("Speaker turns") {
-                Picker("Turn granularity (diarized transcripts)", selection: Binding(
-                    get: { container.uiPrefs.turnCoalesceGapSeconds },
-                    set: { container.uiPrefs.turnCoalesceGapSeconds = $0 }
-                )) {
-                    Text("Smooth — readable blocks (default)").tag(30.0)
-                    Text("Balanced — split on 10 s pauses").tag(10.0)
-                    Text("Fine — keep every interjection").tag(2.0)
-                }
-                Text("How aggressively adjacent same-speaker segments merge into one turn. Fine matches phone-recorder granularity; applies to the next run.")
-                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-            }
-            Section("Languages by engine") {
-                LabeledContent("Parakeet v3", value: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk… (no Arabic/Asian)")
-                LabeledContent("Parakeet v2", value: "English only — best English accuracy")
-                LabeledContent("Ihnatov Parakeet UK", value: "Parakeet v3 fine-tuned for Ukrainian — keeps v3's English")
-                LabeledContent("Whisper", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese (distil-large-v3: English only)")
-                Text("Recommendations: English → Parakeet v3 (or v2). Ukrainian → Ihnatov Parakeet UK. Other European languages → Parakeet v3. Arabic → Whisper. Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge.")
-                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
-            }
-            Section("Post-processing") {
-                Picker("Text engine (summaries · cleanup · translation · titles)", selection: Binding(
-                    get: { container.uiPrefs.textEngine },
-                    set: { container.uiPrefs.textEngine = $0 }
-                )) {
-                    ForEach(BackendFactory.Kind.allCases.filter(\.supportsTextGeneration), id: \.rawValue) {
-                        Text($0.displayName).tag($0)
+                    if filter.shows(.textModelRulings) {
+                        Picker("Text model rules on disputed chunks", selection: $gemmaRulings) {
+                            Text("English runs (measured to help)").tag("english")
+                            Text("All languages").tag("all")
+                            Text("Never").tag("off")
+                        }
+                        Text(SettingID.textModelRulings.help)
+                            .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                     }
                 }
-                Text("The on-device model is picked in the Models tab; cloud engines need an API key. Preset prompt templates are editable in the Presets tab; transcription prompts in Prompts.")
-                    .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+            }
+            if filter.shows(.turnGranularity) {
+                Section("Speaker turns") {
+                    Picker("Turn granularity (diarized transcripts)", selection: Binding(
+                        get: { container.uiPrefs.turnCoalesceGapSeconds },
+                        set: { container.uiPrefs.turnCoalesceGapSeconds = $0 }
+                    )) {
+                        Text("Smooth — readable blocks (default)").tag(30.0)
+                        Text("Balanced — split on 10 s pauses").tag(10.0)
+                        Text("Fine — keep every interjection").tag(2.0)
+                    }
+                    Text(SettingID.turnGranularity.help)
+                        .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                }
+            }
+            if filter.shows(.engineLanguages) {
+                Section("Languages by engine") {
+                    LabeledContent("Parakeet v3", value: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk… (no Arabic/Asian)")
+                    LabeledContent("Parakeet v2", value: "English only — best English accuracy")
+                    LabeledContent("Ihnatov Parakeet UK", value: "Parakeet v3 fine-tuned for Ukrainian — keeps v3's English")
+                    LabeledContent("Whisper", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese (distil-large-v3: English only)")
+                    Text(SettingID.engineLanguages.help)
+                        .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                }
+            }
+            if filter.shows(.textEngine) {
+                Section("Post-processing") {
+                    Picker("Text engine (summaries · cleanup · translation · titles)", selection: Binding(
+                        get: { container.uiPrefs.textEngine },
+                        set: { container.uiPrefs.textEngine = $0 }
+                    )) {
+                        ForEach(BackendFactory.Kind.allCases.filter(\.supportsTextGeneration), id: \.rawValue) {
+                            Text($0.displayName).tag($0)
+                        }
+                    }
+                    Text(SettingID.textEngine.help)
+                        .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                }
             }
         }
         .formStyle(.grouped)
@@ -167,23 +198,31 @@ struct EnginesSettingsTab: View {
 
 struct ModelsSettingsTab: View {
     @Environment(AppContainer.self) private var container
+    @Environment(\.settingsFilter) private var filter
 
     var body: some View {
+        let text = filter.showsAny(.textModelPicks, .textModelComparison)
+        let speech = filter.shows(.speechModels)
+        let whisper = filter.shows(.whisperDownloads)
         VStack(alignment: .leading, spacing: AppMetric.m) {
             // Text models first: they are downloaded and picked by hand.
             // Speech models are managed automatically.
-            TextModelsSection()
-            Hairline()
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Speech-to-text — Parakeet v3/v2/UK (automatic)")
-                    .uiLabel(10, color: AppColor.ink2)
-                Text("Downloaded on first use (~0.6-1 GB each; Parakeet UK from huggingface.co/ihnatov-yuri) · cached in Application Support · engine choice in the Engines tab")
-                    .uiLabel(9, color: AppColor.ink3)
+            if text {
+                TextModelsSection()
             }
-            Hairline()
-
-            WhisperModelsSection()
+            if speech {
+                if text { Hairline() }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Speech-to-text — Parakeet v3/v2/UK (automatic)")
+                        .uiLabel(10, color: AppColor.ink2)
+                    Text("Downloaded on first use (~0.6-1 GB each; Parakeet UK from huggingface.co/ihnatov-yuri) · cached in Application Support · engine choice in the Engines tab")
+                        .uiLabel(9, color: AppColor.ink3)
+                }
+            }
+            if whisper {
+                if text || speech { Hairline() }
+                WhisperModelsSection()
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -196,6 +235,7 @@ struct ModelsSettingsTab: View {
 }
 
 struct RecorderSettingsTab: View {
+    @Environment(\.settingsFilter) private var filter
     @State private var settings = RecorderSettings.shared
     @State private var devices: [AudioInputDevices.Device] = []
     @State private var loopbacks: [AudioInputDevices.Device] = []
@@ -209,117 +249,135 @@ struct RecorderSettingsTab: View {
     }
 
     var body: some View {
+        let showMic = filter.shows(.microphone)
+        let showVoice = filter.shows(.voiceprint)
+        let showPeople = filter.shows(.people)
+        let showProcessing = filter.showsAny(.noiseSuppression, .echoFilter, .virtualMicrophone, .preprocessImports)
         VStack(alignment: .leading, spacing: AppMetric.m) {
-            VStack(alignment: .leading, spacing: 4) {
-                Picker("Microphone", selection: Binding(
-                    get: { settings.inputDeviceUID ?? "" },
-                    set: { settings.inputDeviceUID = $0.isEmpty ? nil : $0 }
-                )) {
-                    Text(systemDefault.map { "System default — \($0.name)" } ?? "System default")
-                        .tag("")
-                    Divider()
-                    ForEach(devices) { device in
-                        Text(device.isBluetooth ? "\(device.name) (Bluetooth)" : device.name)
-                            .tag(device.uid)
-                    }
-                    // Loopback drivers expose input channels, so they show up
-                    // in any device scan, but they capture what the Mac plays
-                    // rather than a room. Offered apart from real mics —
-                    // meeting mode already records system audio properly, via
-                    // a process tap.
-                    if !loopbacks.isEmpty {
+            if showMic {
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Microphone", selection: Binding(
+                        get: { settings.inputDeviceUID ?? "" },
+                        set: { settings.inputDeviceUID = $0.isEmpty ? nil : $0 }
+                    )) {
+                        Text(systemDefault.map { "System default — \($0.name)" } ?? "System default")
+                            .tag("")
                         Divider()
-                        Section("Loopback (records system audio, not a room)") {
-                            ForEach(loopbacks) { device in
-                                Text(device.name).tag(device.uid)
+                        ForEach(devices) { device in
+                            Text(device.isBluetooth ? "\(device.name) (Bluetooth)" : device.name)
+                                .tag(device.uid)
+                        }
+                        // Loopback drivers expose input channels, so they show up
+                        // in any device scan, but they capture what the Mac plays
+                        // rather than a room. Offered apart from real mics —
+                        // meeting mode already records system audio properly, via
+                        // a process tap.
+                        if !loopbacks.isEmpty {
+                            Divider()
+                            Section("Loopback (records system audio, not a room)") {
+                                ForEach(loopbacks) { device in
+                                    Text(device.name).tag(device.uid)
+                                }
                             }
                         }
                     }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: 420, alignment: .leading)
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 420, alignment: .leading)
 
-                if settings.inputDeviceUID != nil, AudioInputDevices.resolve(uid: settings.inputDeviceUID) == nil {
-                    Text("That microphone isn't connected — recording falls back to the system default until it comes back.")
-                        .font(AppFont.text(11))
-                        .foregroundStyle(AppColor.ink2)
-                } else if effective?.isBluetooth == true {
-                    Text("Recording from a Bluetooth mic drops that link to hands-free — mono, 16 kHz, for its playback too — for as long as capture is open.")
-                        .font(AppFont.text(11))
-                        .foregroundStyle(AppColor.ink2)
-                } else if AudioInputDevices.captureWouldDisturbBluetooth(uid: settings.inputDeviceUID) {
-                    Text("This mic has no output channels, so macOS still opens the system default input alongside it — and that default is Bluetooth, which drops to hands-free while recording. Nothing is opened when the app is just sitting there. Setting the system input to this mic too avoids it entirely.")
-                        .font(AppFont.text(11))
-                        .foregroundStyle(AppColor.ink2)
-                } else {
-                    Text("Used for dictation, plain recordings and the meeting recorder.")
-                        .font(AppFont.text(11))
-                        .foregroundStyle(AppColor.ink2)
-                }
-            }
-            .onAppear {
-                refreshDevices()
-                watcher.start { refreshDevices() }
-            }
-            .onDisappear { watcher.stop() }
-
-            Divider().frame(maxWidth: 520)
-
-            VoiceprintSection()
-
-            Divider().frame(maxWidth: 520)
-
-            PeopleSection()
-
-            Divider().frame(maxWidth: 520)
-
-            Text("Apple's voice-processing audio unit cleans up the input the same way FaceTime / Voice Memos do — echo cancellation, spectral noise suppression, AGC. Free and very effective.")
-                .font(AppFont.text(12))
-                .foregroundStyle(AppColor.ink2)
-                .frame(maxWidth: 520, alignment: .leading)
-
-            Toggle(isOn: Binding(
-                get: { settings.noiseSuppression },
-                set: { settings.noiseSuppression = $0 }
-            )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Noise suppression while recording")
-                        .font(AppFont.text(13, weight: .bold))
-                    Text("Recommended. Applied on the input node before each chunk is written. macOS turns other apps down slightly while it runs; they come back when the recording stops.")
-                        .font(AppFont.text(11))
-                        .foregroundStyle(AppColor.ink2)
+                    if settings.inputDeviceUID != nil, AudioInputDevices.resolve(uid: settings.inputDeviceUID) == nil {
+                        Text("That microphone isn't connected — recording falls back to the system default until it comes back.")
+                            .font(AppFont.text(11))
+                            .foregroundStyle(AppColor.ink2)
+                    } else if effective?.isBluetooth == true {
+                        Text("Recording from a Bluetooth mic drops that link to hands-free — mono, 16 kHz, for its playback too — for as long as capture is open.")
+                            .font(AppFont.text(11))
+                            .foregroundStyle(AppColor.ink2)
+                    } else if AudioInputDevices.captureWouldDisturbBluetooth(uid: settings.inputDeviceUID) {
+                        Text("This mic has no output channels, so macOS still opens the system default input alongside it — and that default is Bluetooth, which drops to hands-free while recording. Nothing is opened when the app is just sitting there. Setting the system input to this mic too avoids it entirely.")
+                            .font(AppFont.text(11))
+                            .foregroundStyle(AppColor.ink2)
+                    } else {
+                        Text("Used for dictation, plain recordings and the meeting recorder.")
+                            .font(AppFont.text(11))
+                            .foregroundStyle(AppColor.ink2)
+                    }
                 }
             }
 
-            Toggle(isOn: Binding(
-                get: { settings.meetingEchoFilter },
-                set: { settings.meetingEchoFilter = $0 }
-            )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Echo filter in meetings")
-                        .font(AppFont.text(13, weight: .bold))
-                    Text("Not needed for the transcript: Transcriberr removes the echo of the call from your mic itself. Apple's filter can silence your mic in Teams, so the other people can't hear you, and it drops short pieces of the recording. Off with headphones. Other apps play about 4 dB quieter while a meeting records.")
-                        .font(AppFont.text(11))
-                        .foregroundStyle(AppColor.ink2)
-                }
+            if showVoice {
+                if showMic { Divider().frame(maxWidth: 520) }
+                VoiceprintSection()
             }
 
-            VirtualMicrophoneSettings(settings: settings)
+            if showPeople {
+                if showMic || showVoice { Divider().frame(maxWidth: 520) }
+                PeopleSection()
+            }
 
-            Toggle(isOn: Binding(
-                get: { settings.preprocessImports },
-                set: { settings.preprocessImports = $0 }
-            )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Pre-process imported files")
-                        .font(AppFont.text(13, weight: .bold))
-                    Text("Runs the same cleanup over MP3 / M4A / WAV files before they are transcribed. Adds a few seconds to the decode step.")
-                        .font(AppFont.text(11))
+            if showProcessing {
+                if showMic || showVoice || showPeople { Divider().frame(maxWidth: 520) }
+
+                if filter.shows(.noiseSuppression) {
+                    Text("Apple's voice-processing audio unit cleans up the input the same way FaceTime / Voice Memos do — echo cancellation, spectral noise suppression, AGC. Free and very effective.")
+                        .font(AppFont.text(12))
                         .foregroundStyle(AppColor.ink2)
+                        .frame(maxWidth: 520, alignment: .leading)
+
+                    Toggle(isOn: Binding(
+                        get: { settings.noiseSuppression },
+                        set: { settings.noiseSuppression = $0 }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Noise suppression while recording")
+                                .font(AppFont.text(13, weight: .bold))
+                            Text(SettingID.noiseSuppression.help)
+                                .font(AppFont.text(11))
+                                .foregroundStyle(AppColor.ink2)
+                        }
+                    }
+
+                }
+                if filter.shows(.echoFilter) {
+                    Toggle(isOn: Binding(
+                        get: { settings.meetingEchoFilter },
+                        set: { settings.meetingEchoFilter = $0 }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Echo filter in meetings")
+                                .font(AppFont.text(13, weight: .bold))
+                            Text(SettingID.echoFilter.help)
+                                .font(AppFont.text(11))
+                                .foregroundStyle(AppColor.ink2)
+                        }
+                    }
+
+                }
+                if filter.shows(.virtualMicrophone) {
+                    VirtualMicrophoneSettings(settings: settings)
+
+                }
+                if filter.shows(.preprocessImports) {
+                    Toggle(isOn: Binding(
+                        get: { settings.preprocessImports },
+                        set: { settings.preprocessImports = $0 }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Pre-process imported files")
+                                .font(AppFont.text(13, weight: .bold))
+                            Text(SettingID.preprocessImports.help)
+                                .font(AppFont.text(11))
+                                .foregroundStyle(AppColor.ink2)
+                        }
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            refreshDevices()
+            watcher.start { refreshDevices() }
+        }
+        .onDisappear { watcher.stop() }
     }
 
     private func refreshDevices() {
@@ -390,8 +448,10 @@ private struct VirtualMicrophoneSettings: View {
 
 struct PromptsSettingsTab: View {
     @Environment(AppContainer.self) private var container
+    @Environment(\.settingsFilter) private var filter
     var body: some View {
         Form {
+            if filter.shows(.transcribePrompt) {
             Section("Transcribe") {
                 TextEditor(text: Binding(
                     get: { container.promptStore.transcribePrompt },
@@ -403,6 +463,8 @@ struct PromptsSettingsTab: View {
                 .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 100)
             }
+            }
+            if filter.shows(.translatePrompt) {
             Section("Translate") {
                 TextEditor(text: Binding(
                     get: { container.promptStore.translatePrompt },
@@ -410,6 +472,7 @@ struct PromptsSettingsTab: View {
                 ))
                 .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 100)
+            }
             }
         }
         .formStyle(.grouped)
@@ -613,8 +676,10 @@ struct PresetsSettingsTab: View {
 
 struct StyleSettingsTab: View {
     @Environment(AppContainer.self) private var container
+    @Environment(\.settingsFilter) private var filter
     var body: some View {
         Form {
+            if filter.shows(.tone) {
             Picker("Tone", selection: Binding(
                 get: { container.promptStore.tone },
                 set: { container.promptStore.tone = $0 }
@@ -623,6 +688,8 @@ struct StyleSettingsTab: View {
                     Text(t.rawValue.capitalized).tag(t)
                 }
             }
+            }
+            if filter.shows(.fillersVerbatim) {
             Toggle("Remove fillers", isOn: Binding(
                 get: { container.promptStore.removeFillers },
                 set: { container.promptStore.removeFillers = $0 }
@@ -631,6 +698,8 @@ struct StyleSettingsTab: View {
                 get: { container.promptStore.verbatim },
                 set: { container.promptStore.verbatim = $0 }
             ))
+            }
+            if filter.shows(.vocabulary) {
             Section("Vocabulary — all languages") {
                 TextEditor(text: Binding(
                     get: { container.promptStore.vocabulary },
@@ -638,17 +707,21 @@ struct StyleSettingsTab: View {
                 ))
                 .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 90)
-                Text("Applied to every run. Names that work in any language (people, companies).")
+                Text(SettingID.vocabulary.help)
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
+            }
+            if filter.shows(.vocabularyByLanguage) {
             Section("Vocabulary — per language") {
                 VocabularyByLanguageEditor()
-                Text("Injected only when a run's LANG matches — keeps Ukrainian runs free of English terms and vice versa.")
+                Text(SettingID.vocabularyByLanguage.help)
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             }
-            LearnedTermsSection()
-            LearnedChoicesSection()
-            BenchmarkSection()
+            }
+            if filter.shows(.learnedTerms) { LearnedTermsSection() }
+            if filter.shows(.learnedChoices) { LearnedChoicesSection() }
+            if filter.shows(.benchmark) { BenchmarkSection() }
+            if filter.shows(.domainPacks) {
             Section("Domain packs") {
                 ForEach(DomainVocabulary.Pack.allCases, id: \.self) { pack in
                     // TapButton — inline Button capturing @Observable container
@@ -659,6 +732,7 @@ struct StyleSettingsTab: View {
                         LitButtonChrome(.ghost, compact: true) { Text(pack.displayName) }
                     }
                 }
+            }
             }
         }
         .formStyle(.grouped)

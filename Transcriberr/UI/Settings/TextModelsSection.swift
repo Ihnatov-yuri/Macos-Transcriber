@@ -7,6 +7,7 @@ import SwiftUI
 struct TextModelsSection: View {
     @Environment(AppContainer.self) private var container
     @State private var showingInfo = false
+    @Environment(\.settingsFilter) private var filter
 
     static let ramGB = Int(ProcessInfo.processInfo.physicalMemory >> 30)
 
@@ -34,20 +35,29 @@ struct TextModelsSection: View {
                 .foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
 
-            pickers
-
-            ModelComparison(ramGB: Self.ramGB)
-
-            VStack(spacing: AppMetric.m) {
-                ForEach(ModelCatalog.entries) { entry in
-                    TextModelCard(entry: entry, roles: roles(of: entry), ramGB: Self.ramGB)
-                }
+            if filter.shows(.textModelPicks) {
+                pickers
             }
-            Text("Speed is words written per second on an M3 Pro (a token is about ¾ of an English word, less in Ukrainian). Quality is a blind test on real meetings and dictation, scored 1 to 5. Memory is what the model takes while it works; it is handed back three minutes after the last use.")
-                .font(AppFont.text(12))
-                .foregroundStyle(AppColor.ink3)
-                .fixedSize(horizontal: false, vertical: true)
+
+            if filter.shows(.textModelComparison) {
+                comparison
+            }
         }
+    }
+
+    @ViewBuilder
+    private var comparison: some View {
+        ModelComparison(ramGB: Self.ramGB)
+
+        VStack(spacing: AppMetric.m) {
+            ForEach(ModelCatalog.entries) { entry in
+                TextModelCard(entry: entry, roles: roles(of: entry), ramGB: Self.ramGB)
+            }
+        }
+        Text("Speed is words written per second on an M3 Pro (a token is about ¾ of an English word, less in Ukrainian). Quality is a blind test on real meetings and dictation, scored 1 to 5. Memory is what the model takes while it works; it is handed back three minutes after the last use.")
+            .font(AppFont.text(12))
+            .foregroundStyle(AppColor.ink3)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var pickers: some View {

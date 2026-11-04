@@ -93,6 +93,29 @@ final class RemainingFixTests: XCTestCase {
         XCTAssertFalse(MeetingRecorder.rateChanged(capture: 0, now: 44_100), "nothing captured yet")
     }
 
+    /// A rate change rebuilds the converters instead of ending the meeting;
+    /// the frame counter is re-expressed at the new rate so elapsed time
+    /// (frames / rate) does not jump.
+    func testMeetingFrameCountCarriesAcrossARateChange() {
+        XCTAssertEqual(MeetingRecorder.convertFrameCount(480_000, from: 48_000, to: 44_100), 441_000)
+        XCTAssertEqual(MeetingRecorder.convertFrameCount(441_000, from: 44_100, to: 96_000), 960_000)
+        XCTAssertEqual(MeetingRecorder.convertFrameCount(0, from: 48_000, to: 44_100), 0)
+        XCTAssertEqual(MeetingRecorder.convertFrameCount(1_000, from: 0, to: 44_100), 1_000, "unknown rate keeps the count")
+        let before = 123_457.0 / 48_000
+        let after = Double(MeetingRecorder.convertFrameCount(123_457, from: 48_000, to: 44_100)) / 44_100
+        XCTAssertEqual(before, after, accuracy: 1.0 / 44_100, "same elapsed time on both sides of the change")
+    }
+
+    func testMeetingConverterBuildsForCommonRates() throws {
+        for rate in [44_100.0, 48_000, 96_000] {
+            let conv = try XCTUnwrap(MeetingRecorder.makeConverter(nativeRate: rate))
+            XCTAssertEqual(conv.inputFormat.sampleRate, rate)
+            XCTAssertEqual(conv.outputFormat.sampleRate, 16_000)
+            XCTAssertEqual(conv.outputFormat.channelCount, 1)
+        }
+        XCTAssertNil(MeetingRecorder.makeConverter(nativeRate: 0))
+    }
+
     func testDriverInstallVerifiesARootOwnedCopyBeforeReplacing() {
         let script = VirtualMicrophone.installScript(source: "/Applications/My App's.app/Contents/Resources/TranscriberrMic.driver",
                                                      dest: "/Library/Audio/Plug-Ins/HAL/TranscriberrMic.driver", team: nil)

@@ -317,7 +317,8 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         listen(watchedAggregate, kAudioDevicePropertyDeviceIsAlive)
         // A rate change (Audio MIDI Setup, another app, a Bluetooth profile
         // switch) left the converters resampling from the old rate: the
-        // file sped up or slowed down with no sign of it.
+        // file sped up or slowed down with no sign of it. Now the
+        // converters are rebuilt for the new rate (`rebuildConverters`).
         listen(watchedMic, kAudioDevicePropertyNominalSampleRate)
         listen(watchedAggregate, kAudioDevicePropertyNominalSampleRate)
         listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
@@ -335,7 +336,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// has stopped (or is about to stop) delivering audio, and the screen
     /// would otherwise keep saying RECORDING over a file that no longer
     /// grows. Everything captured so far is flushed and closed; `stop()`
-    /// hands it back as usual.
+    /// hands it back as usual. A sample-rate change is not an ending: the
+    /// converters are rebuilt and the recording continues, unless that
+    /// rebuild fails.
     @MainActor
     private func handleDeviceChange() {
         guard isRunning, interruption == nil else { return }
@@ -344,8 +347,13 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             reason = "The microphone was disconnected"
         } else if !Self.isAlive(watchedAggregate) {
             reason = "The meeting audio device stopped"
-        } else if Self.rateChanged(capture: watchedRate, now: deviceSampleRate(watchedAggregate)) {
-            AppLog.warn("meeting", "aggregate rate moved from \(Int(watchedRate)) Hz to \(Int(deviceSampleRate(watchedAggregate) ?? 0)) Hz")
+        } else if let newRate = deviceSampleRate(watchedAggregate),
+                  Self.rateChanged(capture: watchedRate, now: newRate) {
+            // A rate change is survivable: rebuild the converters for the
+            // new rate and keep writing the same files. Only a rebuild that
+            // cannot be done ends the recording.
+            AppLog.warn("meeting", "aggregate rate moved from \(Int(watchedRate)) Hz to \(Int(newRate)) Hz — rebuilding converters")
+            if rebuildConverters(forRate: newRate) { return }
             reason = "The audio device changed its sample rate"
         } else {
             return
@@ -368,6 +376,72 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     nonisolated static func rateChanged(capture: Double, now: Double?) -> Bool {
         guard capture > 0, let now, now > 0 else { return false }
         return abs(now - capture) >= 1
+    }
+
+    /// A frame count captured at `oldRate`, expressed at `newRate` — the
+    /// same span of time. `framesSeen` is counted at the capture rate and
+    /// every timestamp (elapsed time, the me-timeline) divides it by that
+    /// rate, so on a rate change it is re-expressed at the new one and the
+    /// timeline continues instead of jumping. A non-positive rate leaves
+    /// the count as it is.
+    nonisolated static func convertFrameCount(_ frames: Int64, from oldRate: Double, to newRate: Double) -> Int64 {
+        guard oldRate > 0, newRate > 0, frames > 0 else { return frames }
+        return Int64((Double(frames) * newRate / oldRate).rounded())
+    }
+
+    /// Native-rate mono → 16 kHz mono converter, the one every output
+    /// (mix and both tracks) is written through. Nil when AVFoundation
+    /// cannot build it for this rate.
+    nonisolated static func makeConverter(nativeRate: Double) -> AVAudioConverter? {
+        guard nativeRate > 0,
+              let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                         channels: 1, interleaved: false),
+              let nativeMono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: nativeRate,
+                                             channels: 1, interleaved: false),
+              let conv = AVAudioConverter(from: nativeMono, to: target)
+        else { return nil }
+        conv.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
+        conv.sampleRateConverterQuality = AVAudioQuality.high.rawValue
+        return conv
+    }
+
+    /// The aggregate now delivers `newRate`: swap in converters built for
+    /// it, the way WavRecorder's configuration-change handling does. The
+    /// converters are built here (not on the IO thread); the swap runs on
+    /// `ioQueue` between two IO callbacks — the old converters' tails are
+    /// flushed into the files first, `framesSeen` is re-expressed at the
+    /// new rate, and the same files keep growing at their fixed 16 kHz.
+    /// False when a converter cannot be built (the caller then stops the
+    /// recording cleanly).
+    @MainActor
+    private func rebuildConverters(forRate newRate: Double) -> Bool {
+        guard let mix = Self.makeConverter(nativeRate: newRate),
+              let mic = Self.makeConverter(nativeRate: newRate),
+              let sys = Self.makeConverter(nativeRate: newRate) else {
+            AppLog.error("meeting", "cannot build converters for \(Int(newRate)) Hz — stopping the recording")
+            return false
+        }
+        let oldRate = ioQueue.sync { () -> Double in
+            let io = self.io
+            // Capture already finished (an interruption or Stop got there
+            // first): nothing to rebuild, nothing to stop.
+            guard io.audioFile != nil else { return 0 }
+            let old = io.nativeRate
+            self.flushConverterTail(feedLive: true)
+            self.flushTrackTail(converter: io.micConverter, file: io.micFile)
+            self.flushTrackTail(converter: io.sysConverter, file: io.sysFile)
+            io.converter = mix
+            io.micConverter = io.micFile == nil ? nil : mic
+            io.sysConverter = io.sysFile == nil ? nil : sys
+            io.framesSeen = Self.convertFrameCount(io.framesSeen, from: old, to: newRate)
+            io.nativeRate = newRate
+            io.voiceMic?.setTargetRate(newRate)
+            return old
+        }
+        guard oldRate > 0 else { return true }
+        watchedRate = newRate
+        AppLog.info("meeting", "converters rebuilt \(Int(oldRate)) Hz → \(Int(newRate)) Hz — recording continues into the same files")
+        return true
     }
 
     /// Whether a device still exists and runs. An unknown ID (nothing to
@@ -477,14 +551,10 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         guard
             let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
                                        channels: 1, interleaved: false),
-            let nativeMono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: nativeRate,
-                                           channels: 1, interleaved: false),
-            let conv = AVAudioConverter(from: nativeMono, to: target)
+            let conv = Self.makeConverter(nativeRate: nativeRate)
         else {
             throw MeetingError.coreAudio("Audio converter setup", -1)
         }
-        conv.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
-        conv.sampleRateConverterQuality = AVAudioQuality.high.rawValue
 
         let dir = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -497,14 +567,10 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         fileURL = url
         let file = try AVAudioFile(forWriting: url, settings: target.settings,
                                    commonFormat: .pcmFormatFloat32, interleaved: false)
-        guard let mConv = AVAudioConverter(from: nativeMono, to: target),
-              let sConv = AVAudioConverter(from: nativeMono, to: target) else {
+        guard let mConv = Self.makeConverter(nativeRate: nativeRate),
+              let sConv = Self.makeConverter(nativeRate: nativeRate) else {
             throw MeetingError.coreAudio("Track converter setup", -1)
         }
-        mConv.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
-        mConv.sampleRateConverterQuality = AVAudioQuality.high.rawValue
-        sConv.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
-        sConv.sampleRateConverterQuality = AVAudioQuality.high.rawValue
         let mFile = try AVAudioFile(
             forWriting: dir.appendingPathComponent(base + ".mic.wav"),
             settings: target.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
@@ -812,7 +878,11 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         if status != .error, outBuf.frameLength > 0 { try? file.write(from: outBuf) }
     }
 
-    private func flushConverterTail() {
+    /// Drain the mix converter's filter delay into the file. `feedLive`
+    /// also hands those samples to the live-caption chunker — for a
+    /// mid-meeting converter swap, where the chunk timeline must keep
+    /// matching the file; at Stop the feed is being closed anyway.
+    private func flushConverterTail(feedLive: Bool = false) {
         guard let converter = io.converter, let audioFile = io.audioFile else { return }
         let outCap: AVAudioFrameCount = 4096
         guard let outBuf = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
@@ -824,6 +894,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         }
         if status != .error, outBuf.frameLength > 0 {
             try? audioFile.write(from: outBuf)
+            if feedLive, let p = outBuf.floatChannelData?[0] {
+                appendToChunkBuffer(Array(UnsafeBufferPointer(start: p, count: Int(outBuf.frameLength))))
+            }
         }
     }
 

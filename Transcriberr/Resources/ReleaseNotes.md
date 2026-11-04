@@ -6,6 +6,16 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.3.0
+- Built in Swift 6 language mode: data races and audio-thread crashes found by the stricter compiler are fixed.
+- Dictate links (transcriberr://dictate) only write to the Dictate screen, and a Settings switch turns them off.
+- Passwords never go to a cloud engine and never stay on the clipboard; links in model output open only web and mail addresses.
+- People: honest talk time, where each name came from, a "Confirmed only" filter, names you set are never overwritten, Undo for Done, faster pages.
+- Calendar picks the invite that matches the recording, not the one with the longest overlap.
+- Voice enrollment accepts speech without pauses.
+- A sample-rate change in the middle of a meeting no longer breaks the recording.
+- About a hundred smaller fixes across speech, audio, export, merge and split, fonts and the command line.
+
 ## 5.2.2
 - Super no longer pads a short line with earlier parts of the conversation. When the combined reading comes out much longer than either engine's reading, Super keeps the better engine's text instead.
 

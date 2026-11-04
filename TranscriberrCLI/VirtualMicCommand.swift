@@ -29,7 +29,7 @@ func cmdVirtualMic(_ args: [String]) async -> Int32 {
 
     // The tone, indexed by the plug-in's sample time (both devices share
     // one timeline): 100 ms on, 100 ms off, -20 dBFS peak.
-    final class Box: @unchecked Sendable {
+    nonisolated final class Box: @unchecked Sendable {
         let lock = NSLock()
         var recorded: [(time: Int, samples: [Float], host: UInt64)] = []
         var written: [(time: Int, count: Int, host: UInt64)] = []
@@ -38,13 +38,13 @@ func cmdVirtualMic(_ args: [String]) async -> Int32 {
     let tone = probeTone
 
     var feedProc: AudioDeviceIOProcID?
-    var status = AudioDeviceCreateIOProcIDWithBlock(&feedProc, feed, nil) { now, _, _, out, outTime in
+    var status = AudioDeviceCreateIOProcIDWithBlock(&feedProc, feed, nil) { @Sendable now, _, _, out, outTime in
         let list = UnsafeMutableAudioBufferListPointer(out)
         guard let b = list.first, let data = b.mData else { return }
         let n = Int(b.mDataByteSize) / 4
         let t0 = Int(outTime.pointee.mSampleTime)
         let p = data.assumingMemoryBound(to: Float.self)
-        for i in 0..<n { p[i] = tone(t0 + i) }
+        for i in 0..<n { p[i] = probeTone(t0 + i) }
         box.lock.lock()
         box.written.append((t0, n, now.pointee.mHostTime))
         box.lock.unlock()
@@ -71,7 +71,7 @@ func cmdVirtualMic(_ args: [String]) async -> Int32 {
     print("left out of Transcriberr's own input list: \(!listed)")
 
     var micProc: AudioDeviceIOProcID?
-    status = AudioDeviceCreateIOProcIDWithBlock(&micProc, mic, nil) { now, input, inTime, _, _ in
+    status = AudioDeviceCreateIOProcIDWithBlock(&micProc, mic, nil) { @Sendable now, input, inTime, _, _ in
         let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         guard let b = list.first, let data = b.mData else { return }
         let n = Int(b.mDataByteSize) / 4
@@ -157,10 +157,10 @@ private func virtualMicLive(_ seconds: Double) async -> Int32 {
     let mic = VirtualMicrophone.deviceID(forUID: VirtualMicrophone.micUID)
     guard mic != kAudioObjectUnknown else { print("FAIL: no microphone device"); return 1 }
 
-    final class Box: @unchecked Sendable { let lock = NSLock(); var samples: [Float] = [] }
+    nonisolated final class Box: @unchecked Sendable { let lock = NSLock(); var samples: [Float] = [] }
     let box = Box()
     var proc: AudioDeviceIOProcID?
-    AudioDeviceCreateIOProcIDWithBlock(&proc, mic, nil) { _, input, _, _, _ in
+    AudioDeviceCreateIOProcIDWithBlock(&proc, mic, nil) { @Sendable _, input, _, _, _ in
         let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         guard let b = list.first, let data = b.mData else { return }
         let p = data.assumingMemoryBound(to: Float.self)

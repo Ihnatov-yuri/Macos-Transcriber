@@ -6,6 +6,9 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.3.1
+- Echo removal keeps working on calls where you do most of the talking. Before, the cleaned microphone track could be thrown away and the other side's words transcribed as yours.
+
 ## 5.3.0
 - Built in Swift 6 language mode: data races and audio-thread crashes found by the stricter compiler are fixed.
 - Dictate links (transcriberr://dictate) only write to the Dictate screen, and a Settings switch turns them off.

@@ -308,6 +308,42 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertLessThan(loud.micEchoDB, 12, "a mic that is mostly the user")
     }
 
+    /// Regression (2026-11-04, the e2e meeting fixture): the user talks three
+    /// quarters of the time and the far side comes back at -6 dB. Echo is a
+    /// small share of the whole mic, so whole-track ERLE stays under 0.5 dB
+    /// even with every echo stretch muted, and the do-no-harm guard used to
+    /// hand back the raw mic, far side and all.
+    func testEchoCancellerKeepsCleanedMicWhenUserDominates() {
+        let sr = 16_000
+        var rng: UInt64 = 11
+        func rand() -> Float {
+            rng = rng &* 6364136223846793005 &+ 1442695040888963407
+            return Float(Int64(bitPattern: rng >> 12) % 1000) / 1000.0 * 0.3 - 0.15
+        }
+        let cycle = sr * 12, cycles = 4
+        let n = cycle * cycles
+        var sys = [Float](repeating: 0, count: n)
+        var mic = [Float](repeating: 0, count: n)
+        var echoSpans: [Range<Int>] = []
+        var sm: Float = 0, u: Float = 0
+        for c in 0..<cycles {
+            let s = c * cycle
+            for i in s..<(s + sr * 9) { u = 0.7 * u + 0.3 * rand(); mic[i] = u }        // the user, 9 s
+            for i in (s + sr * 9)..<(s + cycle) { sm = 0.7 * sm + 0.3 * rand(); sys[i] = sm }   // far side, 3 s
+            echoSpans.append((s + sr * 9 + 3200)..<(s + cycle))
+        }
+        let d = 2400                                                                   // 150 ms
+        for i in 0..<(n - d) { mic[i + d] += 0.5 * sys[i] }
+        let r = EchoCanceller.cancelDetailed(mic: mic, ref: sys)
+        XCTAssertEqual(r.outcome, .cancelled)
+        XCTAssertLessThan(r.micEchoDB, 0.5, "the fixture must reproduce the low whole-track figure")
+        var before = 0.0, after = 0.0
+        for span in echoSpans.dropFirst() {
+            for i in span { before += Double(mic[i] * mic[i]); after += Double(r.samples[i] * r.samples[i]) }
+        }
+        XCTAssertGreaterThan(10 * log10(before / max(after, 1e-12)), 10, "echo-only stretches lose at least 10 dB")
+    }
+
     /// Regression: a call whose first minute is silence — nobody has joined
     /// yet — used to poison the bulk-delay search, which only ever looked at
     /// the first 60 s. The junk lag parked the 64 ms tap window far from the

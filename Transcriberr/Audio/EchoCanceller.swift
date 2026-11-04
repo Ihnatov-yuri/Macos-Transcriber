@@ -377,10 +377,16 @@ nonisolated enum EchoCanceller {
         AppLog.info("aec", String(format: "NLMS done: n=%d, search window @%.0fs, corr %.3f, delay=%d smp (%.0f ms), ERLE %.1f dB%@",
                                   n, Double(l.searchStart) / 16_000.0, l.bestCorr, delay, Double(delay) / 16.0, erle,
                                   guide == nil ? "" : " (voice-print guided)"))
-        // Do no harm: if subtraction didn't reduce energy, there was no echo
-        // to cancel (post-v1.7 tracks are gate-cleaned at capture) — keep the
-        // original rather than inject filter noise.
-        guard erle > 0.5 else {
+        // Do no harm: a cleaned track louder than the raw mic means the filter
+        // added noise, so keep the original. Only "louder", not "less than
+        // 0.5 dB quieter" as before: by now the linear stage has measured a
+        // real echo path over the far side's own seconds (`minLinearERLE`),
+        // and this whole-track figure mostly says how much of the mic is the
+        // user. With the user talking three quarters of the time over a
+        // -6 dB echo it read 0.4 dB with every echo stretch muted, and the raw
+        // mic, far side included, went back to the ASR (the e2e meeting
+        // fixture, 2026-11-04). Real calls in the log ran as low as 1.1 dB.
+        guard erle > 0 else {
             AppLog.info("aec", "no echo to cancel — keeping original mic track")
             return (mic, .noEcho, echoDelay, 0)
         }

@@ -15,63 +15,6 @@ import os
 ///  4. Parse per-line speaker labels + assemble RawSegments
 ///
 /// Returns `AsyncThrowingStream<ASREvent>` (swap of Kotlin's `channelFlow`).
-/// One-shot race between the three ways a chunk can end — inference
-/// finishing, the deadline expiring, and the whole job being cancelled.
-/// Whoever settles first delivers the result; every later attempt is
-/// dropped. Holding the continuation here (rather than in a bare
-/// first-wins flag) is what lets the cancellation handler, which never sees
-/// the continuation itself, unblock the caller.
-nonisolated private final class ChunkRace<T: Sendable>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cont: CheckedContinuation<T, Error>?
-    private var work: Task<Void, Never>?
-    private var settled = false
-    /// A result that arrived before the continuation was installed — the
-    /// cancellation handler can fire that early.
-    private var pending: Result<T, Error>?
-
-    func attach(_ c: CheckedContinuation<T, Error>) {
-        lock.lock()
-        if let p = pending {
-            pending = nil
-            lock.unlock()
-            c.resume(with: p)
-            return
-        }
-        cont = c
-        lock.unlock()
-    }
-
-    func setWork(_ t: Task<Void, Never>) {
-        lock.lock()
-        let alreadyOver = settled
-        work = t
-        lock.unlock()
-        if alreadyOver { t.cancel() }
-    }
-
-    func settle(_ result: Result<T, Error>) {
-        lock.lock()
-        if settled { lock.unlock(); return }
-        settled = true
-        let c = cont
-        cont = nil
-        if c == nil { pending = result }
-        lock.unlock()
-        c?.resume(with: result)
-    }
-
-    /// Best-effort: a native inference call already inside MLX/LiteRT may
-    /// ignore this and run to completion — but it stops being something the
-    /// caller waits on.
-    func cancelWork() {
-        lock.lock()
-        let t = work
-        lock.unlock()
-        t?.cancel()
-    }
-}
-
 nonisolated final class TranscriptionRunner: @unchecked Sendable {
     static let chunkTimeoutSeconds: TimeInterval = 120
     /// Wedge recoveries observed in the current run (drives Gemma probation).
@@ -1719,53 +1662,18 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         }
     }
 
-    /// Run `op` with a wall-clock deadline. MLX inference doesn't cooperate
-    /// with Swift cancellation (it blocks its worker thread), so both sides
-    /// run as detached tasks racing on a first-wins continuation.
-    ///
-    /// NOT a task group: a group must await ALL children before returning, so
-    /// a detached 120 s deadline child pinned every chunk to the full timeout
-    /// even when inference finished in 0.25 s — the runner was sleeping
-    /// 99.8% of the time with Parakeet. The continuation returns the moment
-    /// the winner resumes it; the loser's late resume attempt is dropped by
-    /// the claim flag.
+    /// Run `op` with a wall-clock deadline: `ASRError.chunkTimeout` after
+    /// `seconds`, `CancellationError` when the job is cancelled. MLX
+    /// inference doesn't cooperate with Swift cancellation (it blocks its
+    /// worker thread), so `Deadline.run` races detached tasks instead of a
+    /// task group — a group would pin every chunk to the full timeout, and
+    /// a Cancel would otherwise leave abandoned inference holding the
+    /// ANE/GPU while the next queued job waited.
     private func withChunkTimeout<T: Sendable>(
         seconds: TimeInterval,
         _ op: @Sendable @escaping () async throws -> T
     ) async throws -> T {
-        let race = ChunkRace<T>()
-        // A DETACHED task inherits nothing from its parent — cancellation
-        // included. Without this handler, Cancel resumed nobody: the consumer
-        // walked away, the job manager started the NEXT queued job, and up to
-        // three abandoned inference tasks kept the ANE/GPU busy for as long as
-        // the two-minute deadline while the new job sat at "Queued…" with no
-        // explanation. The same stall followed any thrown error in the
-        // pipeline group, which must await children it could not cancel.
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
-                race.attach(cont)
-                // The deadline goes first so the work can cancel it: a 0.3 s
-                // chunk used to leave a task asleep for the full two minutes.
-                let deadline = Task.detached(priority: .utility) {
-                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                    guard !Task.isCancelled else { return }
-                    race.cancelWork()
-                    race.settle(.failure(ASRError.chunkTimeout))
-                }
-                let work = Task.detached(priority: .userInitiated) {
-                    do {
-                        race.settle(.success(try await op()))
-                    } catch {
-                        race.settle(.failure(error))
-                    }
-                    deadline.cancel()
-                }
-                race.setWork(work)
-            }
-        } onCancel: {
-            race.cancelWork()
-            race.settle(.failure(CancellationError()))
-        }
+        try await Deadline.run(seconds: seconds, timeoutError: ASRError.chunkTimeout, op)
     }
 
     // MARK: - Segment parsing

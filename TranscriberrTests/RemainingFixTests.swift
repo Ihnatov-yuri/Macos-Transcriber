@@ -250,14 +250,6 @@ final class RemainingFixTests: XCTestCase {
         XCTAssertEqual(rec.audioPath, scratch.appendingPathComponent("a.m4a").path)
         XCTAssertEqual(repo.healMissingAudioPaths(), 0, "nothing left to heal")
     }
-}
-
-/// Counts notifications delivered on any thread.
-nonisolated private final class RFTCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var n = 0
-    func bump() { lock.lock(); n += 1; lock.unlock() }
-    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
 
     /// A team-signed app pins the driver to its own team; ad-hoc builds can
     /// only check the identifier; a malformed team never reaches the shell.
@@ -269,4 +261,13 @@ nonisolated private final class RFTCounter: @unchecked Sendable {
         XCTAssertEqual(VirtualMicrophone.driverRequirement(team: "X\" or true"),
                        "identifier \"nl.ihnatov.Transcriberr.MicDriver\"")
     }
+}
+
+/// Counts notifications delivered on any thread.
+nonisolated private final class RFTCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func bump() { lock.lock(); n += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+
 }

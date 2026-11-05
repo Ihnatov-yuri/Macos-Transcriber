@@ -8,6 +8,8 @@ struct TranscriberrApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
+        // One window: the system's tab items in the View menu do nothing here.
+        NSWindow.allowsAutomaticWindowTabbing = false
         FontLoader.registerBundledFonts()
         AppLog.bootBanner()
         AppLog.info("app", "log file: \(AppLog.logFileURL.path)")

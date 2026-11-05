@@ -280,16 +280,28 @@ struct DetailView: View {
                                 }
                                 Divider()
                             }
+                            Button(named ? "Rename\u{2026}" : "Name them\u{2026}") {
+                                namingQueue = []
+                                renamingSpeaker = entry.key
+                            }
+                            if named { Button("Mark their lines") { focus = entry.display } }
+                            Button("Copy their lines") { copySpeakerLines(entry.key) }
                             // The last 10% of diarization errors are fixed by
                             // a human in two clicks, not by a better clusterer.
-                            ForEach(speakers.filter { $0.key != entry.key }, id: \.key) { other in
-                                Button("Same person as \(other.display)") {
-                                    guard let repo = model?.container.repository else { return }
-                                    try? repo.mergeSpeakers(
-                                        entry.key, into: other.key, in: recording)
-                                    // As the sheet's "Same person as…": the
-                                    // transcript file must not keep two speakers.
-                                    try? TranscriptExporter.export(recording: recording)
+                            let others = speakers.filter { $0.key != entry.key }
+                            if !others.isEmpty {
+                                Divider()
+                                Menu("Same person as") {
+                                    ForEach(others, id: \.key) { other in
+                                        Button(other.display) {
+                                            guard let repo = model?.container.repository else { return }
+                                            try? repo.mergeSpeakers(
+                                                entry.key, into: other.key, in: recording)
+                                            // As the sheet's "Same person as…": the
+                                            // transcript file must not keep two speakers.
+                                            try? TranscriptExporter.export(recording: recording)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -505,27 +517,14 @@ struct DetailView: View {
         }
     }
 
-    private func renameRecordingPrompt() {
-        let alert = NSAlert()
-        alert.messageText = "Rename recording"
-        alert.informativeText = ""
-        let field = NSTextField(string: recording.title)
-        field.frame = NSRect(x: 0, y: 0, width: 280, height: 22)
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            let new = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !new.isEmpty {
-                recording.title = new
-                // Explicit save + backup: main-context autosave would get
-                // there eventually, but the file shadow only refreshes on
-                // repository writes — a manual rename never reached it.
-                try? recording.modelContext?.save()
-                BackupService.backupRecording(recording)
-            }
-        }
+    private func copySpeakerLines(_ key: String) {
+        let lines = recording.segments.filter { $0.speaker == key }
+            .sorted { $0.startSeconds < $1.startSeconds }.map(\.text)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }
+
+    private func renameRecordingPrompt() { RecordingRename.prompt(recording) }
 
     // MARK: - Top row
 
@@ -1070,6 +1069,11 @@ struct DetailView: View {
                 runStage: model.status?.stage,
                 backgroundRun: model.status?.background ?? false,
                 onEditSegment: { editingSegment = $0 },
+                onFocusSpeaker: { focus = $0 },
+                onSplitHere: { seconds in
+                    model.container.audioPlayer.seek(to: seconds)
+                    showingSplit = true
+                },
                 speakerChoices: uniqueSpeakers(),
                 peopleNames: peopleNames,
                 onTag: { seg, choice in tag(seg, choice) },
@@ -1270,6 +1274,10 @@ struct TranscriptPane: View {
     var runStage: String? = nil
     var backgroundRun: Bool = false
     var onEditSegment: (Segment) -> Void = { _ in }
+    var onFocusSpeaker: (String) -> Void = { _ in }
+    var onSplitHere: (Double) -> Void = { _ in }
+    /// The line a long press opened its actions on.
+    @State private var pressedLine: UUID?
     /// Who said a line, picked on the line itself (its speaker name is a
     /// menu, and so is a right-click on it).
     enum TagChoice { case speaker(String), name(String), someoneElse, clear }
@@ -1606,16 +1614,73 @@ struct TranscriptPane: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { player.seek(to: seg.startSeconds) }
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in onEditSegment(seg) })
-        .contextMenu {
-            tagMenu(seg)
-            Divider()
-            Button("Copy line") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(style.apply(seg.text), forType: .string)
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in pressedLine = seg.id })
+        // Long press and right-click offer the same actions.
+        .popover(isPresented: Binding(get: { pressedLine == seg.id },
+                                      set: { if !$0 { pressedLine = nil } }), arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(lineActions(seg).enumerated()), id: \.offset) { index, group in
+                    if index > 0 { HairlineSoft() }
+                    ForEach(group) { action in
+                        TapButton {
+                            pressedLine = nil
+                            action.run()
+                        } label: {
+                            Text(action.title)
+                                .font(AppFont.text(13))
+                                .foregroundStyle(AppColor.ink)
+                                .padding(.horizontal, 12).padding(.vertical, 7)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                    }
+                }
+                HairlineSoft()
+                Menu("Who said this?") { tagMenu(seg) }
+                    .menuStyle(.borderlessButton)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
             }
-            Button("Edit text…") { onEditSegment(seg) }
+            .frame(width: 240)
+            .padding(.vertical, 4)
         }
+        .contextMenu {
+            ForEach(Array(lineActions(seg).enumerated()), id: \.offset) { index, group in
+                if index > 0 { Divider() }
+                ForEach(group) { action in Button(action.title, action: action.run) }
+            }
+            Divider()
+            Menu("Who said this?") { tagMenu(seg) }
+        }
+    }
+
+    private struct LineAction: Identifiable {
+        let title: String
+        let run: () -> Void
+        var id: String { title }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// What a transcript line offers, in groups.
+    private func lineActions(_ seg: Segment) -> [[LineAction]] {
+        let who = seg.speakerName.flatMap { SpeakerLabel.isPlaceholder($0) || $0.isEmpty ? nil : $0 }
+        let shown = seg.speaker.map { SpeakerLabel.display(seg.speakerName, key: $0) } ?? seg.speakerName
+        var copying = [LineAction(title: "Copy line") { copy(style.apply(seg.text)) }]
+        copying.append(LineAction(title: "Copy with speaker and time") {
+            let head = [timestamp(seg.startSeconds), shown].compactMap { $0 }.joined(separator: " ")
+            copy("\(head): \(style.apply(seg.text))")
+        })
+        var finding: [LineAction] = []
+        if let who, focusName != who {
+            finding.append(LineAction(title: "Mark \(who)'s lines") { onFocusSpeaker(who) })
+        }
+        finding.append(LineAction(title: "Split recording here…") { onSplitHere(seg.startSeconds) })
+        return [[LineAction(title: "Play from here") { player.seek(to: seg.startSeconds); player.play() },
+                 LineAction(title: "Edit text…") { onEditSegment(seg) }],
+                copying, finding]
     }
 
     /// "Lana's lines are marked": how many, and a way to step through them
@@ -1985,5 +2050,31 @@ private extension View {
     /// The transcript's view toggles are 9pt text: room to click them.
     func viewToggleTarget() -> some View {
         padding(.vertical, 10).padding(.horizontal, 2).contentShape(Rectangle())
+    }
+}
+
+/// The one rename dialog, from the detail page and from a Library row.
+enum RecordingRename {
+    @MainActor
+    static func prompt(_ recording: Recording) {
+        let alert = NSAlert()
+        alert.messageText = "Rename recording"
+        alert.informativeText = ""
+        let field = NSTextField(string: recording.title)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 22)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            let new = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !new.isEmpty {
+                recording.title = new
+                // Explicit save + backup: main-context autosave would get
+                // there eventually, but the file shadow only refreshes on
+                // repository writes — a manual rename never reached it.
+                try? recording.modelContext?.save()
+                BackupService.backupRecording(recording)
+            }
+        }
     }
 }

@@ -145,6 +145,13 @@ private struct ModelComparison: View {
         let text: (ModelEntry) -> String
     }
 
+    /// Closed until asked for: the cards below say what most people need.
+    @AppStorage("settings.compareOpen") private var open = false
+    @Environment(\.settingsFilter) private var filter
+    /// A search that found the comparison shows it.
+    @State private var closedInSearch = false
+    private var isOpen: Bool { filter.isSearching ? !closedInSearch : open }
+
     private var measures: [Measure] {
         let speedMax = ModelCatalog.entries.map { Swift.max($0.measured.cleanupTokensPerSecond, $0.measured.summaryTokensPerSecond) }.max() ?? 1
         return [
@@ -163,18 +170,32 @@ private struct ModelComparison: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppMetric.m) {
-            HStack(spacing: AppMetric.l) {
+            TapButton {
+                if filter.isSearching { closedInSearch.toggle() } else { open.toggle() }
+            } label: {
+              HStack(spacing: AppMetric.l) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AppColor.ink2)
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
                 Text("How they compare")
                     .font(AppFont.display(15, weight: .semibold))
                     .foregroundStyle(AppColor.ink)
                 Spacer()
-                ForEach(ModelCatalog.entries) { e in
+                ForEach(isOpen ? ModelCatalog.entries : []) { e in
                     HStack(spacing: 6) {
                         Circle().fill(e.chartColor).frame(width: 9, height: 9)
                         Text(e.name).font(AppFont.display(12, weight: .semibold)).foregroundStyle(AppColor.ink2)
                     }
                 }
+                if !isOpen {
+                    Text("Speed, quality and memory").font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                }
+              }
+              .contentShape(Rectangle())
             }
+            .accessibilityLabel(isOpen ? "Hide how the models compare" : "Show how the models compare")
+            if isOpen {
             ForEach(measures, id: \.title) { m in
                 let best = m.higherIsBetter
                     ? ModelCatalog.entries.map(m.value).max()
@@ -189,6 +210,7 @@ private struct ModelComparison: View {
                                       text: m.text(e), best: m.value(e) == best)
                     }
                 }
+            }
             }
         }
         .padding(AppMetric.m)

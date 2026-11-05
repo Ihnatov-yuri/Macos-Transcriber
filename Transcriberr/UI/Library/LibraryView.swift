@@ -300,6 +300,16 @@ struct LibraryView: View {
                 .accessibilityLabel("\(rec.title), \(Date(timeIntervalSince1970: TimeInterval(rec.createdAtMillis / 1000)).formatted(date: .abbreviated, time: .shortened)), \(formatDuration(rec.durationSeconds))")
 
                 .contextMenu {
+                    Button("Rename\u{2026}") { RecordingRename.prompt(rec) }
+                    Button("Copy transcript") {
+                        let lines = rec.segments.sorted { $0.startSeconds < $1.startSeconds }.map { seg in
+                            seg.speakerName.map { "\($0): \(seg.text)" } ?? seg.text
+                        }
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+                    }
+                    .disabled(rec.segments.isEmpty)
+                    Divider()
                     Button("Reveal in Finder") {
                         let url = URL(fileURLWithPath: rec.audioPath)
                         NSWorkspace.shared.activateFileViewerSelecting([url])

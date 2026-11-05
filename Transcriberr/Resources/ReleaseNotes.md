@@ -9,6 +9,9 @@
 ## 5.5.0
 
 - Ask your meetings: a new Ask button in the Library answers a question from all your transcripts, in English or Ukrainian, on this Mac. Every claim links to the moment it was said, and when the recordings don't answer it, it says so. Find stays as it was.
+- Ask also answers "what did Len say last week?": it reads only that person's lines from those dates.
+- A long press and a right-click on a transcript line offer the same actions: play from here, edit, copy with speaker and time, mark their lines, split here, and who said it. Speaker chips and Library rows gained Rename and Copy.
+- How they compare in Settings is now a dropdown; searching opens it.
 - Split parts keep the date of the meeting they came from, and merging them back keeps them in order. After a split, Return keeps the original.
 - Settings… and ⌘, open the new Settings in the window, and the Help menu leads somewhere.
 - Words that named the old model are gone, the hotkey hints follow Tap or Hold, and Stop says "save" when nothing will be transcribed.

@@ -472,7 +472,7 @@ struct SplitRecordingSheet: View {
                 Hairline()
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Split at (mm:ss)").uiLabel(9, color: AppColor.ink2)
-                    TextField("0:00", text: $timeText)
+                    TextField("0:00", text: $timeText).onSubmit { split() }
                         .textFieldStyle(.plain)
                         .font(AppFont.text(15))
                         .foregroundStyle(AppColor.ink)

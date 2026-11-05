@@ -89,6 +89,28 @@ final class MeetingAskTests: XCTestCase {
         XCTAssertEqual(MeetingAsk.rank(p, plan: .init(people: ["Len"])).map(\.recordingID), [a])
     }
 
+    func testPersonOnlyQuestionIsRecognised() {
+        let plan = MeetingAsk.parsePlan(#"{"people":["Len","Лен"],"after":"2026-10-29"}"#, question: "What did Len say last week?")
+        XCTAssertTrue(MeetingAsk.isAboutPersonOnly(plan))
+        let topic = MeetingAsk.parsePlan(#"{"people":["Len"]}"#, question: "What did Len say about pricing?")
+        XCTAssertFalse(MeetingAsk.isAboutPersonOnly(topic))
+    }
+
+    func testPersonOnlyReadsOnlyTheirLinesNewestFirst() {
+        let old = MeetingAsk.Line(recordingID: a, title: "Old", date: Date(timeIntervalSince1970: 1000), start: 0, speaker: "Len", text: "old words")
+        let new = MeetingAsk.Line(recordingID: b, title: "New", date: Date(timeIntervalSince1970: 2000), start: 0, speaker: "Len", text: "new words")
+        let other = MeetingAsk.Line(recordingID: b, title: "New", date: Date(timeIntervalSince1970: 2000), start: 1, speaker: "Rado", text: "not his")
+        let p = MeetingAsk.passages(spokenBy: ["Len", "Лен"], in: [old, new, other])
+        XCTAssertEqual(p.map(\.text), ["Len: new words", "Len: old words"])
+    }
+
+    func testPersonWithNothingInTheDatesWidens() async throws {
+        let stub = Stub(plan: #"{"people":["Len"],"after":"2030-01-01"}"#, reply: "They spoke of budgets [1].")
+        let answer = try await MeetingAsk.ask("What did Len say last week?", lines: [line(a, 0, "budgets", speaker: "Len")], me: "Yuri", model: stub)
+        XCTAssertTrue(answer.widened)
+        XCTAssertTrue(answer.found)
+    }
+
     func testCitationsAreRenumberedAndBadOnesRemoved() {
         let p = MeetingAsk.passages([line(a, 0, "one"), line(b, 0, "two")])
         let answer = MeetingAsk.parseAnswer("First [2, 9]. Second [1] and [2].", question: "q", passages: p)

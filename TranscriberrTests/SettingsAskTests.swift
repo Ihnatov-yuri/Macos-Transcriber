@@ -163,6 +163,15 @@ final class SettingsAskTests: XCTestCase {
         XCTAssertNil(k.normalize(true))
     }
 
+    /// The catalog lists choices as "value (name)"; a model that copies one
+    /// back whole still means that value.
+    func testChoiceTakesTheCatalogFormCopiedBack() {
+        let kind = SettingKind.choice([SettingOption(value: "parakeet-v2", name: "Parakeet v2 (English, ANE)"),
+                                       SettingOption(value: "parakeet-v3", name: "Parakeet v3 (local, ANE)")])
+        XCTAssertEqual(kind.normalize("parakeet-v2 (Parakeet v2 (English, ANE))"), "parakeet-v2")
+        XCTAssertNil(kind.normalize("parakeet (something)"))
+    }
+
     func testNumberMustBeInRangeAndSnapsToTheStep() {
         let k = SettingKind.number(0.8 ... 4.0, step: 0.1, unit: "s")
         XCTAssertEqual(k.normalize(1.53), "1.5")

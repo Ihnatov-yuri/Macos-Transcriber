@@ -110,6 +110,9 @@ enum SettingKind: Equatable {
             let folded = SettingsFilter.fold(s.trimmingCharacters(in: .whitespaces))
             if let hit = options.first(where: { SettingsFilter.fold($0.value) == folded }) { return hit.value }
             if let hit = options.first(where: { SettingsFilter.fold($0.name) == folded }) { return hit.value }
+            // The catalog's "value (name)" copied back whole: the 26B did,
+            // and the right choice was turned down.
+            if let hit = options.first(where: { folded.hasPrefix(SettingsFilter.fold($0.value) + " (") }) { return hit.value }
             // Numbers written another way ("10.0" for "10").
             if let x = Double(folded), let hit = options.first(where: { Double($0.value) == x }) { return hit.value }
             return nil
@@ -456,8 +459,9 @@ enum SettingsAsk {
     id | label | current value | allowed values | what it does. Then the person's request.
     Answer with ONLY a JSON array, no other text: [{"id": "<id>", "value": <value>}]. One entry per setting \
     the request asks to change. Use the ids exactly as listed. For on/off settings answer "on" or "off". For a \
-    choice answer one of the allowed values (the part before the brackets). If the request asks for nothing on \
-    the list, answer [].
+    choice answer one of the allowed values (the part before the brackets). Change a setting only when the \
+    request plainly asks for what the new value does; never switch something off to make it better. If the \
+    request asks for nothing on the list, or you are unsure, answer [].
     """
 
     /// One line per accessor: id, label, current value, allowed values and
@@ -631,12 +635,25 @@ struct OnDeviceSettingsAskModel: SettingsAskModel {
     /// person is looking at the panel.
     static let patience: TimeInterval = 5
 
+    /// The whole request, a first model load included. One answer took
+    /// 123 s instead of the usual 10 (2026-11-05); the person should not
+    /// watch "thinking" for that long.
+    static let deadline: TimeInterval = 60
+
+    struct TookTooLong: LocalizedError {
+        var errorDescription: String? { "it took longer than a minute, so nothing was changed. Try again, or change the setting by hand." }
+    }
+
     func answer(system: String, user: String, maxTokens: Int) async throws -> String {
         let backend = factory.backend(for: .localText)
-        if !(await backend.isReady) { try await backend.load(modelPath: nil) }
-        return try await GenerationQueue.$interactive.withValue(true) {
-            try await GenerationQueue.$patience.withValue(Self.patience) {
-                try await backend.generateText(systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+        return try await Deadline.run(seconds: Self.deadline, timeoutError: TookTooLong()) {
+            if !(await backend.isReady) { try await backend.load(modelPath: nil) }
+            // Set inside: Deadline runs the work detached, without the
+            // caller's task-locals.
+            return try await GenerationQueue.$interactive.withValue(true) {
+                try await GenerationQueue.$patience.withValue(Self.patience) {
+                    try await backend.generateText(systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+                }
             }
         }
     }

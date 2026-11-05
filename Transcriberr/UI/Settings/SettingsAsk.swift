@@ -250,8 +250,10 @@ enum SettingAccessors {
             set: { s, v in if ModelCatalog.entry(id: v) != nil { set(s, v) } })
     }
 
-    private static let audioEngines = { BackendFactory.Kind.allCases.filter(\.supportsAudio) }
-    private static let liveEngines = { BackendFactory.Kind.allCases.filter(\.supportsLive) }
+    // Only on-device engines: a cloud engine sends recordings off this Mac,
+    // so like the text engine it is picked by hand, never by a request.
+    private static let audioEngines = { BackendFactory.Kind.allCases.filter { $0.isLocal && $0.supportsAudio } }
+    private static let liveEngines = { BackendFactory.Kind.allCases.filter { $0.isLocal && $0.supportsLive } }
     private static let mergeEngines = {
         BackendFactory.Kind.allCases.filter { $0.isLocal && $0.supportsAudio && $0 != .ensemble }
     }
@@ -517,6 +519,16 @@ enum SettingsAsk {
         }
     }
 
+    /// A value naming a cloud engine, by its id or its display name
+    /// ("openai", "OpenAI (GPT-4o)").
+    private static func isCloudEngine(_ value: String) -> Bool {
+        let folded = SettingsFilter.fold(value)
+        return BackendFactory.Kind.allCases.contains { k in
+            !k.isLocal && (SettingsFilter.fold(k.rawValue) == folded || SettingsFilter.fold(k.displayName) == folded
+                           || folded.hasPrefix(SettingsFilter.fold(k.rawValue) + " ("))
+        }
+    }
+
     /// Checks each pair against the catalog: unknown ids, excluded
     /// settings and values the setting doesn't take are dropped with a
     /// reason; a later entry for the same setting wins.
@@ -537,6 +549,10 @@ enum SettingsAsk {
             }
             let kind = a.kind(stores)
             guard let v = kind.normalize(value) else {
+                if let raw = value as? String, isCloudEngine(raw) {
+                    result.dropped.append("\(a.label) can't be switched to a cloud engine by a request: it sends recordings off this Mac, so it is picked by hand.")
+                    continue
+                }
                 result.dropped.append("\(a.label) can't be set to \(describe(value)). It takes \(kind.allowedSummary.replacingOccurrences(of: " | ", with: ", ")).")
                 continue
             }

@@ -105,6 +105,21 @@ final class SettingsAskTests: XCTestCase {
         }
     }
 
+    /// Found in the app: "use OpenAI for summaries" proposed the speech
+    /// engine OpenAI (GPT-4o). No engine a request can pick is a cloud one.
+    func testNoRequestCanPickACloudEngine() {
+        let cloud = BackendFactory.Kind.allCases.filter { !$0.isLocal }.map(\.rawValue)
+        for a in SettingAccessors.all {
+            guard case .choice(let options) = a.kind(stores) else { continue }
+            for v in cloud { XCTAssertFalse(options.contains { $0.value == v }, "\(a.key) offers \(v)") }
+        }
+        for value in ["openai", "OpenAI (GPT-4o)", "gemini"] {
+            let r = SettingsAsk.validate([(id: SettingID.defaultEngine.rawValue, value: value)], stores: stores)
+            XCTAssertTrue(r.changes.isEmpty, value)
+            XCTAssertTrue(r.dropped.first?.contains("cloud engine") ?? false, "\(value): \(r.dropped)")
+        }
+    }
+
     // MARK: - Parsing
 
     func testParsesAPlainArray() throws {

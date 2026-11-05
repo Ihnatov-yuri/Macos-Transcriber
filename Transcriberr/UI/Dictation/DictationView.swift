@@ -201,7 +201,7 @@ struct DictationView: View {
                 }
                 option("Mode · default", s.defaultMode == .smart ? "Smart" : s.defaultMode == .verbatim ? "Verbatim" : "Clean",
                        active: s.defaultMode == .smart,
-                       hint: "apps without a rule ·\nsmart = Gemma, context-aware") { cycleMode(s) }
+                       hint: "apps without a rule ·\nsmart = text model, context-aware") { cycleMode(s) }
                 option("History", s.keepHistory ? "On" : "Off", active: s.keepHistory,
                        hint: "save each passage to\nthe Dictation folder") { s.keepHistory.toggle() }
                 option("Lang", s.languages.isEmpty ? "Auto" : s.languages.sorted().joined(separator: ", "),
@@ -385,9 +385,13 @@ struct DictationView: View {
                 EmptyView()
             } right: {
                 HStack(spacing: AppMetric.m) {
-                    LitChip(label: "Copy") { copyAll(text.wrappedValue) }
-                    LitChip(label: "Save to library") { saveToLibrary(c, text.wrappedValue) }
-                    LitChip(label: "Clear") { text.wrappedValue = "" }
+                    Group {
+                        LitChip(label: "Copy") { copyAll(text.wrappedValue) }
+                        LitChip(label: "Save to library") { saveToLibrary(c, text.wrappedValue) }
+                        LitChip(label: "Clear") { text.wrappedValue = "" }
+                    }
+                    .disabled(text.wrappedValue.isEmpty)
+                    .opacity(text.wrappedValue.isEmpty ? 0.45 : 1)
                 }
             }
             if !c.suggestedNames.isEmpty {
@@ -416,7 +420,7 @@ struct DictationView: View {
                          ? c.previewText + " …"
                          : c.settings.hotkey == .off
                          ? "Press Dictate below and start talking."
-                         : "Hold \(c.settings.hotkey.label) and start talking — or press Dictate below.")
+                         : "\(c.settings.mode == .hold ? "Hold" : "Tap") \(c.settings.hotkey.label) and start talking — or press Dictate below.")
                         .font(AppFont.text(20))
                         .foregroundStyle(AppColor.ink2)
                         .padding(.horizontal, 10)
@@ -463,12 +467,12 @@ struct DictationView: View {
                 }
             }
         case .transcribing, .inserting:
-            InverseFooter("Recognizing…", subtitle: c.activeMode == .smart ? "Parakeet → Gemma formatting" : "Parakeet on the Neural Engine", left: {
+            InverseFooter("Recognizing…", subtitle: c.activeMode == .smart ? "Speech, then the text model formats" : "On the Neural Engine", left: {
                 ProgressView().controlSize(.small).tint(AppColor.onNight)
             })
         default:
             InverseFooter("Dictate", subtitle: c.hotkeyArmed
-                            ? "or hold \(c.settings.hotkey.glyph) in any app"
+                            ? "or \(c.settings.mode == .hold ? "hold" : "tap") \(c.settings.hotkey.glyph) in any app"
                             : (c.settings.hotkey == .off ? "Global hotkey off" : "Grant Accessibility for the global hotkey"),
                           action: { c.begin(target: .pane) }) {
                 PulseDot(animated: false)

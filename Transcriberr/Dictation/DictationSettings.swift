@@ -105,7 +105,7 @@ nonisolated final class DictationSettings: @unchecked Sendable {
             switch self {
             case .verbatim: return "Verbatim"
             case .clean:    return "Clean (deterministic)"
-            case .smart:    return "Smart (Gemma, context-aware)"
+            case .smart:    return "Smart (context-aware)"
             }
         }
     }

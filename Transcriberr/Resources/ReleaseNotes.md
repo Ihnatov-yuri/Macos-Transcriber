@@ -7,6 +7,11 @@
 # change. The how and the learning belong in the GitHub release.
 
 ## 5.5.0
+
+- Ask your meetings: a new Ask button in the Library answers a question from all your transcripts, in English or Ukrainian, on this Mac. Every claim links to the moment it was said, and when the recordings don't answer it, it says so. Find stays as it was.
+- Split parts keep the date of the meeting they came from, and merging them back keeps them in order. After a split, Return keeps the original.
+- Settings… and ⌘, open the new Settings in the window, and the Help menu leads somewhere.
+- Words that named the old model are gone, the hotkey hints follow Tap or Hold, and Stop says "save" when nothing will be transcribed.
 - Settings has a search field: type a word and only the matching settings show, with folded sections opened.
 - Settings has a Normal and an Advanced view. Normal shows what most people change; Advanced shows everything. Search always looks through everything.
 - You can ask Settings for a change in your own words, such as "turn off the echo filter". The on-device model proposes the changes, nothing changes until you press Apply, and Undo is offered afterwards. API keys, cloud engines, AI-assistant access and anything you type by hand stay hand-only.

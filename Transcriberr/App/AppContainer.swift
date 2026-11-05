@@ -66,6 +66,7 @@ nonisolated final class AppContainer: @unchecked Sendable {
     private(set) var newRecordingRequested = 0
     /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
     private(set) var dictatePaneRequested = 0
+    private(set) var settingsPaneRequested = 0
     /// Bumped to open Settings at Models (the text-model prompt after an
     /// upgrade from LiteRT left nothing downloaded).
     private(set) var modelsPaneRequested = 0
@@ -81,6 +82,8 @@ nonisolated final class AppContainer: @unchecked Sendable {
     /// The recording open in Library, kept here so leaving for People (a
     /// speaker's page) and coming back reopens it.
     var librarySelection: UUID?
+    /// "Ask your meetings": survives leaving the Library.
+    let meetingAsk = MeetingAskSession()
     /// Bumped by File > Delete Recording… (⌘⌫): Library asks to delete
     /// the recording open there.
     private(set) var deleteRecordingRequested = 0
@@ -377,6 +380,10 @@ nonisolated final class AppContainer: @unchecked Sendable {
             return
         }
         deleteRecordingRequested &+= 1
+    }
+
+    func requestSettingsPane() {
+        settingsPaneRequested &+= 1
     }
 
     func requestDictatePane() {

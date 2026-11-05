@@ -369,6 +369,9 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(second.title, "Meeting (2)")
         XCTAssertEqual(first.durationSeconds, 2, accuracy: 0.05)
         XCTAssertEqual(second.durationSeconds, 2, accuracy: 0.05)
+        // Parts keep the meeting's date, and the first ends before the second.
+        XCTAssertEqual(second.createdAtMillis, rec.createdAtMillis)
+        XCTAssertEqual(first.createdAtMillis, rec.createdAtMillis - 2000, accuracy: 100)
 
         XCTAssertEqual(first.segments.count, 2)
         XCTAssertEqual(second.segments.count, 2)
@@ -387,9 +390,8 @@ final class RepositoryTests: XCTestCase {
         // source is untouched
         XCTAssertEqual(rec.segments.count, 4)
 
-        // "(2)" is not left to a coin-flip clock read: it deterministically
-        // sorts below "(1)" in the newest-first library list.
-        XCTAssertGreaterThan(first.createdAtMillis, second.createdAtMillis)
+        // "(1)" ended first: merging the parts back keeps them in order.
+        XCTAssertLessThan(first.createdAtMillis, second.createdAtMillis)
     }
 
     func testSplitPreservesSegmentLanguageAndRunSettings() async throws {

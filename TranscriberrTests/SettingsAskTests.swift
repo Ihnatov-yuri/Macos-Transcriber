@@ -120,6 +120,16 @@ final class SettingsAskTests: XCTestCase {
         }
     }
 
+    func testHandOnlyRequestsSayWhy() {
+        XCTAssertNotNil(SettingsAsk.handOnlyReason("use OpenAI for summaries"))
+        XCTAssertNotNil(SettingsAsk.handOnlyReason("let assistants read my library"))
+        XCTAssertNil(SettingsAsk.handOnlyReason("turn off noise suppression"))
+    }
+
+    func testSearchLooksForTheSettingNotTheVerb() {
+        XCTAssertEqual(SettingsFilter(level: .normal, query: "turn off noise suppression").terms, ["noise", "suppression"])
+    }
+
     // MARK: - Parsing
 
     func testParsesAPlainArray() throws {

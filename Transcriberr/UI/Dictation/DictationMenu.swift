@@ -58,7 +58,10 @@ struct DictationMenu: View {
             NSApp.activate(ignoringOtherApps: true)
             container.requestDictatePane()
         }
-        SettingsLink { Text("Settings…") }
+        Button("Settings…") {
+            NSApp.activate(ignoringOtherApps: true)
+            container.requestSettingsPane()
+        }
         Divider()
         Button("Quit Transcriberr") { NSApp.terminate(nil) }
     }

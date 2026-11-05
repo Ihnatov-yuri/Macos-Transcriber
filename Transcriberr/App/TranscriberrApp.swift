@@ -47,6 +47,19 @@ struct TranscriberrApp: App {
                     Task { @MainActor in Self.showUpdateResult(await updates.check(), container: container) }
                 }
             }
+            // The one Settings: in the window, with search and Normal/Advanced.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings\u{2026}") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    container.requestSettingsPane()
+                }
+                .keyboardShortcut(",")
+            }
+            CommandGroup(replacing: .help) {
+                Button("Transcriberr on the Web") {
+                    if let url = URL(string: "https://ihnatov.nl/transcriber/macos") { NSWorkspace.shared.open(url) }
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Recording") { container.requestNewRecording() }
                     .keyboardShortcut("n")
@@ -140,7 +153,7 @@ struct TranscriberrApp: App {
             ])
         }
         let credits = NSMutableAttributedString(
-            string: "Local-first transcription studio.\nParakeet · Whisper · Gemma — everything on-device.\n",
+            string: "Local-first transcription studio.\nParakeet · Whisper · local text models, on this Mac.\n",
             attributes: body
         )
 

@@ -46,7 +46,9 @@ struct LibraryView: View {
             Rectangle().fill(AppColor.hair).frame(width: 1)
 
             Group {
-                if let selection {
+                if ask.isOpen {
+                    askPane
+                } else if let selection {
                     DetailView(recording: selection,
                                onClose: { self.selection = nil },
                                searchQuery: transcriptMatches.contains(selection.id) ? appliedQuery : "",
@@ -63,7 +65,11 @@ struct LibraryView: View {
                 selection = try? container.repository.get(id: id)
             }
         }
-        .onChange(of: selection?.id) { _, id in container.librarySelection = id }
+        .onChange(of: selection?.id) { _, id in
+            container.librarySelection = id
+            // A row picked on the left takes the pane; Ask brings the answer back.
+            if id != nil { ask.isOpen = false }
+        }
         // ⌘⌫ from the menu bar: the same confirmation as the row's Delete….
         .onChange(of: container.deleteRecordingRequested) {
             if let rec = selection, rec.modelContext != nil, !mergingIDs.contains(rec.id) { deleting = rec }
@@ -100,6 +106,36 @@ struct LibraryView: View {
             Button("OK", role: .cancel) { importError = nil }
         } message: {
             Text(importError ?? "")
+        }
+    }
+
+    // MARK: - Ask
+
+    private var ask: MeetingAskSession { container.meetingAsk }
+
+    @ViewBuilder private var askPane: some View {
+        if let opened = ask.opened, let rec = try? container.repository.get(id: opened.id), !rec.isDeleted {
+            VStack(spacing: 0) {
+                HStack {
+                    TapButton { ask.opened = nil } label: {
+                        LitButtonChrome(.ghost, compact: true) { Text("\u{2190} Back to the answer") }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, AppMetric.m).padding(.vertical, AppMetric.s)
+                Hairline()
+                DetailView(recording: rec, onClose: { ask.opened = nil }, startAt: opened.at)
+                    .id("\(opened.id)-\(opened.at)")
+            }
+        } else {
+            MeetingAskPane(ask: ask, onSubmit: {
+                ask.ask(store: container.modelContainer, factory: container.backendFactory,
+                        me: TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName")))
+            }, onOpen: { source in
+                ask.opened = (source.passage.recordingID, source.passage.start)
+            }, onClose: {
+                ask.isOpen = false
+            })
         }
     }
 
@@ -160,6 +196,16 @@ struct LibraryView: View {
                         EyebrowRow("Recordings") {
                             EmptyView()
                         } right: {
+                            TapButton {
+                                selection = nil
+                                ask.opened = nil
+                                ask.isOpen = true
+                            } label: {
+                                LitButtonChrome(.ghost, compact: true) {
+                                    Label("Ask", systemImage: "sparkles").labelStyle(.titleAndIcon)
+                                }
+                            }
+                            .accessibilityLabel("Ask your meetings")
                             TapButton { importFile() } label: {
                                 LitButtonChrome(.ghost, compact: true) { Text("+ Import") }
                             }

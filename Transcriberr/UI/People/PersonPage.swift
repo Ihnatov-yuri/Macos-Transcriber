@@ -22,6 +22,8 @@ struct PersonPage: View {
     private var training: PeopleTraining { PeopleTraining.shared }
 
     @State private var meetings: [PersonMeeting] = []
+    /// False until the first read: an empty list then means "not read yet".
+    @State private var loaded = false
     @State private var speech: [MeetingSpeech] = []
     @State private var candidates: [PersonPageData.Candidate] = []
     /// Stats from confirmed and hand-named meetings only (People-wide).
@@ -206,7 +208,7 @@ struct PersonPage: View {
     }
 
     private var summary: String {
-        guard let last = meetings.first else { return "Not heard in a recording yet." }
+        guard let last = meetings.first else { return loaded ? "Not heard in a recording yet." : "Reading their recordings\u{2026}" }
         let shown = statsMeetings
         let count = shown.count == 1 ? "1 recording" : "\(shown.count) recordings"
         let scope = confirmedOnly ? " confirmed (of \(meetings.count))" : ""
@@ -345,7 +347,8 @@ struct PersonPage: View {
                         }
                     }
                     Spacer()
-                    if let rec = s.recordingId {
+                    if let rec = s.recordingId, meetings.contains(where: { $0.id == rec })
+                        || (try? container.repository.get(id: rec)) != nil {
                         TapButton { openRecording(rec) } label: {
                             LitButtonChrome(.ghost, compact: true) { Text("Open") }
                         }
@@ -758,6 +761,7 @@ struct PersonPage: View {
         }.value
         if Task.isCancelled { return }
         meetings = data.meetings
+        loaded = true
         candidates = data.candidates
         speech = data.speech
         reloadBrief()

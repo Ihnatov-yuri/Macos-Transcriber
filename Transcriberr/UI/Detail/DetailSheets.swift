@@ -542,9 +542,11 @@ struct SplitRecordingSheet: View {
         alert.messageText = "Split into two recordings"
         alert.informativeText = "“\(recording.title)” became “\(first.title)” and a second recording. "
             + "Delete the original, or keep all three?"
-        alert.addButton(withTitle: "Delete Original")
+        // Keep is the default: Return must never delete anything.
         alert.addButton(withTitle: "Keep Original")
-        guard alert.runModal() == .alertFirstButtonReturn else {
+        let delete = alert.addButton(withTitle: "Delete Original")
+        delete.hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else {
             onDone(false)
             return
         }

@@ -837,7 +837,7 @@ struct DetailView: View {
                     .frame(maxWidth: 260)
                 }
                 HairlineSoft()
-                Text("Runs both engines per chunk · word-level confidence merge · Gemma arbitrates hard conflicts · all local")
+                Text("Runs both engines per chunk · word-level confidence merge · the text model settles hard conflicts · all local")
                     .uiLabel(9, color: AppColor.ink2)
                     .padding(.horizontal, AppMetric.sheetPadding)
                     .padding(.vertical, 6)
@@ -1022,14 +1022,14 @@ struct DetailView: View {
                         proseMode.toggle()
                         container.uiPrefs.proseMode = proseMode
                     } label: {
-                        Text(proseMode ? "Cards" : "Prose").uiLabel(9, color: AppColor.ink2)
+                        Text(proseMode ? "Cards" : "Prose").uiLabel(9, color: AppColor.ink2).viewToggleTarget()
                     }
                     TapButton {
                         transcriptStyle = transcriptStyle == .clean ? .verbatim : .clean
                         container.uiPrefs.transcriptStyle = transcriptStyle
                     } label: {
                         // Names the mode you would switch TO, like Cards/Prose.
-                        Text(transcriptStyle == .clean ? "Verbatim" : "Clean").uiLabel(9, color: AppColor.ink2)
+                        Text(transcriptStyle == .clean ? "Verbatim" : "Clean").uiLabel(9, color: AppColor.ink2).viewToggleTarget()
                     }
                     .help(transcriptStyle == .clean
                           ? "Showing clean text (no um/uh, no stutters). Switch to exactly what was heard."
@@ -1038,11 +1038,12 @@ struct DetailView: View {
                         showTimestamps.toggle()
                         container.uiPrefs.showTimestamps = showTimestamps
                     } label: {
-                        Text(showTimestamps ? "−Times" : "+Times").uiLabel(9, color: AppColor.ink2)
+                        Text(showTimestamps ? "−Times" : "+Times").uiLabel(9, color: AppColor.ink2).viewToggleTarget()
                     }
                     TapButton { fullscreen.toggle() } label: {
                         Text(fullscreen ? "Exit ⤡" : "Read ⤢")
                             .uiLabel(9, color: fullscreen ? AppColor.accentOnLight : AppColor.ink2)
+                            .viewToggleTarget()
                     }
                   }
                   .fixedSize()
@@ -1510,7 +1511,7 @@ struct TranscriptPane: View {
         var prev: String? = nil
         var lines: [String] = []
         for seg in segs {
-            let name = seg.speakerName ?? seg.speaker
+            let name = seg.speaker.map { SpeakerLabel.display(seg.speakerName, key: $0) } ?? seg.speakerName
             if let name, name != prev {
                 lines.append("\n\(name): \(style.apply(seg.text))")
                 prev = name
@@ -1845,7 +1846,7 @@ struct OutputPane: View {
             } else {
                 VStack(alignment: .leading) {
                     Spacer()
-                    Text("Not generated yet · press Generate ↗ above")
+                    Text(isBusy ? "Generating. It appears here when it is done." : "Not generated yet · press Generate ↗ above")
                         .uiLabel(11, color: AppColor.ink3)
                         .frame(maxWidth: .infinity, alignment: .center)
                     Spacer()
@@ -1977,5 +1978,12 @@ private struct OutputHistoryList: View {
         }
         .padding(.horizontal, AppMetric.sheetPadding)
         .padding(.vertical, AppMetric.s)
+    }
+}
+
+private extension View {
+    /// The transcript's view toggles are 9pt text: room to click them.
+    func viewToggleTarget() -> some View {
+        padding(.vertical, 10).padding(.horizontal, 2).contentShape(Rectangle())
     }
 }

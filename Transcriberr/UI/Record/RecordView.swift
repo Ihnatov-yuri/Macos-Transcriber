@@ -125,7 +125,7 @@ struct RecordView: View {
     private func liveSummary(_ m: RecordModel) -> String {
         let engine = m.liveEngine.displayName
         let langs = m.liveLanguages.isEmpty ? "auto-detect" : m.liveLanguages.sorted().joined(separator: ", ")
-        return "Live engine: \(engine). Language: \(langs)."
+        return m.liveEnabled ? "Live engine: \(engine). Language: \(langs)." : "Language: \(langs)."
     }
 
     // MARK: - Options row
@@ -268,7 +268,7 @@ struct RecordView: View {
                     .accessibilityAction { triggerPauseToggle(m) }
 
                 VStack(spacing: 2) {
-                    Text("Stop & transcribe")
+                    Text(m.autoTranscribe ? "Stop & transcribe" : "Stop & save")
                         .font(AppFont.display(17, weight: .semibold))
                         .tracking(0.1)
                         .foregroundStyle(AppColor.onNight)

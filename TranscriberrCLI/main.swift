@@ -72,6 +72,7 @@ func usage() {
       transcriberrcli refinalize <file>    rerun the finalize pass on a saved run dump
       transcriberrcli brief <file>         the meeting brief for a transcript
       transcriberrcli gentest              text model smoke test (three concurrent generations)
+      transcriberrcli ask <question>       ask your meetings, on-device (read-only)
       transcriberrcli models [download <id>]  the text models: installed or not; download one
       transcriberrcli textbench <calls.jsonl> [model-id]
                                             replay logged text calls on a text model; JSON timing lines
@@ -456,6 +457,29 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
     print(String(format: "WALL %.1fs for %.0fs of audio (%.2fx realtime)", wall, audio, audio / wall))
     if failed > 0 { print("\(failed) of \(tracks.count) file(s) FAILED"); return 1 }
     return 0
+}
+
+/// "Ask your meetings" from the command line: plan, ranked sources, answer.
+@MainActor
+func cmdAsk(_ question: String) async -> Int32 {
+    do {
+        let service = try KBService.openReadOnly()
+        let lines = try service.meetingLines()
+        let factory = BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore())
+        let t0 = Date()
+        let answer = try await MeetingAsk.ask(question, lines: lines,
+                                              me: TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName")),
+                                              model: OnDeviceMeetingAskModel(factory: factory))
+        print(answer.found ? answer.text : "(no answer)")
+        for s in answer.cited + answer.nearby {
+            print("[\(s.number)] \(s.passage.title) @\(Int(s.passage.start))s")
+        }
+        print(String(format: "[ask] %.1f s, widened=\(answer.widened)", Date().timeIntervalSince(t0)))
+        return 0
+    } catch {
+        print("[ask] ❌ \(error)")
+        return 1
+    }
 }
 
 /// Three concurrent generations at the text model: they must queue, not
@@ -892,6 +916,9 @@ func main() async -> Int32 {
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
     case "gentest":
         return await cmdGenTest()
+    case "ask":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdAsk(Array(args.dropFirst(2)).joined(separator: " "))
     case "textbench":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdTextBench(calls: args[2], modelID: args.count > 3 ? args[3] : nil)

@@ -543,20 +543,22 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             }
         }
 
-        // Two independent recordings from here on — give "(2)" a later
-        // createdAtMillis than "(1)" so the library list (sorted newest
-        // first) shows them in their natural order, not clock-jitter order.
-        let stampNow = Int64(Date().timeIntervalSince1970 * 1000)
+        // Two parts of the same meeting: each keeps when it really ended.
+        // createdAtMillis is the STOP time, so the second part keeps the
+        // source's and the first ends earlier by what follows it. Stamping
+        // "now" moved an August meeting to today in the Library, People and
+        // Ask, and merging the parts back put them in the wrong order.
+        let firstEnd = recording.createdAtMillis - Int64((totalSeconds - cutSeconds) * 1000)
         let first = Recording(
             title: "\(recording.title) (1)", audioPath: urlA.path,
-            createdAtMillis: stampNow + 1, durationSeconds: cutSeconds,
+            createdAtMillis: firstEnd, durationSeconds: cutSeconds,
             sourceLanguage: recording.sourceLanguage,
             transcribedWithBackend: recording.transcribedWithBackend,
             transcribedWithModel: recording.transcribedWithModel,
             translateToEnglish: recording.translateToEnglish)
         let second = Recording(
             title: "\(recording.title) (2)", audioPath: urlB.path,
-            createdAtMillis: stampNow, durationSeconds: totalSeconds - cutSeconds,
+            createdAtMillis: recording.createdAtMillis, durationSeconds: totalSeconds - cutSeconds,
             sourceLanguage: recording.sourceLanguage,
             transcribedWithBackend: recording.transcribedWithBackend,
             transcribedWithModel: recording.transcribedWithModel,

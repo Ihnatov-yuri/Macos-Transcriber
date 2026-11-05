@@ -424,8 +424,14 @@ struct SettingsFilter: Equatable, Sendable {
 
     /// The query's words, folded. Every word has to appear.
     var terms: [String] {
-        Self.fold(query).split(whereSeparator: \.isWhitespace).map(String.init)
+        let words = Self.fold(query).split(whereSeparator: \.isWhitespace).map(String.init)
+        // "turn off noise suppression" looks for the setting, not the verb.
+        let kept = words.filter { !Self.requestWords.contains($0) }
+        return kept.isEmpty ? words : kept
     }
+
+    private static let requestWords: Set<String> = ["turn", "off", "on", "switch", "enable", "disable", "change",
+                                                    "set", "the", "a", "an", "to", "my", "please", "make", "use"]
 
     var isSearching: Bool { !terms.isEmpty }
 

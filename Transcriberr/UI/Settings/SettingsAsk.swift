@@ -676,6 +676,20 @@ struct OnDeviceSettingsAskModel: SettingsAskModel {
 }
 
 extension SettingsAsk {
+    /// Why a request about something a request can't touch changed nothing:
+    /// those settings aren't in the catalog, so the model only finds nothing.
+    static func handOnlyReason(_ request: String) -> String? {
+        let text = SettingsFilter.fold(request)
+        func has(_ words: String...) -> Bool { words.contains { text.contains($0) } }
+        if has("openai", "chatgpt", "gpt", "anthropic", "claude", "gemini", "cloud") {
+            return has("api key", "key") ? "API keys are only typed by hand, in Settings under API keys."
+                : "Cloud engines send your recordings or transcripts off this Mac, so they are picked by hand in Settings under Engines."
+        }
+        if has("api key") { return "API keys are only typed by hand, in Settings under API keys." }
+        if has("assistant", "mcp") { return "Access to your library is granted by hand, in Settings under AI assistants." }
+        return nil
+    }
+
     /// Request → model → checked changes.
     static func ask(_ request: String, stores: SettingsStores, model: some SettingsAskModel) async throws -> SettingsAskResult {
         let answer: String
@@ -686,6 +700,10 @@ extension SettingsAsk {
         } catch {
             throw SettingsAskError.model(error.localizedDescription)
         }
-        return validate(try parse(answer), stores: stores)
+        var result = validate(try parse(answer), stores: stores)
+        if result.changes.isEmpty, result.unchanged.isEmpty, result.dropped.isEmpty, let why = handOnlyReason(request) {
+            result.dropped.append(why)
+        }
+        return result
     }
 }

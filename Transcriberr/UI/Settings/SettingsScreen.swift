@@ -59,7 +59,7 @@ struct SettingsScreen: View {
                     controls(filter, sections: sections)
                         .padding(.horizontal, AppMetric.sheetPadding)
 
-                    if sections.isEmpty {
+                    if sections.isEmpty, askPhase == .idle {
                         noMatch
                             .padding(.horizontal, AppMetric.sheetPadding)
                             .padding(.top, AppMetric.l)

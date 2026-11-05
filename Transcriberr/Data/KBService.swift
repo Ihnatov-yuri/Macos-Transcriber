@@ -62,6 +62,11 @@ struct KBService {
         }
     }
 
+    /// Transcript lines for "Ask your meetings".
+    func meetingLines() throws -> [MeetingAsk.Line] {
+        try MeetingAsk.lines(context: ModelContext(container))
+    }
+
     private var storeURL: URL {
         container.configurations.first?.url ?? Self.defaultStoreURL()
     }

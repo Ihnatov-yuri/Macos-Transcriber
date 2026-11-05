@@ -6,6 +6,14 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.5.0
+- Settings has a search field: type a word and only the matching settings show, with folded sections opened.
+- Settings has a Normal and an Advanced view. Normal shows what most people change; Advanced shows everything. Search always looks through everything.
+- You can ask Settings for a change in your own words, such as "turn off the echo filter". The on-device model proposes the changes, nothing changes until you press Apply, and Undo is offered afterwards. API keys, cloud engines, AI-assistant access and anything you type by hand stay hand-only.
+- People pages show more honest talk time: a short reply no longer counts as the half minute its transcript line spans.
+- A stray unnamed voice (a few "mm-hm" split off by the speaker separation) no longer counts as one more participant, which made a quiet side of a one-to-one look like it dominated.
+- Parakeet UK and Whisper UK look for new versions once a week instead of every day.
+
 ## 5.4.1
 - Transcription works without an internet connection again. Whisper went online to Hugging Face every time it loaded, even with the model already downloaded, and when Hugging Face did not answer the whole Super run failed. A downloaded model now loads straight from disk.
 

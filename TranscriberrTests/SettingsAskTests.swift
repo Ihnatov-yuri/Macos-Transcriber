@@ -96,7 +96,9 @@ final class SettingsAskTests: XCTestCase {
         let never: [SettingID] = [.apiKeys, .virtualMicrophone, .voiceprint, .people, .presets, .snippets,
                                   .transcribePrompt, .translatePrompt, .dictationPrompt, .vocabulary,
                                   .vocabularyByLanguage, .learnedTerms, .learnedChoices, .domainPacks,
-                                  .dictationAppRules, .whisperDownloads, .textModelComparison, .dictationAccessibility]
+                                  .dictationAppRules, .whisperDownloads, .textModelComparison, .dictationAccessibility,
+                                  // privacy: what leaves the Mac, who reads the library
+                                  .textEngine, .assistants]
         for id in never {
             XCTAssertNotNil(SettingAccessors.exclusion(id), "\(id) should be excluded")
             XCTAssertFalse(SettingAccessors.all.contains { $0.setting == id }, "\(id) has an accessor")

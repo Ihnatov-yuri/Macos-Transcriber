@@ -167,12 +167,16 @@ enum SettingAccessors {
         case .dictationAccessibility: "Accessibility access is granted in System Settings."
         case .textModelComparison, .speechModels, .whisperDownloads: "models are downloaded or deleted by hand."
         case .engineLanguages: "it is a table of which engine knows which language."
+        // Privacy switches: what leaves this Mac and who may read the
+        // library change only by the person's own hand, like API keys.
+        case .textEngine: "choosing a cloud engine sends transcripts off this Mac, so it is picked by hand."
+        case .assistants: "access to your library is granted by hand."
         case .dictationLinks, .dictationHistory, .dictationIndicators, .dictationInsertion,
              .microphone, .noiseSuppression, .echoFilter, .preprocessImports, .myName, .defaultEngine,
              .liveEngine, .whisperModels, .mergeEngines, .superMaxQuality, .meetingSuperFollowUp,
-             .calendarContext, .recordingBrief, .textModelRulings, .turnGranularity, .textEngine,
+             .calendarContext, .recordingBrief, .textModelRulings, .turnGranularity,
              .textModelPicks, .tone, .fillersVerbatim, .benchmark, .dictationHotkey, .dictationRecognition,
-             .dictationCleanup, .dictationFormatting, .dictationContext, .updates, .assistants:
+             .dictationCleanup, .dictationFormatting, .dictationContext, .updates:
             nil
         }
     }
@@ -326,9 +330,6 @@ enum SettingAccessors {
                                   SettingOption(value: "2", name: "Fine")]) },
             get: { String(Int($0.ui.turnCoalesceGapSeconds.rounded())) },
             set: { s, v in if let x = Double(v), [30.0, 10, 2].contains(x) { s.ui.turnCoalesceGapSeconds = x } }),
-        engine(SettingID.textEngine.rawValue, .textEngine, SettingID.textEngine.label,
-               options: { BackendFactory.Kind.allCases.filter(\.supportsTextGeneration) },
-               get: { $0.ui.textEngine }, set: { $0.ui.textEngine = $1 }),
 
         // C · Models
         textModel("textModelPicks.super", "Text model for Super merge",
@@ -404,8 +405,6 @@ enum SettingAccessors {
         // J · Updates, K · AI assistants
         toggle(SettingID.updates.rawValue, .updates, "Check for new versions once a day",
                get: { $0.updates.autoCheck }, set: { $0.updates.autoCheck = $1 }),
-        defaultsToggle(SettingID.assistants.rawValue, .assistants, SettingID.assistants.label,
-                       defaultsKey: AssistantAccess.allowedKey, default: true),
     ]
 }
 
@@ -627,10 +626,19 @@ protocol SettingsAskModel {
 struct OnDeviceSettingsAskModel: SettingsAskModel {
     let factory: BackendFactory
 
+    /// How long a request waits for the text model before giving up: a
+    /// background Super run or Summary can hold it for minutes, and the
+    /// person is looking at the panel.
+    static let patience: TimeInterval = 5
+
     func answer(system: String, user: String, maxTokens: Int) async throws -> String {
         let backend = factory.backend(for: .localText)
         if !(await backend.isReady) { try await backend.load(modelPath: nil) }
-        return try await backend.generateText(systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+        return try await GenerationQueue.$interactive.withValue(true) {
+            try await GenerationQueue.$patience.withValue(Self.patience) {
+                try await backend.generateText(systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+            }
+        }
     }
 }
 

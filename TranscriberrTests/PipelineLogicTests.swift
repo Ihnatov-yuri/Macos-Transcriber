@@ -245,6 +245,14 @@ final class LiveCaptionTests: XCTestCase {
         XCTAssertLessThanOrEqual(cut, 16 * sr)
     }
 
+    /// The values measured on the recording that showed a ghost "Yeah."
+    func testVoicedSeparatesAClickFromSpeech() {
+        XCTAssertFalse(LiveTranscriber.voiced([0.1, 0.76, 0.2]))
+        XCTAssertFalse(LiveTranscriber.voiced([0.24]))
+        XCTAssertFalse(LiveTranscriber.voiced([]))
+        XCTAssertTrue(LiveTranscriber.voiced([0.1, 1.0]))
+    }
+
     func testRoomToneIsNotSpeech() {
         XCTAssertFalse(LiveTranscriber.hasSpeech(LiveTranscriber.frameRMS(audio([(0, 3)]))))
         XCTAssertTrue(LiveTranscriber.hasSpeech(LiveTranscriber.frameRMS(audio([(1, 2)]))))

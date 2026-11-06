@@ -459,6 +459,25 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
     return 0
 }
 
+/// Speech probability of each file by the VAD: max, share of 256 ms windows over 0.5.
+@MainActor
+func cmdVad(_ paths: [String]) async -> Int32 {
+    do {
+        let vad = try await VadManager()
+        for path in paths {
+            let results = try await vad.process(URL(fileURLWithPath: path))
+            let probs = results.map(\.probability)
+            let over = probs.filter { $0 > 0.5 }.count
+            print(String(format: "%@  max %.2f  over0.5 %d/%d", (path as NSString).lastPathComponent,
+                         probs.max() ?? 0, over, probs.count))
+        }
+        return 0
+    } catch {
+        print("[vad] ❌ \(error)")
+        return 1
+    }
+}
+
 /// "Ask your meetings" from the command line: plan, ranked sources, answer.
 @MainActor
 func cmdAsk(_ question: String) async -> Int32 {
@@ -914,6 +933,9 @@ func main() async -> Int32 {
     case "whisper":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
+    case "vad":
+        guard args.count > 2 else { usage(); return 64 }
+        return await cmdVad(Array(args.dropFirst(2)))
     case "gentest":
         return await cmdGenTest()
     case "ask":

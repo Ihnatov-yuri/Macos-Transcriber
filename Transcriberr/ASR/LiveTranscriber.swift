@@ -1,5 +1,6 @@
 import os
 import Foundation
+import FluidAudio
 
 /// Anything that emits the recorder's one-second 16 kHz chunk feed. Lets the
 /// live worker consume the mic recorder OR the meeting recorder unchanged.
@@ -159,6 +160,11 @@ final class LiveTranscriber: @unchecked Sendable {
     /// No audio this long after start: subscribe to the recorder again.
     nonisolated static let audioWatchdogSeconds: TimeInterval = 5
 
+    /// Silero, loaded on first use: loudness alone let a single click or
+    /// breath through, and Parakeet read it as a confident "Yeah."
+    private var vad: VadManager?
+    private var vadLoading = false
+
     init(factory: BackendFactory, recorder: any LiveChunkSource) {
         self.factory = factory
         self.source = recorder
@@ -195,6 +201,7 @@ final class LiveTranscriber: @unchecked Sendable {
             return
         }
         self.backend = backend
+        loadVad()
         streamsPartials = engine.isParakeet
         status = .running
         AppLog.info("live", "started · \(engine.rawValue) · \(streamsPartials ? "streaming" : "phrase by phrase")")
@@ -305,7 +312,12 @@ final class LiveTranscriber: @unchecked Sendable {
             pendingStart += Double(cut) / sr
             lastPartialRead = 0
             let end = start + Double(cut) / sr
-            switch await read(phrase, backend: backend, session: session) {
+            let voiced = await isVoiced(phrase)
+            if !voiced {
+                AppLog.info("live", String(format: "not speech, skipped %.1f s", end - start))
+            }
+            let result: ReadResult = voiced ? await read(phrase, backend: backend, session: session) : .silent
+            switch result {
             case .text(let text):
                 lines.append(LiveLine(startSeconds: start, endSeconds: end, text: text))
                 partial = nil
@@ -329,6 +341,10 @@ final class LiveTranscriber: @unchecked Sendable {
         lastPartialRead = pending.count
         let snapshot = pending
         let start = pendingStart
+        guard await isVoiced(snapshot) else {
+            if start == pendingStart { partial = nil }
+            return true
+        }
         let result = await read(snapshot, backend: backend, session: session)
         // A phrase closed while this read was out: it is a line by now.
         guard start == pendingStart else { return true }
@@ -336,6 +352,28 @@ final class LiveTranscriber: @unchecked Sendable {
             partial = LiveLine(startSeconds: start, endSeconds: start + Double(snapshot.count) / sr, text: text)
         }
         return true
+    }
+
+    private func loadVad() {
+        guard vad == nil, !vadLoading else { return }
+        vadLoading = true
+        Task { @MainActor [weak self] in
+            do {
+                let loaded = try await VadManager()
+                self?.vad = loaded
+            } catch {
+                // Captions still work, on the loudness floor alone.
+                AppLog.warn("live", "speech detector unavailable: \(error.localizedDescription)")
+            }
+            self?.vadLoading = false
+        }
+    }
+
+    /// True when in doubt: no detector or a failed check must never lose speech.
+    private func isVoiced(_ samples: [Float]) async -> Bool {
+        guard let vad else { return true }
+        guard let results = try? await vad.process(samples) else { return true }
+        return Self.voiced(results.map(\.probability))
     }
 
     private enum ReadResult { case text(String), silent, busy, gone }
@@ -414,6 +452,14 @@ final class LiveTranscriber: @unchecked Sendable {
         guard !frames.isEmpty else { return 0.003 }
         let floor = frames.sorted()[frames.count / 10]
         return min(0.02, max(0.003, floor * 3))
+    }
+
+    /// Measured on a real recording: a mic click 0.76 and room tone 0.24,
+    /// spoken words and two-second dictations 1.00.
+    nonisolated static let speechProbability: Float = 0.85
+
+    nonisolated static func voiced(_ probabilities: [Float]) -> Bool {
+        (probabilities.max() ?? 0) >= speechProbability
     }
 
     /// Voice-activity floor. Silence and room tone must not reach an engine:

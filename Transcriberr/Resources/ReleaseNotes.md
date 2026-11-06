@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.5.2
+
+- Live captions keep quiet speakers. Someone far from the mic used to lose whole sentences, and now their words come through while clicks and room noise stay out. This needs Keep sounds out of live captions, which is on by default.
+
 ## 5.5.1
 
 - Live captions no longer turn a click or a breath into a stray word such as "Yeah." A speech check on this Mac looks at each phrase before the live engine reads it. It is on by default: Settings, Advanced, Engines, Keep sounds out of live captions.

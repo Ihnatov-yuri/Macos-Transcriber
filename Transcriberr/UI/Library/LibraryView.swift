@@ -72,7 +72,8 @@ struct LibraryView: View {
         }
         // ⌘⌫ from the menu bar: the same confirmation as the row's Delete….
         .onChange(of: container.deleteRecordingRequested) {
-            if let rec = selection, rec.modelContext != nil, !mergingIDs.contains(rec.id) { deleting = rec }
+            let shown = ask.isOpen ? ask.opened.flatMap { try? container.repository.get(id: $0.id) } : selection
+            if let rec = shown, rec.modelContext != nil, !mergingIDs.contains(rec.id) { deleting = rec }
         }
         .task(id: query) {
             let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -124,7 +125,8 @@ struct LibraryView: View {
                 }
                 .padding(.horizontal, AppMetric.m).padding(.vertical, AppMetric.s)
                 Hairline()
-                DetailView(recording: rec, onClose: { ask.opened = nil }, startAt: opened.at)
+                DetailView(recording: rec, onClose: { ask.opened = nil }, startAt: opened.at,
+                           isMerging: mergingIDs.contains(rec.id))
                     .id("\(opened.id)-\(opened.at)")
             }
         } else {
@@ -265,6 +267,7 @@ struct LibraryView: View {
                 if !query.isEmpty {
                     TapButton { query = "" } label: {
                         Text("✕").uiLabel(11, color: AppColor.ink3)
+                            .padding(6).contentShape(Rectangle())
                     }
                     .accessibilityLabel("Clear search")
 
@@ -308,7 +311,6 @@ struct LibraryView: View {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
                     }
-                    .disabled(rec.segments.isEmpty)
                     Divider()
                     Button("Reveal in Finder") {
                         let url = URL(fileURLWithPath: rec.audioPath)

@@ -111,6 +111,35 @@ final class MeetingAskTests: XCTestCase {
         XCTAssertTrue(answer.found)
     }
 
+    func testOrdinaryWordsNeverLimitWhatIsRead() {
+        var lines = (0..<60).map { _ in line(UUID(), 0, "обговорили ціна проекту") }
+        lines.append(line(a, 0, "the pricing"))
+        let plan = MeetingAsk.parsePlan(#"{"terms":["ціна"]}"#, question: "What did we decide about pricing?")
+        XCTAssertTrue(plan.named.isEmpty)
+        XCTAssertGreaterThan(MeetingAsk.rank(MeetingAsk.passages(lines), plan: plan).count, 1)
+    }
+
+    func testAskerInTheQuestionIsNotPersonOnly() {
+        let plan = MeetingAsk.parsePlan(#"{"people":["Len"]}"#, question: "What did I tell Len?")
+        XCTAssertFalse(MeetingAsk.isAboutPersonOnly(plan))
+    }
+
+    func testNameOnlyMentionedFallsThroughToTheSearch() async throws {
+        let stub = Stub(plan: #"{"people":["Kaiko"]}"#, reply: "It came up here [1].")
+        let answer = try await MeetingAsk.ask("What about Kaiko?", lines: [line(a, 0, "we met Kaiko", speaker: "Len")], me: "Yuri", model: stub)
+        XCTAssertTrue(answer.found)
+    }
+
+    func testUnnamedLineIsNotTheLastSpeakers() {
+        let p = MeetingAsk.passages([line(a, 0, "mine", speaker: "Len"), line(a, 1, "not his")])
+        XCTAssertEqual(p[0].text, "Len: mine\nSomeone: not his")
+    }
+
+    func testOtherBracketsLeaveLaterCitationsAlone() {
+        let text = MeetingAskPane.linked("Noise [music] then a fact[1].")
+        XCTAssertEqual(text.runs.compactMap(\.link).map(\.absoluteString), ["ask://1"])
+    }
+
     func testCitationsAreRenumberedAndBadOnesRemoved() {
         let p = MeetingAsk.passages([line(a, 0, "one"), line(b, 0, "two")])
         let answer = MeetingAsk.parseAnswer("First [2, 9]. Second [1] and [2].", question: "q", passages: p)

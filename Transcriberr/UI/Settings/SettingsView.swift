@@ -486,7 +486,20 @@ struct PresetsSettingsTab: View {
 
     private var store: PresetStore { container.presetStore }
 
+    /// A new preset lands at the end of the list: it is scrolled to, or the
+    /// button looks dead and gets pressed again.
+    @State private var justAdded: String?
+
     var body: some View {
+        ScrollViewReader { proxy in
+            list.onChange(of: justAdded) { _, id in
+                guard let id else { return }
+                Task { @MainActor in proxy.scrollTo(id, anchor: .top) }
+            }
+        }
+    }
+
+    private var list: some View {
         VStack(alignment: .leading, spacing: AppMetric.m) {
             HStack {
                 Text("Each preset is a tab in a recording, in this order. Edits save automatically.")
@@ -495,6 +508,7 @@ struct PresetsSettingsTab: View {
                 TapButton {
                     let id = store.add()
                     expanded.insert(id)
+                    justAdded = id
                 } label: {
                     LitButtonChrome(.secondary, compact: true) { Text("Add preset") }
                 }
@@ -508,6 +522,11 @@ struct PresetsSettingsTab: View {
                 } label: {
                     HStack(spacing: AppMetric.s) {
                         Text(preset.name.isEmpty ? "Untitled" : preset.name)
+                            // The name opens it too, not only the small chevron.
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if expanded.contains(preset.id) { expanded.remove(preset.id) } else { expanded.insert(preset.id) }
+                            }
                         if preset.kind == .rewrite {
                             Text("Rewrite").uiLabel(9, color: AppColor.ink3)
                         }

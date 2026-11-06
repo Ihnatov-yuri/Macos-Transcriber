@@ -287,6 +287,8 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         let merged = Recording(
             title: "\(titleA) + \(titleB)",
             audioPath: url.path,
+            // The meeting's date, as for split parts: when the later source ended.
+            createdAtMillis: b.createdAtMillis,
             durationSeconds: Double(sa.count + sb.count) / AudioDecoder.sampleRate
         )
         // Stay where the sources live: merging inside a folder must not eject

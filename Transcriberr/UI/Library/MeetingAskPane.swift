@@ -205,8 +205,13 @@ struct MeetingAskPane: View {
     static func linked(_ text: String) -> AttributedString {
         var out = AttributedString()
         var rest = Substring(text)
-        while let open = rest.firstIndex(of: "["), let close = rest[open...].firstIndex(of: "]"),
-              let n = Int(rest[rest.index(after: open)..<close]) {
+        while let open = rest.firstIndex(of: "["), let close = rest[open...].firstIndex(of: "]") {
+            // "[music]" stays as text; the citations after it stay links.
+            guard let n = Int(rest[rest.index(after: open)..<close]) else {
+                out += AttributedString(String(rest[...close]))
+                rest = rest[rest.index(after: close)...]
+                continue
+            }
             out += AttributedString(String(rest[..<open]))
             var mark = AttributedString(" \(n)")
             mark.link = URL(string: "ask://\(n)")

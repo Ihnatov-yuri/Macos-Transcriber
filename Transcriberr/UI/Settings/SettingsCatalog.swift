@@ -242,7 +242,7 @@ enum SettingID: String, CaseIterable, Sendable {
         case .turnGranularity:
             "How aggressively adjacent same-speaker segments merge into one turn. Fine matches phone-recorder granularity; applies to the next run."
         case .textEngine:
-            "The on-device model is picked in the Models tab; cloud engines need an API key. Preset prompt templates are editable in the Presets tab; transcription prompts in Prompts."
+            "The on-device model is picked under Models; cloud engines need an API key. Preset prompt templates are edited under Post-processing presets; transcription prompts under Prompts."
         case .textModelPicks:
             "Super merge reads the whole meeting for names and topics, then rules on disputed words. Everything else covers summaries, cleanup, titles, person briefs, the speech coach and dictation polish."
         case .textModelComparison:

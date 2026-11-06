@@ -59,6 +59,8 @@ nonisolated enum AudioInputDevices {
                                          &addr, 0, nil, &size, &ids) == noErr else { return [] }
         return ids.compactMap { device(for: $0) }
             .filter { $0.inputChannels > 0 && $0.device.uid != VirtualMicrophone.micUID }
+            // macOS's own private aggregate, not something to pick.
+            .filter { !$0.device.name.hasPrefix("CADefaultDeviceAggregate") }
             .map(\.device)
     }
 

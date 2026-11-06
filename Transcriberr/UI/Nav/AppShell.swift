@@ -45,7 +45,16 @@ struct AppShell: View {
     var body: some View {
         shell
             .onChange(of: container.dictatePaneRequested) { _, _ in section = .dictate }
-            .onChange(of: container.settingsPaneRequested) { _, _ in section = .settings }
+            .onChange(of: container.settingsPaneRequested) { _, _ in
+                section = .settings
+                container.settingsPanePending = false
+            }
+            .onAppear {
+                if container.settingsPanePending {
+                    section = .settings
+                    container.settingsPanePending = false
+                }
+            }
             .onChange(of: container.modelsPaneRequested) { _, _ in section = .settings }
             .onChange(of: container.peoplePaneRequested) { _, _ in section = .people }
             .task {

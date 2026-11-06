@@ -260,6 +260,7 @@ final class RepositoryTests: XCTestCase {
             (1, 2, "sup", "SPEAKER_00", "Lana"),
         ])
         let merged = try await repo.merge(a, b)
+        XCTAssertEqual(merged.createdAtMillis, max(a.createdAtMillis, b.createdAtMillis))
         defer { tempFiles.append(URL(fileURLWithPath: merged.audioPath)) }
 
         XCTAssertEqual(merged.segments.count, 4)

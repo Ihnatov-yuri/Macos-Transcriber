@@ -26,7 +26,7 @@ struct TranscriberrApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: OpenSettingsItem.mainWindowID) {
             AppShell()
                 .onOpenURL { url in container.dictation.handle(url: url) }
                 .environment(container)
@@ -51,11 +51,8 @@ struct TranscriberrApp: App {
             }
             // The one Settings: in the window, with search and Normal/Advanced.
             CommandGroup(replacing: .appSettings) {
-                Button("Settings\u{2026}") {
-                    NSApp.activate(ignoringOtherApps: true)
-                    container.requestSettingsPane()
-                }
-                .keyboardShortcut(",")
+                OpenSettingsItem(container: container)
+                    .keyboardShortcut(",")
             }
             CommandGroup(replacing: .help) {
                 Button("Transcriberr on the Web") {
@@ -208,5 +205,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         VirtualMicrophone.shared.shutdown()
+    }
+}
+
+/// Settings lives in the main window: this also reopens a closed window, for
+/// the menu bar item and the shortcut.
+struct OpenSettingsItem: View {
+    static let mainWindowID = "main"
+    let container: AppContainer
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings\u{2026}") {
+            NSApp.activate(ignoringOtherApps: true)
+            container.requestSettingsPane()
+            if !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) {
+                openWindow(id: Self.mainWindowID)
+            }
+        }
     }
 }

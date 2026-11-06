@@ -67,6 +67,8 @@ nonisolated final class AppContainer: @unchecked Sendable {
     /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
     private(set) var dictatePaneRequested = 0
     private(set) var settingsPaneRequested = 0
+    /// Read by a main window that opens because of the request.
+    var settingsPanePending = false
     /// Bumped to open Settings at Models (the text-model prompt after an
     /// upgrade from LiteRT left nothing downloaded).
     private(set) var modelsPaneRequested = 0
@@ -384,6 +386,7 @@ nonisolated final class AppContainer: @unchecked Sendable {
 
     func requestSettingsPane() {
         settingsPaneRequested &+= 1
+        settingsPanePending = true
     }
 
     func requestDictatePane() {

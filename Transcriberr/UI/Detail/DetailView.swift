@@ -147,12 +147,20 @@ struct DetailView: View {
                     // + an expanded Run block is 500–900 pt of chrome, which
                     // on a 640 pt window left the transcript three rows — or
                     // pushed it, the tabs and the player off the bottom.
+                    ScrollViewReader { proxy in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
                             headerBlock(model)
                             runStrip(model)
+                                .id("runStrip")
                             speakerChipRow()
                         }
+                    }
+                    // Opened options must not leave the Run button out of view.
+                    .onChange(of: runExpanded) { _, open in
+                        guard open else { return }
+                        Task { @MainActor in proxy.scrollTo("runStrip", anchor: .bottom) }
+                    }
                     }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(maxHeight: max(140, paneHeight - Self.reservedForTranscript))
@@ -1074,6 +1082,7 @@ struct DetailView: View {
                     model.container.audioPlayer.seek(to: seconds)
                     showingSplit = true
                 },
+                canSplit: !model.isRunning && !isMerging,
                 speakerChoices: uniqueSpeakers(),
                 peopleNames: peopleNames,
                 onTag: { seg, choice in tag(seg, choice) },
@@ -1276,6 +1285,7 @@ struct TranscriptPane: View {
     var onEditSegment: (Segment) -> Void = { _ in }
     var onFocusSpeaker: (String) -> Void = { _ in }
     var onSplitHere: (Double) -> Void = { _ in }
+    var canSplit = false
     /// The line a long press opened its actions on.
     @State private var pressedLine: UUID?
     /// Who said a line, picked on the line itself (its speaker name is a
@@ -1638,6 +1648,7 @@ struct TranscriptPane: View {
                 HairlineSoft()
                 Menu("Who said this?") { tagMenu(seg) }
                     .menuStyle(.borderlessButton)
+                    .tint(AppColor.ink)
                     .padding(.horizontal, 12).padding(.vertical, 7)
             }
             .frame(width: 240)
@@ -1659,6 +1670,11 @@ struct TranscriptPane: View {
         var id: String { title }
     }
 
+    private func pick(_ seg: Segment, _ choice: TagChoice) {
+        pressedLine = nil
+        onTag(seg, choice)
+    }
+
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -1677,7 +1693,8 @@ struct TranscriptPane: View {
         if let who, focusName != who {
             finding.append(LineAction(title: "Mark \(who)'s lines") { onFocusSpeaker(who) })
         }
-        finding.append(LineAction(title: "Split recording here…") { onSplitHere(seg.startSeconds) })
+        // As in the More menu: not during a run or a merge.
+        if canSplit { finding.append(LineAction(title: "Split recording here…") { onSplitHere(seg.startSeconds) }) }
         return [[LineAction(title: "Play from here") { player.seek(to: seg.startSeconds); player.play() },
                  LineAction(title: "Edit text…") { onEditSegment(seg) }],
                 copying, finding]
@@ -1770,7 +1787,7 @@ struct TranscriptPane: View {
         Section("Who said this?") {
             ForEach(speakerChoices, id: \.key) { choice in
                 Button {
-                    onTag(seg, .speaker(choice.key))
+                    pick(seg, .speaker(choice.key))
                 } label: {
                     if choice.key == seg.speaker {
                         Label(choice.display, systemImage: "checkmark")
@@ -1785,14 +1802,14 @@ struct TranscriptPane: View {
         if !others.isEmpty {
             Section("Saved people") {
                 ForEach(others, id: \.self) { name in
-                    Button(name) { onTag(seg, .name(name)) }
+                    Button(name) { pick(seg, .name(name)) }
                 }
             }
         }
-        Button("Someone else…") { onTag(seg, .someoneElse) }
+        Button("Someone else…") { pick(seg, .someoneElse) }
         if seg.speaker != nil {
             Divider()
-            Button("Remove speaker") { onTag(seg, .clear) }
+            Button("Remove speaker") { pick(seg, .clear) }
         }
     }
 

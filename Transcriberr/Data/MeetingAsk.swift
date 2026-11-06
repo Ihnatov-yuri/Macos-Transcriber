@@ -39,6 +39,12 @@ nonisolated enum MeetingAsk {
         var terms: [String] = []
         /// The question's own words: they count double.
         var core: [String] = []
+        /// Capitalised words inside the question: Kaiko, SNB. Only these can
+        /// limit what is read, never an ordinary word such as "pricing".
+        var named: [String] = []
+        /// The asker is in the question ("what did I tell Len?"), so it is
+        /// not a request for what Len said.
+        var firstPerson = false
         var people: [String] = []
         var after: Date?
         var before: Date?
@@ -90,8 +96,9 @@ nonisolated enum MeetingAsk {
         for r in recordings where r.folder?.isDictation != true {
             let date = Date(timeIntervalSince1970: TimeInterval(r.createdAtMillis) / 1000)
             for s in r.segments {
+                let who = s.speaker.map { SpeakerLabel.display(s.speakerName, key: $0) } ?? s.speakerName
                 out.append(Line(recordingID: r.id, title: r.title, date: date, start: s.startSeconds,
-                                speaker: s.speakerName, text: s.text))
+                                speaker: who, text: s.text))
             }
         }
         return out
@@ -113,6 +120,9 @@ nonisolated enum MeetingAsk {
                 if let who = line.speaker, !who.isEmpty {
                     if who != lastSpeaker { passage.text += "\(who): " }
                     if !passage.speakers.contains(who) { passage.speakers.append(who) }
+                } else if lastSpeaker != nil {
+                    // Not the previous speaker's line, whatever it looks like.
+                    passage.text += "Someone: "
                 }
                 lastSpeaker = line.speaker
                 passage.text += String(text.prefix(lineLimit))
@@ -147,7 +157,8 @@ nonisolated enum MeetingAsk {
     і й та а але або у в на до з із зі що як це ці той та те то ми ви вони він вона воно я ти мене мені \
     нас вас їх його її про за для по від при чи не ні так же би б був була було були є коли де хто чому \
     який яка яке які сказав сказала казав казала говорив говорила розповів розповідала згадував згадувала \
-    january february march april may june july august september october november december \
+    monday tuesday wednesday thursday friday saturday sunday понеділок вівторок середу четвер пятницю суботу неділю \
+    минулому тижні цього цьому цей ця цю january february march april may june july august september october november december \
     січні лютому березні квітні травні червні липні серпні вересні жовтні листопаді грудні \
     mention mentioned mentions speak spoke says saying discuss discussed \
     last week month year today yesterday recently lately ago минулого минулий тиждень тижня місяця вчора \
@@ -219,7 +230,7 @@ nonisolated enum MeetingAsk {
         // passages that hold it are read. Given others, the model stretched
         // them into an answer (Kaiko "discussed" where nobody said it).
         let names = Set(wanted.map(stem))
-        let rare = coreStems.subtracting(names).filter { s in
+        let rare = Set(plan.named.flatMap { words($0) }.map(stem)).subtracting(names).filter { s in
             let count = perStem[s]?.count ?? 0
             return count > 0 && Double(count) <= max(2, total * 0.03)
         }
@@ -302,8 +313,20 @@ nonisolated enum MeetingAsk {
         }
         // The question's own words always count, also when the model gave nothing.
         plan.core = keywords(question)
+        plan.named = namedWords(question)
+        plan.firstPerson = !firstPersonWords.isDisjoint(with: words(question))
         plan.terms = plan.core + plan.terms
         return plan
+    }
+
+    private static let firstPersonWords: Set<String> = Set(["i", "me", "my", "we", "us", "our", "я", "мені", "мене", "ми", "нам", "нас"].map(fold))
+
+    /// Capitalised words after the first, kept whole: names, not sentence starts.
+    static func namedWords(_ question: String) -> [String] {
+        question.split { !$0.isLetter && !$0.isNumber }.dropFirst()
+            .filter { $0.first?.isUppercase == true }
+            .map(String.init)
+            .filter { !common.contains(fold($0)) }
     }
 
     /// A reply cut off by the token limit still holds usable terms: the
@@ -323,7 +346,7 @@ nonisolated enum MeetingAsk {
     /// last week?". There is nothing to search for, so it takes their lines.
     static func isAboutPersonOnly(_ plan: Plan) -> Bool {
         let names = Set(plan.people.flatMap { words($0) }.map(stem))
-        return !names.isEmpty && Set(plan.core.flatMap { words($0) }.map(stem)).subtracting(names).isEmpty
+        return !names.isEmpty && !plan.firstPerson && Set(plan.core.flatMap { words($0) }.map(stem)).subtracting(names).isEmpty
     }
 
     /// Only the lines this person spoke, longest stretches of the newest
@@ -347,10 +370,10 @@ nonisolated enum MeetingAsk {
         return out
     }
 
-    static func personSystem(me: String, today: Date) -> String {
+    static func personSystem(me: String, today: Date, inDates: Bool = true) -> String {
         """
         Today is \(day(today)). You tell \(me) what someone said in their meetings. Every numbered passage holds \
-        only that person's own words, machine-transcribed, from the period asked about.
+        only that person's own words, machine-transcribed\(inDates ? ", from the period asked about." : ". They are not from the period asked about, so say when they are from.")
         Write the main things they said, newest meeting first, at most six sentences, with the date of each \
         meeting. Put the passage number after every claim, in square brackets: [3]. Use only the passages. Skip \
         small talk. Answer in the language of the question. Use the person's name; in English use "they" and never guess "he" or "she"; in Ukrainian repeat the name rather than write "вони". Speak of the meetings, never of "passages". Never \
@@ -441,15 +464,19 @@ nonisolated enum MeetingAsk {
                 widened = true
             }
             if !theirs.isEmpty {
-                let reply = try await model.answer(system: personSystem(me: me, today: today),
+                let reply = try await model.answer(system: personSystem(me: me, today: today, inDates: !widened),
                                                    user: answerPrompt(question, passages: theirs), maxTokens: 600)
                 try Task.checkCancellation()
                 var answer = parseAnswer(reply, question: question, passages: theirs)
                 answer.widened = widened
                 return answer
             }
-            // Nobody by that name speaks in any recording: nothing to show.
-            return Answer(question: question, text: "", cited: [])
+            // Nobody by that name speaks. If they are only mentioned (a
+            // company, someone not diarized), the search below finds that;
+            // if nothing says the name either, there is nothing to show.
+            let name = Set(plan.people.flatMap { words($0) }.map(stem))
+            let mentioned = lines.contains { !name.isDisjoint(with: words($0.text).map(stem)) }
+            if !mentioned { return Answer(question: question, text: "", cited: []) }
         }
         let all = passages(lines)
         let inDates = all.filter { p in

@@ -295,7 +295,8 @@ final class LiveTranscriber: @unchecked Sendable {
         let frames = Self.frameRMS(pending)
 
         // Room tone only: let it go rather than reading it.
-        if !Self.hasSpeech(frames) {
+        let quiet = quietFloor
+        if !Self.hasSpeech(frames, quiet: quiet) {
             if Double(pending.count) / sr >= 2 {
                 pendingStart += Double(pending.count) / sr
                 pending.removeAll()
@@ -305,7 +306,7 @@ final class LiveTranscriber: @unchecked Sendable {
             return false
         }
 
-        if let cut = Self.phraseEnd(frames: frames, sampleCount: pending.count) {
+        if let cut = Self.phraseEnd(frames: frames, sampleCount: pending.count, quiet: quiet) {
             let phrase = Array(pending.prefix(cut))
             let start = pendingStart
             pending.removeFirst(cut)
@@ -368,6 +369,10 @@ final class LiveTranscriber: @unchecked Sendable {
             self?.vadLoading = false
         }
     }
+
+    /// The low floor needs the detector behind it: without one, room tone
+    /// would reach the engine.
+    private var quietFloor: Bool { vad != nil && Self.speechCheckOn(UserDefaults.standard) }
 
     /// True when in doubt: no detector or a failed check must never lose speech.
     private func isVoiced(_ samples: [Float]) async -> Bool {
@@ -448,10 +453,12 @@ final class LiveTranscriber: @unchecked Sendable {
 
     /// Below this a frame counts as a pause: three times the quietest tenth
     /// of the phrase (its room tone), kept inside -50…-34 dB.
-    nonisolated static func pauseThreshold(_ frames: [Float]) -> Float {
+    nonisolated static func pauseThreshold(_ frames: [Float], quiet: Bool = false) -> Float {
         guard !frames.isEmpty else { return 0.003 }
         let floor = frames.sorted()[frames.count / 10]
-        return min(0.02, max(0.003, floor * 3))
+        // A fixed -50 dB is above the whole of a quiet speaker: relative then.
+        let lowest = quiet ? max(0.0002, min(0.003, (frames.max() ?? 0) * 0.05)) : 0.003
+        return min(0.02, max(lowest, floor * 3))
     }
 
     /// Measured on a real recording: a mic click 0.76 and room tone 0.24,
@@ -472,24 +479,28 @@ final class LiveTranscriber: @unchecked Sendable {
     /// Voice-activity floor. Silence and room tone must not reach an engine:
     /// Gemma's audio tower invents confident speech from them, and Parakeet
     /// returns stray words.
-    nonisolated static func hasSpeech(_ frames: [Float]) -> Bool {
-        // ~-34 dB peak frame and ~-52 dB overall.
-        guard let peak = frames.max(), peak > 0.02 else { return false }
+    ///
+    /// `quiet` is for when the speech detector stands behind this floor: it
+    /// then only has to skip near-silence, and quiet speakers get through.
+    nonisolated static func hasSpeech(_ frames: [Float], quiet: Bool = false) -> Bool {
+        // ~-34 dB peak frame and ~-52 dB overall; quiet ~-56 dB and ~-74 dB.
+        guard let peak = frames.max(), peak > (quiet ? 0.0015 : 0.02) else { return false }
         var sumSq: Float = 0
         for f in frames { sumSq += f * f }
-        return (sumSq / Float(frames.count)).squareRoot() > 0.0025
+        return (sumSq / Float(frames.count)).squareRoot() > (quiet ? 0.0002 : 0.0025)
     }
+
 
     /// Where the open phrase ends, in samples, or nil while it is still
     /// going. The first pause of `minPauseSeconds` that follows at least
     /// `minPhraseSeconds` of audio closes it, cut in the middle of the
     /// pause. Past `maxPhraseSeconds` the quietest frame of the last few
     /// seconds closes it instead.
-    nonisolated static func phraseEnd(frames: [Float], sampleCount: Int) -> Int? {
+    nonisolated static func phraseEnd(frames: [Float], sampleCount: Int, quiet: Bool = false) -> Int? {
         let frameSeconds = Double(frameSamples) / Double(sampleRate)
         let minPause = Int((minPauseSeconds / frameSeconds).rounded(.up))
         let minPhrase = Int(minPhraseSeconds / frameSeconds)
-        let threshold = pauseThreshold(frames)
+        let threshold = pauseThreshold(frames, quiet: quiet)
         var runStart: Int?
         for (i, rms) in frames.enumerated() {
             if rms < threshold {

@@ -463,7 +463,7 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
 /// prints every phrase: its top speech probability, words and text. Shows
 /// what the live speech check would drop at any threshold.
 @MainActor
-func cmdLiveCheck(path: String, language: String, gainDB: Float) async -> Int32 {
+func cmdLiveCheck(path: String, language: String, gainDB: Float, quiet: Bool) async -> Int32 {
     do {
         var audio = try AudioDecoder.decodeViaAudioFile(URL(fileURLWithPath: path))
         if gainDB != 0 {
@@ -481,11 +481,11 @@ func cmdLiveCheck(path: String, language: String, gainDB: Float) async -> Int32 
             at += sr
             while true {
                 let frames = LiveTranscriber.frameRMS(pending)
-                if !LiveTranscriber.hasSpeech(frames) {
+                if !LiveTranscriber.hasSpeech(frames, quiet: quiet) {
                     if pending.count >= 2 * sr { pending.removeAll() }
                     break
                 }
-                guard let cut = LiveTranscriber.phraseEnd(frames: frames, sampleCount: pending.count) else { break }
+                guard let cut = LiveTranscriber.phraseEnd(frames: frames, sampleCount: pending.count, quiet: quiet) else { break }
                 let phrase = Array(pending.prefix(cut))
                 pending.removeFirst(cut)
                 let top = try await vad.process(phrase).map(\.probability).max() ?? 0
@@ -979,7 +979,8 @@ func main() async -> Int32 {
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
     case "livecheck":
         guard args.count > 4 else { usage(); return 64 }
-        return await cmdLiveCheck(path: args[2], language: args[3], gainDB: Float(args[4]) ?? 0)
+        return await cmdLiveCheck(path: args[2], language: args[3], gainDB: Float(args[4]) ?? 0,
+                                  quiet: args.count <= 5 || args[5] != "old")
     case "vad":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdVad(Array(args.dropFirst(2)))

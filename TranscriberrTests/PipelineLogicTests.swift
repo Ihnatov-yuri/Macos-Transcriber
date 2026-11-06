@@ -262,6 +262,27 @@ final class LiveCaptionTests: XCTestCase {
         XCTAssertFalse(LiveTranscriber.speechCheckOn(d))
     }
 
+    /// Measured: at -20 dB the normal floor left 43 of 5,629 words.
+    func testQuietFloorLetsQuietSpeechThrough() {
+        var speech = [Float](repeating: 0, count: 200)
+        for i in 50..<150 { speech[i] = 0.006 }     // about -44 dB
+        XCTAssertFalse(LiveTranscriber.hasSpeech(speech))
+        XCTAssertTrue(LiveTranscriber.hasSpeech(speech, quiet: true))
+        XCTAssertFalse(LiveTranscriber.hasSpeech([Float](repeating: 0.0005, count: 200), quiet: true))
+    }
+
+    func testQuietPausesAreFoundBelowTheFixedFloor() {
+        var frames = [Float](repeating: 0.0001, count: 100)
+        for i in 0..<60 { frames[i] = 0.006 }
+        XCTAssertEqual(LiveTranscriber.pauseThreshold(frames), 0.003)
+        XCTAssertEqual(LiveTranscriber.pauseThreshold(frames, quiet: true), 0.0003, accuracy: 0.00001)
+    }
+
+    func testQuietFloorChangesNothingForNormalSpeech() {
+        let frames = [Float](repeating: 0.001, count: 50) + [Float](repeating: 0.2, count: 50)
+        XCTAssertEqual(LiveTranscriber.pauseThreshold(frames, quiet: true), LiveTranscriber.pauseThreshold(frames))
+    }
+
     func testRoomToneIsNotSpeech() {
         XCTAssertFalse(LiveTranscriber.hasSpeech(LiveTranscriber.frameRMS(audio([(0, 3)]))))
         XCTAssertTrue(LiveTranscriber.hasSpeech(LiveTranscriber.frameRMS(audio([(1, 2)]))))

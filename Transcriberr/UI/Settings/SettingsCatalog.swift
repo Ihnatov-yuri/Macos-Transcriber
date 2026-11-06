@@ -68,7 +68,7 @@ enum SettingID: String, CaseIterable, Sendable {
     // A · Audio input
     case microphone, noiseSuppression, echoFilter, virtualMicrophone, preprocessImports, voiceprint, people
     // B · Engines
-    case myName, defaultEngine, liveEngine, whisperModels, engineLanguages
+    case myName, defaultEngine, liveEngine, liveSpeechCheck, whisperModels, engineLanguages
     case mergeEngines, superMaxQuality, meetingSuperFollowUp, calendarContext, recordingBrief, textModelRulings
     case turnGranularity, textEngine
     // C · Models
@@ -96,7 +96,7 @@ enum SettingID: String, CaseIterable, Sendable {
         switch self {
         case .microphone, .noiseSuppression, .echoFilter, .virtualMicrophone, .preprocessImports, .voiceprint, .people:
             .audio
-        case .myName, .defaultEngine, .liveEngine, .whisperModels, .engineLanguages, .mergeEngines, .superMaxQuality,
+        case .myName, .defaultEngine, .liveEngine, .liveSpeechCheck, .whisperModels, .engineLanguages, .mergeEngines, .superMaxQuality,
              .meetingSuperFollowUp, .calendarContext, .recordingBrief, .textModelRulings, .turnGranularity, .textEngine:
             .engines
         case .textModelPicks, .textModelComparison, .speechModels, .whisperDownloads:
@@ -155,6 +155,7 @@ enum SettingID: String, CaseIterable, Sendable {
         case .myName: "My name"
         case .defaultEngine: "Default engine"
         case .liveEngine: "Live captions engine"
+        case .liveSpeechCheck: "Keep sounds out of live captions"
         case .whisperModels: "Whisper models for English, Ukrainian and other languages"
         case .engineLanguages: "Languages by engine"
         case .mergeEngines: "Super merge engines A and B"
@@ -223,6 +224,8 @@ enum SettingID: String, CaseIterable, Sendable {
             "The speech-to-text engine new recordings and imports use: Parakeet, Whisper or Super, which merges two engines."
         case .liveEngine:
             "The engine that writes live captions while a recording runs."
+        case .liveSpeechCheck:
+            "Checks that a sound is speech before the live engine reads it, so a click or a breath doesn't appear as a stray word such as \u{201C}Yeah.\u{201D} Runs on this Mac. Turn it off if live captions miss very quiet or whispered speech. Saved transcripts are not affected."
         case .whisperModels:
             "Whisper uses the first model when a recording's languages are English only, the second for anything else, auto-detect included. On the reference set, turbo compressed made English Super about 4x faster at the same accuracy; in Ukrainian every model but large-v3 lost 5-15 points. Speech models download automatically on first use: Parakeet v3/v2/UK (~0.6-1 GB each, Neural Engine) and the Whisper models picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models."
         case .engineLanguages:
@@ -320,6 +323,7 @@ enum SettingID: String, CaseIterable, Sendable {
         case .myName: "you me name speaker"
         case .defaultEngine: "asr speech recognition parakeet whisper super transcription"
         case .liveEngine: "live captions realtime"
+        case .liveSpeechCheck: "live captions ghost phrases stray words speech detector vad silero noise clicks"
         case .whisperModels: "turbo large-v3 distil"
         case .engineLanguages: "language ukrainian english arabic dutch"
         case .mergeEngines, .superMaxQuality, .textModelRulings: "super dual-engine ensemble"
@@ -363,6 +367,7 @@ enum SettingID: String, CaseIterable, Sendable {
         case .myName: 90
         case .defaultEngine: 40
         case .liveEngine: 40
+        case .liveSpeechCheck: 90
         case .whisperModels: 220
         case .engineLanguages: 230
         case .mergeEngines: 80

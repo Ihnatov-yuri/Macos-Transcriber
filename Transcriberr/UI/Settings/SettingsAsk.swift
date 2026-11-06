@@ -176,7 +176,7 @@ enum SettingAccessors {
         case .assistants: "access to your library is granted by hand."
         case .dictationLinks, .dictationHistory, .dictationIndicators, .dictationInsertion,
              .microphone, .noiseSuppression, .echoFilter, .preprocessImports, .myName, .defaultEngine,
-             .liveEngine, .whisperModels, .mergeEngines, .superMaxQuality, .meetingSuperFollowUp,
+             .liveEngine, .liveSpeechCheck, .whisperModels, .mergeEngines, .superMaxQuality, .meetingSuperFollowUp,
              .calendarContext, .recordingBrief, .textModelRulings, .turnGranularity,
              .textModelPicks, .tone, .fillersVerbatim, .benchmark, .dictationHotkey, .dictationRecognition,
              .dictationCleanup, .dictationFormatting, .dictationContext, .updates:
@@ -313,6 +313,8 @@ enum SettingAccessors {
                    if k == s.ui.ensembleEngineA { s.ui.ensembleEngineA = s.ui.ensembleEngineB }
                    s.ui.ensembleEngineB = k
                }, coupled: ["mergeEngines.a"]),
+        toggle(SettingID.liveSpeechCheck.rawValue, .liveSpeechCheck, SettingID.liveSpeechCheck.label,
+               get: { $0.ui.liveSpeechCheck }, set: { $0.ui.liveSpeechCheck = $1 }),
         toggle(SettingID.superMaxQuality.rawValue, .superMaxQuality, "Super max quality",
                get: { $0.ui.superMaxQuality }, set: { $0.ui.superMaxQuality = $1 }),
         toggle(SettingID.meetingSuperFollowUp.rawValue, .meetingSuperFollowUp, SettingID.meetingSuperFollowUp.label,

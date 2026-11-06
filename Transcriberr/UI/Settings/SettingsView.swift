@@ -65,7 +65,7 @@ struct EnginesSettingsTab: View {
                     Text(SettingID.myName.help)
                 }
             }
-            if filter.showsAny(.defaultEngine, .liveEngine, .whisperModels) {
+            if filter.showsAny(.defaultEngine, .liveEngine, .liveSpeechCheck, .whisperModels) {
                 Section("Speech-to-text") {
                     if filter.shows(.defaultEngine) {
                         EnginePicker(title: "Default engine", kinds: audioEngines, selection: Binding(
@@ -80,6 +80,14 @@ struct EnginesSettingsTab: View {
                         )) {
                             ForEach(liveEngines, id: \.rawValue) { Text($0.displayName).tag($0) }
                         }
+                    }
+                    if filter.shows(.liveSpeechCheck) {
+                        Toggle(SettingID.liveSpeechCheck.label, isOn: Binding(
+                            get: { container.uiPrefs.liveSpeechCheck },
+                            set: { container.uiPrefs.liveSpeechCheck = $0 }
+                        ))
+                        Text(SettingID.liveSpeechCheck.help)
+                            .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                     }
                     if filter.shows(.whisperModels) {
                         WhisperModelPickers()

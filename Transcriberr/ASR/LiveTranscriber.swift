@@ -371,7 +371,7 @@ final class LiveTranscriber: @unchecked Sendable {
 
     /// True when in doubt: no detector or a failed check must never lose speech.
     private func isVoiced(_ samples: [Float]) async -> Bool {
-        guard let vad else { return true }
+        guard Self.speechCheckOn(UserDefaults.standard), let vad else { return true }
         guard let results = try? await vad.process(samples) else { return true }
         return Self.voiced(results.map(\.probability))
     }
@@ -457,6 +457,13 @@ final class LiveTranscriber: @unchecked Sendable {
     /// Measured on a real recording: a mic click 0.76 and room tone 0.24,
     /// spoken words and two-second dictations 1.00.
     nonisolated static let speechProbability: Float = 0.85
+
+    nonisolated static let speechCheckKey = "ui.liveSpeechCheck"
+
+    /// On by default: only an explicit Off in Settings disables it.
+    nonisolated static func speechCheckOn(_ defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: speechCheckKey) as? Bool ?? true
+    }
 
     nonisolated static func voiced(_ probabilities: [Float]) -> Bool {
         (probabilities.max() ?? 0) >= speechProbability

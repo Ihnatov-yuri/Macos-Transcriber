@@ -253,6 +253,15 @@ final class LiveCaptionTests: XCTestCase {
         XCTAssertTrue(LiveTranscriber.voiced([0.1, 1.0]))
     }
 
+    func testSpeechCheckIsOnUnlessTurnedOff() {
+        let name = "LiveSpeechCheck.\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: name)!
+        defer { d.removePersistentDomain(forName: name) }
+        XCTAssertTrue(LiveTranscriber.speechCheckOn(d))
+        d.set(false, forKey: LiveTranscriber.speechCheckKey)
+        XCTAssertFalse(LiveTranscriber.speechCheckOn(d))
+    }
+
     func testRoomToneIsNotSpeech() {
         XCTAssertFalse(LiveTranscriber.hasSpeech(LiveTranscriber.frameRMS(audio([(0, 3)]))))
         XCTAssertTrue(LiveTranscriber.hasSpeech(LiveTranscriber.frameRMS(audio([(1, 2)]))))

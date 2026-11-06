@@ -57,6 +57,9 @@ nonisolated final class UIPrefs: @unchecked Sendable {
     /// Super merge: sequential chunks WITH preceding-transcript context for
     /// Gemma arbitration (max quality) instead of the 3-wide pipeline (speed).
     var superMaxQuality: Bool { didSet { defaults.set(superMaxQuality, forKey: Key.superMaxQuality) } }
+    /// Live captions check for speech before the engine reads. On unless
+    /// turned off; LiveTranscriber reads the key, so it applies mid-recording.
+    var liveSpeechCheck: Bool { didSet { defaults.set(liveSpeechCheck, forKey: LiveTranscriber.speechCheckKey) } }
     /// After a meeting's quick auto-transcription, refine it with Super in
     /// the background (the quick draft stays readable meanwhile).
     var meetingSuperFollowUp: Bool { didSet { defaults.set(meetingSuperFollowUp, forKey: "ui.meetingSuperFollowUp") } }
@@ -85,6 +88,7 @@ nonisolated final class UIPrefs: @unchecked Sendable {
         superTextModelID = ModelCatalog.chosen(.superMerge).id
         textModelID = ModelCatalog.chosen(.general).id
         superMaxQuality = defaults.bool(forKey: Key.superMaxQuality)
+        liveSpeechCheck = defaults.object(forKey: LiveTranscriber.speechCheckKey) as? Bool ?? true
         let storedGap = defaults.double(forKey: Key.turnGap)
         turnCoalesceGapSeconds = storedGap > 0 ? storedGap : 30
         ensembleEngineA = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.ensembleEngineA) ?? "") ?? EnsembleBackend.defaultEngineA

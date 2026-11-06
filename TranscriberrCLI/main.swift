@@ -459,6 +459,50 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
     return 0
 }
 
+/// Replays a file the way live captions read it, one second at a time, and
+/// prints every phrase: its top speech probability, words and text. Shows
+/// what the live speech check would drop at any threshold.
+@MainActor
+func cmdLiveCheck(path: String, language: String, gainDB: Float) async -> Int32 {
+    do {
+        var audio = try AudioDecoder.decodeViaAudioFile(URL(fileURLWithPath: path))
+        if gainDB != 0 {
+            let g = pow(10, gainDB / 20)
+            for i in audio.indices { audio[i] *= g }
+        }
+        let backend = BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore()).backend(for: .parakeetUK)
+        try await backend.load(modelPath: nil)
+        let vad = try await VadManager()
+        let sr = LiveTranscriber.sampleRate
+        var pending: [Float] = []
+        var at = 0
+        while at < audio.count {
+            pending += audio[at..<min(at + sr, audio.count)]
+            at += sr
+            while true {
+                let frames = LiveTranscriber.frameRMS(pending)
+                if !LiveTranscriber.hasSpeech(frames) {
+                    if pending.count >= 2 * sr { pending.removeAll() }
+                    break
+                }
+                guard let cut = LiveTranscriber.phraseEnd(frames: frames, sampleCount: pending.count) else { break }
+                let phrase = Array(pending.prefix(cut))
+                pending.removeFirst(cut)
+                let top = try await vad.process(phrase).map(\.probability).max() ?? 0
+                let text = try await backend.transcribeChunk(samples: phrase, languages: [language], translateTo: nil,
+                                                             diarize: false, previousContext: nil, speakerHints: [])
+                let clean = text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ")
+                let words = clean.split(separator: " ").count
+                print(String(format: "PHRASE\t%.3f\t%.1f\t%d\t%@", top, Double(phrase.count) / Double(sr), words, clean))
+            }
+        }
+        return 0
+    } catch {
+        print("[livecheck] ❌ \(error)")
+        return 1
+    }
+}
+
 /// Speech probability of each file by the VAD: max, share of 256 ms windows over 0.5.
 @MainActor
 func cmdVad(_ paths: [String]) async -> Int32 {
@@ -933,6 +977,9 @@ func main() async -> Int32 {
     case "whisper":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdWhisper(path: args[2], language: args.count > 3 ? args[3] : nil)
+    case "livecheck":
+        guard args.count > 4 else { usage(); return 64 }
+        return await cmdLiveCheck(path: args[2], language: args[3], gainDB: Float(args[4]) ?? 0)
     case "vad":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdVad(Array(args.dropFirst(2)))

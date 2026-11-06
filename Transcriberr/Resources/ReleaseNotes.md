@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.5.1
+
+- Live captions no longer turn a click or a breath into a stray word such as "Yeah." A speech check on this Mac looks at each phrase before the live engine reads it. It is on by default: Settings, Advanced, Engines, Keep sounds out of live captions.
+
 ## 5.5.0
 
 - Ask your meetings: a new Ask button in the Library answers a question from all your transcripts, in English or Ukrainian, on this Mac. Every claim links to the moment it was said, and when the recordings don't answer it, it says so. Find stays as it was.

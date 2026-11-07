@@ -18,7 +18,7 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
     /// Recordings the voice was learned from. Each one adds embeddings, so
     /// a person heard on a call and in a room matches in both.
     var sources: Int
-    /// Recordings the voice was learned from (5.0.0; nil in older files),
+    /// Recordings the voice was learned from (nil in older files),
     /// so the person page can offer the named ones not learned yet.
     var learnedFrom: [UUID]? = nil
     /// Automatic matches, newest last: the track record behind the voice
@@ -45,7 +45,7 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
     /// older files: there `matches` is the only evidence.
     var autoNamed: [String]? = nil
 
-    /// For a person saved before 5.0.0: the last training then. Named
+    /// For a person from an older file: the last training then. Named
     /// recordings up to it are taken as learned (their source was not kept).
     var legacyCutoff: Date? = nil
 
@@ -56,7 +56,7 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
     /// Has a voice to compare against (false while it is being rebuilt).
     var hasVoice: Bool { !print.embeddings.isEmpty }
     /// Their voice in the models not in use, kept when the setting changes
-    /// so switching back is instant (5.0.0).
+    /// so switching back is instant.
     var parked: [String: Parked]? = nil
 
     struct Parked: Codable, Equatable {
@@ -64,7 +64,7 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
         var samples: [Sample]?
         var sources: Int
     }
-    /// Where each run of `print.embeddings` came from, in order (5.0.0), so
+    /// Where each run of `print.embeddings` came from, in order, so
     /// one bad sample can be forgotten without deleting the person. Nil in
     /// older files: their embeddings are one "earlier" sample.
     var samples: [Sample]? = nil
@@ -72,7 +72,7 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
     /// One learning: a speaker of a recording, or a reading at this Mac.
     struct Sample: Codable, Equatable, Identifiable {
         var id: UUID
-        /// Nil for a reading, or for everything learned before 5.0.0.
+        /// Nil for a reading, or for everything learned in an older file.
         var recordingId: UUID?
         var date: Date
         var seconds: Double
@@ -104,8 +104,8 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
 
     /// Adds a learning's embeddings as a new sample, then trims to the cap.
     /// The same speakers of a recording learned again replace their earlier
-    /// sample, or the same speech would count twice (seen 2026-10-24: Add
-    /// person pressed twice kept one meeting as 78 s + 100 s). Another
+    /// sample, or the same speech would count twice (Add person pressed
+    /// twice kept one meeting as 78 s + 100 s). Another
     /// speaker of that recording (one person split in two) is kept beside
     /// it. True when a sample was replaced.
     @discardableResult
@@ -146,9 +146,9 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
 
     /// Keeps at most `maxEmbeddings`, taken from every sample in proportion
     /// (and at least `minPerSample` from each), spread evenly through each.
-    /// Keeping only the newest let one long recording push out the voice
-    /// heard elsewhere (seen 2026-10-23: a 146 s enrollment cut to 7 s by a
-    /// 147 s learning), when the mix of microphones is the point.
+    /// Keeping only the newest lets one long recording push out the voice
+    /// heard elsewhere (a 146 s enrollment cut to 7 s by a 147 s learning),
+    /// when the mix of microphones is the point.
     mutating func trim() {
         let list = allSamples
         let total = list.map(\.count).reduce(0, +)
@@ -235,7 +235,7 @@ nonisolated struct Person: Codable, Identifiable, Equatable {
         static func key(_ recordingId: UUID, _ speaker: String) -> String { "\(recordingId.uuidString)|\(speaker)" }
     }
 
-    /// At most this many embeddings per person, the newest kept: enough to
+    /// At most this many embeddings per person (see `trim`): enough to
     /// span a few microphones without the file growing with every save.
     static let maxEmbeddings = 120
     /// Each sample keeps at least this many when trimmed.
@@ -269,7 +269,7 @@ nonisolated enum Provenance: Equatable, Sendable {
     case confirmed
     /// Named by hand: a speaker renamed or a line tagged in the transcript,
     /// or learned from with Remember this voice. Also what an automatic
-    /// naming from before 5.0 reads as once its match has aged out.
+    /// naming in an older file reads as once its match has aged out.
     case typed
     /// Named by a voice match; the score when the match is still logged.
     case auto(score: Float?)
@@ -377,9 +377,9 @@ nonisolated struct PeopleStore {
         var excluded = dir
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try? excluded.setResourceValues(values)
+        AppLog.attempt("people", "keeping voices out of Time Machine") { try excluded.setResourceValues(values) }
         try JSONEncoder().encode(File(people: people)).write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        AppLog.attempt("people", "making \(url.lastPathComponent) owner-only") { try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
         NotificationCenter.default.post(name: Self.didChange, object: nil)
     }
 
@@ -775,13 +775,13 @@ nonisolated enum PeopleMatch {
     /// Speakers are matched on 3 s clips, the length their voices are
     /// learned from (`VoiceActivity.enrollWindow`). On 1.5 s clips the same
     /// model told two people apart half as well (clip EER 12.5% against
-    /// 6.4%, benchmark 2026-10-24); the user's own target-speaker gate keeps
+    /// 6.4%, benchmark); the user's own target-speaker gate keeps
     /// 1.5 s, where following a turn matters more.
     static let clipSeconds = 3.0
     /// A speaker is a person when the median similarity of its clips to the
     /// person's voice is at least `onThreshold` and `margin` above the next
     /// person. Two people both close are left unnamed, never guessed.
-    /// Calibrated on 3 s clips (2026-10-24, 381 clips of 23 people from
+    /// Calibrated on 3 s clips (381 clips of 23 people from
     /// the user's meetings, empty embedder slots filled): the right person
     /// scored at least 0.52, anyone else at most 0.47, Lana against Iryna
     /// 0.41. On 1.5 s clips these were 0.40 / 0.30 / 0.10.
@@ -990,10 +990,10 @@ nonisolated enum PeopleVoice {
     /// A voice print of one speaker of a recording.
     ///
     /// The recording is read here, on the main actor, and only plain values
-    /// go on: as a non-isolated async function this used to run on a
+    /// go on: as a non-isolated async function this would run on a
     /// background thread and walk the main context's segments there, which
-    /// crashed SwiftData when the person page reloaded at the same moment
-    /// (2026-10-23, Learn from named recordings).
+    /// crashes SwiftData when the person page reloads at the same moment
+    /// (Learn from named recordings).
     @MainActor
     static func learn(speaker key: String, in recording: Recording) async throws -> Voiceprint {
         let all = regions(recording.segments.sorted { $0.startSeconds < $1.startSeconds })
@@ -1113,7 +1113,7 @@ enum PeopleNamer {
         guard !keys.isEmpty else {
             // Nothing to match this time: what an earlier run logged for
             // this recording points at speakers that may not exist now.
-            try? store.log([:], in: recording.id)
+            AppLog.attempt("people", "clearing the match log") { try store.log([:], in: recording.id) }
             unknown.record([], for: recording.id)
             return 0
         }

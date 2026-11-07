@@ -7,8 +7,8 @@ import Observation
 nonisolated final class RecorderSettings: @unchecked Sendable {
     static let shared = RecorderSettings()
 
-    /// Microphone sensitivity / input gain applied to audio *before Gemma
-    /// transcribes it*. Many Macs capture quiet (-50 dB), which both starves
+    /// Microphone sensitivity / input gain applied to audio *before the speech
+    /// engine transcribes it*. Many Macs capture quiet (-50 dB), which both starves
     /// the model and triggers hallucinations. `.auto` normalizes each voiced
     /// chunk to a target level; the fixed steps apply a constant boost.
     nonisolated enum MicSensitivity: String, CaseIterable, Sendable {
@@ -52,7 +52,7 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
 
     /// Which microphone to capture from — dictation, plain recordings and the
     /// meeting aggregate all read this. `nil` means "whatever macOS calls the
-    /// default input", which is the old behaviour and stays the default.
+    /// default input", which is the default.
     /// Stored as a device UID, so it survives reboots and re-plugging, and
     /// resolves back to nothing when the device is gone.
     var inputDeviceUID: String? {
@@ -71,12 +71,12 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
     /// Apple's echo filter on the microphone during meeting recordings,
     /// unless the output is headphones (see `VoiceProcessedMic`). Off by
     /// default: next to a call app's own voice processing on the same mic
-    /// it went quiet for both, so the call heard nothing of the user and the
-    /// recording lost their voice (every speaker meeting from 24 to 27
-    /// October 2026). The raw mic and the offline `EchoCanceller` are the
-    /// default path again. Measured over 30 meetings (28 October 2026): the
-    /// transcript's echo is the same without it, and every meeting with it
-    /// dropped audio, so a saved "on" is reset once (`resetEchoFilterOnce`).
+    /// it goes quiet for both, so the call hears nothing of the user and the
+    /// recording loses their voice (every speaker meeting it ran on). The raw
+    /// mic and the offline `EchoCanceller` are the default path. Measured
+    /// over 30 meetings: the transcript's echo is the same without it, and
+    /// every meeting with it dropped audio, so a saved "on" is reset once
+    /// (`resetEchoFilterOnce`).
     var meetingEchoFilter: Bool {
         didSet { defaults.set(meetingEchoFilter, forKey: Key.meetingEchoFilter) }
     }

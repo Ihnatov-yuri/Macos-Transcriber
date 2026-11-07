@@ -5,7 +5,7 @@ struct RecordView: View {
     @Environment(AppContainer.self) private var container
     /// Between pressing Record and the first buffer: the microphone and
     /// echo filter take a few seconds to come up, and with nothing on
-    /// screen a second press stopped the recording it had just started.
+    /// screen a second press would stop the recording it had just started.
     @State private var starting = false
     /// Owned by AppShell (app lifetime), NOT a view-scoped @State: this view
     /// is torn down every time the sidebar switches sections, and a model
@@ -164,8 +164,8 @@ struct RecordView: View {
         }
     }
 
-    /// One option pill + a permanent two-line explanation underneath — the
-    /// cycling pills were unlabeled mystery buttons ("MIC AUTO") before.
+    /// One option pill + a permanent two-line explanation underneath: without
+    /// it the cycling pills are unlabeled mystery buttons ("MIC AUTO").
     @ViewBuilder
     private func option(
         _ label: String, _ value: String, active: Bool,
@@ -202,7 +202,7 @@ struct RecordView: View {
     }
 
     private func cycleEngine(_ m: RecordModel) {
-        // supportsLive excludes the dual-engine merge and Gemma audio; cloud
+        // supportsLive excludes the dual-engine merge; cloud
         // engines only qualify when their API key is stored.
         let opts = BackendFactory.Kind.allCases.filter { kind in
             guard kind.supportsLive else { return false }
@@ -340,7 +340,7 @@ private func formatElapsed(_ ms: Int64) -> String {
 
 /// Its own view so the recorder's ~30 Hz level and waveform updates
 /// re-evaluate only this strip. Read inside `RecordView.body`, every tick
-/// rebuilt the whole sheet — options, footer and the live transcript.
+/// would rebuild the whole sheet — options, footer and the live transcript.
 private struct RecordMeter: View {
     let model: RecordModel
 
@@ -419,7 +419,7 @@ private struct RecordMeter: View {
 
 /// Everything said so far in this recording, grouped into paragraphs, with
 /// the phrase still being spoken in a lighter ink. Pinned to the newest
-/// line. Used to show only the newest five-second fragment.
+/// line.
 struct LivePanel: View {
     let model: RecordModel
 

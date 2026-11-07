@@ -3,7 +3,7 @@ import SwiftData
 import AVFoundation
 
 // `transcriberrcli migrate-audio [--dry-run]` — one-time migration of
-// existing WAV recordings (made before v2.5.0 introduced post-record AAC
+// existing WAV recordings (made by builds without post-record AAC
 // compression) to .m4a, reusing the same verify-then-delete
 // AudioCompressor.compressRecordingFiles path new recordings already go
 // through. Opens the store WRITABLE (unlike KBService's read-only access)
@@ -50,8 +50,8 @@ func cmdMigrateAudio(dryRun: Bool) async -> Int32 {
     for rec in wavRecordings {
         let mainURL = URL(fileURLWithPath: rec.audioPath)
         // Two rows can share a base name (call.wav imported next to
-        // call.m4a before imports uniquified on the base): transcoding
-        // would replace the other row's .m4a and the self-heal below would
+        // call.m4a by a build that did not uniquify imports on the base):
+        // transcoding would replace the other row's .m4a and the self-heal below would
         // point both rows at one file. Leave this one as WAV instead.
         let targetM4A = mainURL.deletingPathExtension().appendingPathExtension("m4a")
         if let owner = allRecordings.first(where: { $0 !== rec && $0.audioPath == targetM4A.path }) {

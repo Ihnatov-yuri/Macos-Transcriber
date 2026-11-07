@@ -17,11 +17,11 @@ extension MeetingRecorder: LiveChunkSource {
 
 /// Fans a recorder's live chunks out, one `AsyncStream` per subscriber.
 ///
-/// Until v3.16.1 each recorder had ONE stream for the whole recording, and
-/// cancelling the task that iterates an `AsyncStream` terminates the stream.
-/// So switching Live off mid-recording killed the feed for good: switched
-/// back on, live listened to a dead stream and never showed another word.
-/// Now stopping live ends only its own subscription.
+/// Cancelling the task that iterates an `AsyncStream` terminates the stream.
+/// With ONE stream for the whole recording, switching Live off mid-recording
+/// would kill the feed for good: switched back on, live would listen to a
+/// dead stream and never show another word. With a stream per subscriber,
+/// stopping live ends only its own subscription.
 ///
 /// Thread-safe: chunks are yielded on the recorder's IO queue, subscriptions
 /// come from the main actor, terminations from anywhere.
@@ -75,9 +75,9 @@ import Observation
 /// phrase is also re-read about once a second and shown as `partial`, so
 /// words appear while they are being said.
 ///
-/// Until v3.15.10 every hard-cut 5-second chunk was read on its own and only
-/// the newest was shown: words split at every cut, and the screen held one
-/// fragment at a time.
+/// Reading every hard-cut 5-second chunk on its own and showing only the
+/// newest would split words at every cut and hold one fragment on screen at
+/// a time.
 ///
 /// `@MainActor`: `status`, `lines` and `partial` are `@Observable` state
 /// SwiftUI reads on the main thread. Every heavy step is an `await` into the
@@ -160,8 +160,8 @@ final class LiveTranscriber: @unchecked Sendable {
     /// No audio this long after start: subscribe to the recorder again.
     nonisolated static let audioWatchdogSeconds: TimeInterval = 5
 
-    /// Silero, loaded on first use: loudness alone let a single click or
-    /// breath through, and Parakeet read it as a confident "Yeah."
+    /// Silero, loaded on first use: loudness alone lets a single click or
+    /// breath through, and Parakeet reads it as a confident "Yeah."
     private var vad: VadManager?
     private var vadLoading = false
 
@@ -477,8 +477,7 @@ final class LiveTranscriber: @unchecked Sendable {
     }
 
     /// Voice-activity floor. Silence and room tone must not reach an engine:
-    /// Gemma's audio tower invents confident speech from them, and Parakeet
-    /// returns stray words.
+    /// Parakeet returns stray words from them.
     ///
     /// `quiet` is for when the speech detector stands behind this floor: it
     /// then only has to skip near-silence, and quiet speakers get through.

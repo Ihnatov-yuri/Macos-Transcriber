@@ -54,8 +54,8 @@ nonisolated enum MergePicker {
 }
 
 /// "Merge with…": every other recording, closest in time first, searchable,
-/// with its date, length and distance from this one. Replaced a context
-/// submenu that listed all titles with nothing else, taller than the screen.
+/// with its date, length and distance from this one. A context submenu of
+/// bare titles would grow taller than the screen.
 struct MergePickerSheet: View {
     let source: MergeCandidate
     let sourceTitle: String

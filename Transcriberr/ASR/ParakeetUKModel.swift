@@ -24,7 +24,7 @@ nonisolated enum ParakeetUKModel {
             parentDirectory: ModelCatalog.durableModelsDirectory()
                 .appendingPathComponent("ihnatov-yuri/parakeet-tdt-0.6b-v3-uk", isDirectory: true),
             folderName: "parakeet-tdt-0.6b-v3",
-            legacyVersion: "uk_v3")  // version 1 (4.7.0) wrote none
+            legacyVersion: "uk_v3")  // the first release wrote none
     }()
 
     static let displayName = "Ihnatov Parakeet UK"
@@ -80,7 +80,7 @@ nonisolated enum ParakeetUKModel {
         try await release.ensureDownloaded(progress: progress)
     }
 
-    /// Once a day while the app runs, when the user allowed update checks.
+    /// Once a week while the app runs, when the user allowed update checks.
     static func startUpdateLoop(allowed: @escaping @Sendable () async -> Bool) {
         release.startUpdateLoop(lastCheckKey: "parakeetUK.lastUpdateCheck", allowed: allowed)
     }

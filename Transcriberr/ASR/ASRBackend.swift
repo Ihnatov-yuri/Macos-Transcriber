@@ -2,8 +2,8 @@ import Foundation
 
 /// Mirror of `asr/AsrBackend.kt`.
 ///
-/// Every transcription path — local Gemma 4 (MLX), local Whisper (MLX),
-/// or any remote API backend — must implement this protocol.
+/// Every transcription path (local Parakeet, local Whisper, the Super
+/// ensemble, or any remote API backend) must implement this protocol.
 protocol ASRBackend: Actor {
     nonisolated var id: String { get }
     var isReady: Bool { get }
@@ -31,8 +31,8 @@ protocol ASRBackend: Actor {
     /// Called by the chunk watchdog after a wedge. A requirement, not only
     /// an extension method: the runner calls it on `any ASRBackend`, and an
     /// extension-only method is dispatched statically there, so every
-    /// engine's own surgical recovery (the ensemble's included) was skipped
-    /// for the full release-and-reload default.
+    /// engine's own surgical recovery (the ensemble's included) would be
+    /// skipped for the full release-and-reload default.
     func recoverWedge(modelPath: URL?) async throws
 }
 
@@ -86,9 +86,9 @@ nonisolated struct SpeakerHint: Sendable {
 
     /// The N a backend prints in "Speaker N:" for a diarizer key, which the
     /// runner parses back to SPEAKER_0N: the key's trailing digits, as is.
-    /// FluidAudio's offline diarizer names clusters "S1", "S2"…, which the
-    /// old `split("_")` parse missed: LiteRT Gemma was told every turn was
-    /// "Speaker 1" and Parakeet fell back to hash numbers. Keys without
+    /// FluidAudio's offline diarizer names clusters "S1", "S2"…, which a
+    /// `split("_")` parse misses: every turn would read "Speaker 1" and
+    /// Parakeet would fall back to hash numbers. Keys without
     /// digits get a fallback that is stable within the process.
     static func number(fromKey key: String) -> Int {
         let digits = key.reversed().prefix(while: { $0.isASCII && $0.isNumber })

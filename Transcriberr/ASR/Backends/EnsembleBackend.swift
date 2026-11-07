@@ -2,18 +2,18 @@ import Foundation
 
 /// "Super" dual-ASR merge — fully local.
 ///
-/// Runs TWO speech-to-text engines on every chunk concurrently (defaults:
-/// Parakeet v3 multilingual × Parakeet v2 English-specialist — genuinely
-/// different weights), then has Gemma 4 (local MLX, TEXT mode — its reliable
-/// mode) arbitrate a merged "best fit" transcript:
+/// Runs TWO speech-to-text engines on every chunk concurrently (default:
+/// Whisper × Parakeet UK, genuinely different weights), votes their words
+/// together, and has the on-device text model arbitrate a merged "best fit"
+/// transcript where they disagree:
 ///   - keep what both engines agree on,
 ///   - resolve conflicts by contextual plausibility,
 ///   - never introduce content found in neither.
 ///
 /// Sub-engines are user-selectable (Detail → RUN → MERGE A / MERGE B) and
 /// stored in UserDefaults (`ensemble.engineA` / `ensemble.engineB`, shared
-/// with UIPrefs). Roughly 2× the compute of a single engine plus one Gemma
-/// text call per chunk — for when accuracy matters more than speed.
+/// with UIPrefs). Roughly 2× the compute of a single engine plus text-model
+/// calls for disputed chunks, for when accuracy matters more than speed.
 actor EnsembleBackend: ASRBackend {
     nonisolated let id = "ensemble"
     private(set) var isReady = false
@@ -46,7 +46,7 @@ actor EnsembleBackend: ASRBackend {
     private var runLanguages: Set<String> = []
     func setRunLanguages(_ languages: Set<String>) { runLanguages = languages }
     /// This run's meeting (calendar invite): its terms vote like vocabulary
-    /// and Gemma is told what meeting it reads.
+    /// and the arbiter is told what meeting it reads.
     private var meeting: MeetingContext?
     private var meetingNorms: Set<String> = []
     /// What the vote currently treats as meeting vocabulary (tests).
@@ -79,7 +79,7 @@ actor EnsembleBackend: ASRBackend {
 
     /// Super's pair when the user has not picked one: Whisper and Parakeet UK,
     /// two engines that make different mistakes, both strong in Ukrainian and
-    /// English. Parakeet v2 (English-only) is no longer a default, so a new
+    /// English. Parakeet v2 (English-only) is not a default, so a new
     /// Mac never downloads it unless someone picks it.
     static let defaultEngineA: BackendFactory.Kind = .whisper
     static let defaultEngineB: BackendFactory.Kind = .parakeetUK
@@ -93,8 +93,8 @@ actor EnsembleBackend: ASRBackend {
 
     // MARK: - Lifecycle
 
-    /// `modelPath` is the Gemma model directory — used for the merge arbiter
-    /// and for Gemma if it's picked as a sub-engine.
+    /// `modelPath` is unused: the sub-engines and the arbiter load their own
+    /// models.
     func load(modelPath: URL?) async throws {
         let (a, b) = Self.resolvePair(
             Self.storedKind("ensemble.engineA", fallback: Self.defaultEngineA),
@@ -146,7 +146,8 @@ actor EnsembleBackend: ASRBackend {
     }
 
     /// Bumped by release(). A load that release() overtook at one of its
-    /// awaits used to finish anyway and set `isReady` on a released ensemble.
+    /// awaits would otherwise finish anyway and set `isReady` on a released
+    /// ensemble.
     private var generation = 0
 
     private func checkNotReleased(since gen: Int) throws {
@@ -160,12 +161,10 @@ actor EnsembleBackend: ASRBackend {
     /// calls is stuck. The ensemble cannot tell which engine hung, but each
     /// engine can.
     ///
-    /// The first version rebuilt every LiteRT engine it found and returned.
-    /// The Gemma arbiter is loaded on every Super run, so a Whisper call
-    /// that hung in pass 1 (where Gemma does nothing) reloaded the idle
-    /// Gemma, reset the gate under the running chunks, and retried on the
-    /// same hung Whisper: 240 s per wedge, and benching never kicked in
-    /// because Gemma was not a sub-engine.
+    /// Rebuilding engines blindly would go wrong: the arbiter is loaded on
+    /// every Super run, so a Whisper call that hung in pass 1 (where the
+    /// arbiter does nothing) would reload the idle arbiter and retry on the
+    /// same hung Whisper: 240 s per wedge.
     func recoverWedge(modelPath: URL?) async throws {
         var seen = Set<ObjectIdentifier>()
         var subEngineError: Error?
@@ -213,13 +212,13 @@ actor EnsembleBackend: ASRBackend {
 
         // FAST PATH — both sub-engines expose word confidences (Parakeet,
         // Whisper). Merge at the word level on the CPU (ROVER-style):
-        // milliseconds per chunk instead of a 40–130 s Gemma call. Gemma
-        // only arbitrates chunks where the engines disagree wildly.
+        // milliseconds per chunk instead of a 40–130 s LLM call. The arbiter
+        // only rules on chunks where the engines disagree wildly.
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
             async let taskA = pa.transcribeDetailed(samples: samples, languages: languages)
             async let taskB = pb.transcribeDetailed(samples: samples, languages: languages)
-            // An engine that throws must leave a trace: a Whisper that failed
-            // every chunk once turned Super into silent Parakeet-only output.
+            // An engine that throws must leave a trace: a Whisper that fails
+            // every chunk would turn Super into silent Parakeet-only output.
             let ra: Result<DetailedTranscription, Error>, rb: Result<DetailedTranscription, Error>
             do { ra = .success(try await taskA) } catch { ra = .failure(error) }
             do { rb = .success(try await taskB) } catch { rb = .failure(error) }
@@ -230,15 +229,15 @@ actor EnsembleBackend: ASRBackend {
                 return await mergeDetailed(a, b, context: previousContext, languages: languages)
             }
             // One engine failed: the other's reading stands. Falling through
-            // re-ran BOTH engines, so a Whisper chunk stopped at its decode
-            // budget got a second 100 s decode and Parakeet's work was redone.
+            // would re-run BOTH engines, so a Whisper chunk stopped at its decode
+            // budget would get a second 100 s decode and Parakeet's work redone.
             if case .success(let a) = ra { return a.text }
             if case .success(let b) = rb { return b.text }
             // Both failed: the generic text path below tries once more.
         }
 
-        // GENERIC PATH — at least one sub-engine has no word confidences
-        // (e.g. Gemma audio). Text-level compare + Gemma arbitration.
+        // GENERIC PATH — at least one sub-engine has no word confidences.
+        // Text-level compare + arbitration by the text model.
         async let taskA = engineA.transcribeChunk(
             samples: samples, languages: languages, translateTo: nil,
             diarize: false, previousContext: previousContext, speakerHints: []
@@ -280,7 +279,7 @@ actor EnsembleBackend: ASRBackend {
     }
 
     /// First pass of max-quality Super: transcribe A∥B and VOTE-merge only —
-    /// no inline Gemma. Disputed chunks (low agreement) are arbitrated later
+    /// no inline arbitration. Disputed chunks (low agreement) are arbitrated later
     /// by the runner with context from BOTH sides of the finished transcript.
     // MARK: - Timeline (whole-track readings)
 
@@ -359,7 +358,7 @@ actor EnsembleBackend: ASRBackend {
         }
         defer { reporter?.cancel() }
         // A failed reading is left OUT, never cached as empty: an empty
-        // long-form track made Whisper's side of every chunk blank — Super
+        // long-form track would make Whisper's side of every chunk blank, Super
         // silently Parakeet-only. Left out, chunks read Whisper per chunk.
         await withTaskGroup(of: (Int, Bool, [TimedWord], [WhisperBackend.SegmentSpan])?.self) { group in
             for (n, t) in tracks.enumerated() {
@@ -413,7 +412,7 @@ actor EnsembleBackend: ASRBackend {
         if splitTracks {
             // The repaired far side too, not only the raw one: the mic's own
             // Whisper words are the repaired reading, so an English stretch
-            // spliced into the mic matched nothing on a far side that still
+            // spliced into the mic would match nothing on a far side that still
             // held the Ukrainian translation. The raw reading stays for the
             // mic stretches repair left alone. A word in both is harmless:
             // `echoFiltered` only asks whether ANY far-side word matches.
@@ -475,7 +474,7 @@ actor EnsembleBackend: ASRBackend {
     /// has nothing inside the segment. Only the words timed INSIDE the
     /// segment go in — the span the removal clears. The re-read's 0.2 s pads
     /// are there to give the decoder a run-up, not words: a neighbour's edge
-    /// word read from them was spliced in beside the neighbour's own copy.
+    /// word read from them would be spliced in beside the neighbour's own copy.
     /// This also keeps out what a short re-read writes over its zero padding
     /// ("Thank you." past the end of the audio), which Whisper's phantom
     /// guards only weigh on reads of 8 s or more.
@@ -586,8 +585,8 @@ actor EnsembleBackend: ASRBackend {
         if let pa = engineA as? DetailedTranscribing, let pb = engineB as? DetailedTranscribing {
             async let taskA = detailed(pa, kind: kindA, samples: samples, languages: languages, window: window)
             async let taskB = detailed(pb, kind: kindB, samples: samples, languages: languages, window: window)
-            // An engine that throws must leave a trace: a Whisper that failed
-            // every chunk once turned Super into silent Parakeet-only output.
+            // An engine that throws must leave a trace: a Whisper that fails
+            // every chunk would turn Super into silent Parakeet-only output.
             let ra: Result<DetailedTranscription, Error>, rb: Result<DetailedTranscription, Error>
             do { ra = .success(try await taskA) } catch { ra = .failure(error) }
             do { rb = .success(try await taskB) } catch { rb = .failure(error) }
@@ -676,8 +675,8 @@ actor EnsembleBackend: ASRBackend {
     /// Single-engine escape hatch: a chunk whose audio wedges the pair twice
     /// still gets transcribed by engine A instead of being lost.
     /// `window` as in the pair path: without it a mic chunk of a split-track
-    /// meeting was read per chunk with the far side's echo left in, and
-    /// Whisper's timeline words for the chunk went unused.
+    /// meeting would be read per chunk with the far side's echo left in, and
+    /// Whisper's timeline words for the chunk would go unused.
     func transcribeChunkSolo(
         samples: [Float],
         languages: Set<String>,
@@ -712,7 +711,7 @@ actor EnsembleBackend: ASRBackend {
         return built
     }
 
-    /// Second pass of max-quality Super: Gemma rules on a disputed chunk with
+    /// Second pass of max-quality Super: the arbiter rules on a disputed chunk with
     /// surrounding-transcript context and the user's vocabulary.
     func arbitrate(
         textA: String,
@@ -741,7 +740,7 @@ actor EnsembleBackend: ASRBackend {
 
         // If either engine returned no scored words (some long-form paths
         // drop token timings), word-level similarity would read 0.00 and
-        // EVERY chunk would escalate to slow Gemma arbitration. Fall back to
+        // EVERY chunk would escalate to slow LLM arbitration. Fall back to
         // text-level similarity in that case.
         let haveWords = !a.words.isEmpty && !b.words.isEmpty
         let similarity = haveWords
@@ -761,7 +760,7 @@ actor EnsembleBackend: ASRBackend {
             AppLog.info("ensemble", String(format: "agreement %.2f — preferred engine verbatim", similarity))
             return preferredText
         }
-        // NOTE: no more ≥0.85 verbatim shortcut — a chunk that agrees on all
+        // NOTE: no ≥0.85 verbatim shortcut — a chunk that agrees on all
         // but one word ("OWASP 10" vs "overas 10") is precisely where the
         // vote earns its keep, and the vote costs milliseconds.
         // Wild disagreement (different language pick, hallucinated segment…)
@@ -834,7 +833,7 @@ actor EnsembleBackend: ASRBackend {
                 if wa.norm == wb.norm {
                     // Same word: the vote has nothing to decide, so take the
                     // trusted engine's SURFACE. Picking by confidence here
-                    // interleaved two engines' casing and punctuation
+                    // would interleave two engines' casing and punctuation
                     // ("і Вони проводять, Вони ж зараз").
                     // With no trusted engine (equal priors) it stays what it
                     // was: the more confident reading.
@@ -1088,7 +1087,7 @@ actor EnsembleBackend: ASRBackend {
         }
     }
 
-    // MARK: - Gemma arbitration (slow path)
+    // MARK: - Text-model arbitration (slow path)
 
     private func gemmaMerge(
         textA: String,
@@ -1163,7 +1162,7 @@ actor EnsembleBackend: ASRBackend {
     }
 
     /// A merge can't honestly be much longer than the longer reading. The
-    /// 160-token floor lets Gemma copy the context block into a short line
+    /// 160-token floor lets the arbiter copy the context block into a short line
     /// (15 + 18 chars → 357 chars seen on an English call); of 360 logged
     /// merges, only that one breaks 1.5× the longer input + 20 chars.
     static func mergeLengthPlausible(_ merged: String, _ textA: String, _ textB: String) -> Bool {

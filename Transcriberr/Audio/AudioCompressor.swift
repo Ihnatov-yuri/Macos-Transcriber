@@ -8,7 +8,7 @@ import AVFoundation
 /// supported format, so nothing downstream needs to change.
 ///
 /// The live recorders (WavRecorder, MeetingRecorder) and RecordingRepository
-/// merge() keep writing WAV exactly as before — real-time encoder work
+/// merge() write WAV: real-time encoder work
 /// inside a CoreAudio IO callback is not a risk worth taking with live
 /// capture, and merge()'s alignment/concatenation math is proven and
 /// shouldn't be touched to save disk space. This runs AFTER a WAV is fully
@@ -47,10 +47,10 @@ nonisolated enum AudioCompressor {
     ///
     /// The main file is transcoded and verified alongside the sidecars, but
     /// its WAV is deleted only once they are done, right before returning.
-    /// Deleting it the moment its own transcode finished left the caller's
-    /// row pointing at a missing WAV for as long as the sidecars still took
-    /// — a crash in that stretch stranded the row. Now the gap is just
-    /// delete → return → the caller's repoint.
+    /// Deleting it the moment its own transcode finished would leave the
+    /// caller's row pointing at a missing WAV for as long as the sidecars
+    /// still took, and a crash in that stretch would strand the row. This
+    /// way the gap is just delete → return → the caller's repoint.
     static func compressRecordingFiles(mainURL: URL, includeSidecars: Bool) async -> URL {
         async let main = transcodeVerifiedOrLog(mainURL, label: "main file")
         if includeSidecars {

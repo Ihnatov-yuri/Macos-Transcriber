@@ -19,8 +19,8 @@ struct YouDashboard: View {
     /// again only when a voice changes, never in the body.
     @State private var mine = PeopleEmbedder.myVoice()
     /// Recordings come and go (and are re-run) while the page is open. A
-    /// COUNT on each library save, not an @Query that loaded every
-    /// Recording on the main context and re-ran on every save.
+    /// COUNT on each library save, not an @Query that would load every
+    /// Recording on the main context and re-run on every save.
     @Environment(\.modelContext) private var modelContext
     @State private var recordingCount = 0
     @AppStorage("ui.myName") private var myName = ""
@@ -322,7 +322,7 @@ struct YouDashboard: View {
     /// Measured on open; the text engine runs only on a click, so opening
     /// the page never loads a model or sends anything anywhere.
     ///
-    /// Every meeting is measured (0.9 s for 73 on 27 Oct), on a background
+    /// Every meeting is measured (0.9 s for 73 meetings), on a background
     /// context of the same store so the page never stalls while it runs.
     private func reload() async {
         state = CoachStore.shared.load()

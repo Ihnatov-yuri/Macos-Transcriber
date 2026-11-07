@@ -18,9 +18,9 @@ nonisolated enum AppLog {
     private static let osLogger = Logger(subsystem: subsystem, category: "general")
 
     static let logFileURL: URL = {
-        // ~/Library/Logs is the macOS home for app logs. The old location
-        // (~/Documents/Transcriberr) doubles as the project folder AND the
-        // recordings home — a transcript-bearing log does not belong there.
+        // ~/Library/Logs is the macOS home for app logs. ~/Documents/Transcriberr
+        // doubles as the project folder AND the recordings home, and a
+        // transcript-bearing log does not belong there.
         let dir = FileManager.default
             .urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs/Transcriberr", isDirectory: true)
@@ -53,6 +53,17 @@ nonisolated enum AppLog {
         let m = message()
         osLogger.error("[\(category, privacy: .public)] \(m, privacy: .private)")
         write(level: "ERR ", category: category, message: m)
+    }
+
+    /// `try?` that leaves a WARN line: for a failure the caller carries on
+    /// after, but that must be findable when a file goes missing later.
+    @discardableResult
+    static func attempt<T>(_ category: String, _ what: @autoclosure () -> String,
+                           _ body: () throws -> T) -> T? {
+        do { return try body() } catch {
+            warn(category, "\(what()) failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     // MARK: - File I/O

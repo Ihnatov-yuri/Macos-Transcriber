@@ -52,9 +52,9 @@ nonisolated final class PostProcessor: @unchecked Sendable {
             .flatMap { $0.supportsTextGeneration ? $0 : nil } ?? .localText
         let kind: BackendFactory.Kind = rawKind.supportsTextGeneration ? rawKind : configured
         let key = "\(recording.id)|\(presetId)"
-        // Gemma text generation on a long transcript takes minutes. Repeated
-        // GENERATE presses were queueing extra multi-minute runs behind the
-        // first on the same actor — swallow duplicates while one is in flight.
+        // Text generation on a long transcript takes minutes. Repeated
+        // GENERATE presses would queue extra multi-minute runs behind the
+        // first: swallow duplicates while one is in flight.
         if [.queued, .loading, .running].contains(status[key] ?? .idle) {
             AppLog.info("postproc", "preset=\(presetId) already queued/in flight — ignoring duplicate request")
             return
@@ -132,7 +132,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
 
         // User vocabulary: exact spellings for names/terms — lets CLEAN and
         // CONTEXT-REWRITE fix entity mishearings with confidence instead of
-        // leaving them ("only correct when certain" is satisfiable now).
+        // leaving them (so "only correct when certain" is satisfiable).
         let runLangs = Set((recording.runLanguages ?? "").split(separator: ",").map(String.init))
         let vocab = prompts.vocabulary(for: runLangs).trimmingCharacters(in: .whitespacesAndNewlines)
         let vocabPrefix = vocab.isEmpty ? ""
@@ -196,9 +196,9 @@ nonisolated final class PostProcessor: @unchecked Sendable {
                     )
                 }
             }
-            // An empty/token generation must never replace a stored output —
-            // seen live: a wedged long-context run returned "" and silently
-            // wiped the previous CLEAN document.
+            // An empty/token generation must never replace a stored output: a
+            // wedged long-context run can return "", which would silently wipe
+            // the previous CLEAN document.
             let trimmed = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.count >= 40 else {
                 throw NSError(
@@ -220,7 +220,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
     }
 
     /// Cached brief for this exact transcript, or one fresh read. Never
-    /// fails the preset: no brief simply means the old, context-free run.
+    /// fails the preset: no brief simply means a context-free run.
     @MainActor
     private func meetingBrief(
         transcript: String, vocabulary: String, backend: any ASRBackend, buildIfMissing: Bool
@@ -387,7 +387,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
         status[key] = value
     }
 
-    /// Wall-clock guard so a wedged MLX generation can't hang a preset
+    /// Wall-clock guard so a wedged local generation can't hang a preset
     /// forever: throws `ASRError.chunkTimeout` after `seconds` without
     /// waiting for `op`. See `Deadline.run`.
     private static func withTimeout<T: Sendable>(

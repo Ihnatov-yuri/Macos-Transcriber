@@ -164,14 +164,14 @@ nonisolated enum BackupService {
         ioQueue.async {
             do {
                 // Owner-only, like the briefs and voice files: these are
-                // full transcripts, and the default umask left them
+                // full transcripts, and the default umask leaves them
                 // world-readable (0644) wherever the backup root points.
                 // Folders made before this keep their old mode unless reset.
                 let fm = FileManager.default
                 let dir = url.deletingLastPathComponent()
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true,
                                        attributes: [.posixPermissions: 0o700])
-                try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+                AppLog.attempt("backup", "making the backup folder owner-only") { try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
                 let data = try encoder.encode(value)

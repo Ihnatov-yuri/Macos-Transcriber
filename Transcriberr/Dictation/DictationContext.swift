@@ -77,8 +77,8 @@ struct DictationContext: Sendable {
         // calls are synchronous and main-actor, they run BEFORE the HUD and
         // before capture starts, and the default per-call timeout is six
         // seconds: dictating into a busy Electron app or a beachballing
-        // target froze Transcriberr and swallowed the opening words, because
-        // `capture.start()` was queued behind this on the same actor.
+        // target would freeze Transcriberr and swallow the opening words,
+        // because `capture.start()` is queued behind this on the same actor.
         AXUIElementSetMessagingTimeout(system, Self.axTimeout)
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,

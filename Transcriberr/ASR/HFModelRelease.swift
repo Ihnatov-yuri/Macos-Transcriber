@@ -13,7 +13,7 @@ import os
 /// code in a process holding mic + Accessibility grants.
 ///
 /// A newer version downloads in the background (with the user's update
-/// consent, once a day) next to the one in use, and takes over at the next
+/// consent, once a week) next to the one in use, and takes over at the next
 /// launch, before any engine has opened the files.
 nonisolated struct HFModelRelease: Sendable {
     let repo: String
@@ -112,7 +112,7 @@ nonisolated struct HFModelRelease: Sendable {
 
     /// The release a folder holds: every file of its manifest at its size.
     /// A folder without a manifest counts when the required files are there
-    /// (Parakeet UK installs from 4.7.0 and earlier); the update check then
+    /// (older Parakeet UK installs); the update check then
     /// replaces it with the current release.
     func isInstalled(at dir: URL? = nil) -> Bool {
         let dir = dir ?? modelDirectory
@@ -201,9 +201,9 @@ nonisolated struct HFModelRelease: Sendable {
         return req
     }
 
-    /// Automatic update checks at most this often. Weekly since v5.4.2: new
-    /// Parakeet UK / Whisper UK releases stopped (Nov 2026), and a daily
-    /// question to Hugging Face with no news was only network chatter.
+    /// Automatic update checks at most this often (weekly): new Parakeet UK /
+    /// Whisper UK releases have stopped, and a daily question to Hugging Face
+    /// with no news would only be network chatter.
     static let checkInterval: TimeInterval = 7 * 24 * 60 * 60
 
     private func getJSON(_ url: String) async throws -> Any {
@@ -361,8 +361,8 @@ nonisolated struct HFModelRelease: Sendable {
                 return .downloaded(latest.revision)
             }
             // Files of an older half-finished update are not this release's.
-            // That folder has no manifest (it is written last), so the old
-            // "different revision" check never fired: prune by file list.
+            // That folder has no manifest (it is written last), so a
+            // "different revision" check would never fire: prune by file list.
             // Same-named files stay; `download` re-checks their checksums.
             Self.removeFiles(in: updateStagingDirectory, notListedIn: latest)
             try await download(latest, into: updateStagingDirectory)

@@ -3,7 +3,7 @@ import Foundation
 /// Finds Super's disputed words (`WordDispute`) in the finished transcript.
 ///
 /// The vote happens per chunk, long before the text reaches the screen:
-/// hygiene, seam trims, Gemma rulings, vocabulary and turn merging all edit
+/// hygiene, seam trims, arbiter rulings, vocabulary and turn merging all edit
 /// it afterwards. So a dispute is looked up by what it says, not where it
 /// was: a word with the kept reading's spelling, in a segment overlapping
 /// the chunk, with at least one of its two kept neighbours beside it. A

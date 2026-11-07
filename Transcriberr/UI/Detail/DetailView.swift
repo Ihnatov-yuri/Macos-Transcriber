@@ -126,8 +126,8 @@ struct DetailView: View {
         }
     }
 
-    /// Recordings named before 5.0 may still show one person as two
-    /// speakers of the same name. Not while a run for this recording is
+    /// Older recordings may still show one person as two speakers of the
+    /// same name. Not while a run for this recording is
     /// queued or running: its speakers are a draft the run replaces.
     private func foldSpeakersIfIdle() {
         guard !recording.isDeleted, recording.modelContext != nil,
@@ -688,7 +688,7 @@ struct DetailView: View {
 
     @ViewBuilder
     private func folderMenu() -> some View {
-        // `@Query`, not a fetch inside the body: the fetch ran on every
+        // `@Query`, not a fetch inside the body: a fetch would run on every
         // evaluation of the detail header — which during a run is once per
         // streamed chunk — and it is the same data SwiftData is already
         // keeping up to date for the rest of the screen.
@@ -811,7 +811,7 @@ struct DetailView: View {
             HairlineSoft()
             if m.backend == .ensemble {
                 // Sub-engine slots for the dual-ASR merge — local engines only.
-                // Gemma 4 (text mode) arbitrates the merged transcript.
+                // The text model arbitrates the merged transcript.
                 let mergeOptions = BackendFactory.Kind.allCases.filter {
                     $0.isLocal && $0.supportsAudio && $0 != .ensemble
                 }
@@ -1089,8 +1089,8 @@ struct DetailView: View {
                 onPickAlternative: { seg, k in pickAlternative(seg, disputeIndex: k) },
                 speakerColor: { [order = uniqueSpeakers().map(\.key)] key in
                     // Precomputed ONCE per render — calling uniqueSpeakers()
-                    // per row walked the SwiftData segments relationship
-                    // hundreds of times mid-update and segfaulted SwiftData.
+                    // per row would walk the SwiftData segments relationship
+                    // hundreds of times mid-update and segfault SwiftData.
                     SpeakerPalette.colors[(order.firstIndex(of: key) ?? 0) % SpeakerPalette.colors.count]
                 },
                 focusName: focus,
@@ -1225,13 +1225,11 @@ private struct VersionsPane: View {
                 HStack(spacing: AppMetric.l) {
                     TapButton {
                         // Through the repository, which shares the VIEW's
-                        // context now (AppContainer hands it `mainContext`) —
-                        // the "parallel world" this button used to work
-                        // around is gone. Going around it meant the restore
-                        // never refreshed recording.json and never rewrote
-                        // the .txt/.srt sidecars, so a crash (or a
-                        // `restore-backups` run) resurrected the version the
-                        // user had just replaced.
+                        // context (AppContainer hands it `mainContext`).
+                        // Going around it, the restore would never refresh
+                        // recording.json or rewrite the .txt/.srt sidecars,
+                        // so a crash (or a `restore-backups` run) would
+                        // resurrect the version the user had just replaced.
                         do {
                             try model.container.repository.restoreVersion(v, to: model.recording)
                             try? TranscriptExporter.export(recording: model.recording)
@@ -1332,7 +1330,7 @@ struct TranscriptPane: View {
     @State private var disputeRows: [UUID: DisputeRow] = [:]
 
     /// What the hits depend on. Cheap to build (utf8 counts are O(1)), so
-    /// the playhead ticks that re-run `body` no longer re-scan every
+    /// the playhead ticks that re-run `body` do not re-scan every
     /// segment against every dispute; the scan reruns only when this changes.
     private struct DisputeKey: Hashable {
         let json: String?
@@ -1362,16 +1360,15 @@ struct TranscriptPane: View {
 
     /// The transcript in playback order, sorted ONCE per body pass.
     ///
-    /// `activeID`, `tailID` and the row list each sorted the whole
-    /// relationship independently, and `segmentRow` reads
-    /// `player.currentTime` — so every time-observer tick re-ran the body
-    /// and re-sorted a long diarized transcript three times over. That is
-    /// the stutter when scrolling during playback.
+    /// If `activeID`, `tailID` and the row list each sorted the whole
+    /// relationship independently, then since `segmentRow` reads
+    /// `player.currentTime`, every time-observer tick would re-run the body
+    /// and re-sort a long diarized transcript three times over: a stutter
+    /// when scrolling during playback.
     private var sortedSegments: [Segment] {
         recording.segments.sorted { $0.startSeconds < $1.startSeconds }
     }
 
-    /// Last segment ID that contains the current playhead — used to auto-scroll.
     /// The line playing now: the latest to start among those that contain
     /// the playhead, so none is lit in a silence or after the last line.
     private func activeID(in segs: [Segment]) -> UUID? {
@@ -1415,8 +1412,8 @@ struct TranscriptPane: View {
                     .font(AppFont.text(16))
                     .lineSpacing(6)
                     .foregroundStyle(AppColor.ink)
-                    // A readable measure: full screen on a wide display ran
-                    // one line to ~2000 pt.
+                    // A readable measure: full screen on a wide display would
+                    // run one line to ~2000 pt.
                     .frame(maxWidth: 760, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
@@ -1456,8 +1453,8 @@ struct TranscriptPane: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         // One playing line: the latest to start. Padded mic lines
-                        // overlap the call's, and "contains the playhead" lit
-                        // up to three rows at once.
+                        // overlap the call's, and "contains the playhead" would
+                        // light up to three rows at once.
                         let playing = activeID(in: segs)
                         ForEach(segs, id: \.id) { seg in
                             HairlineSoft()
@@ -1601,9 +1598,9 @@ struct TranscriptPane: View {
                     .foregroundStyle(focusName == nil || focused ? AppColor.ink : AppColor.ink3)
                     .tint(AppColor.ink)
                     // Not selectable: on macOS a selectable Text takes the
-                    // mouse-down for itself, so a click on the words started
-                    // a selection and never reached the row's seek — only
-                    // clicks on the margin jumped the audio. Copy is in the
+                    // mouse-down for itself, so a click on the words would
+                    // start a selection and never reach the row's seek: only
+                    // clicks on the margin would jump the audio. Copy is in the
                     // context menu; the prose view stays selectable.
                     .help(hits.isEmpty ? "" : hits.map { "\($0.dispute.chosen) · other engine heard \"\($0.dispute.alternative)\"" }
                         .joined(separator: "\n") + "\nClick an underlined word to use the other reading.")
@@ -1728,7 +1725,7 @@ struct TranscriptPane: View {
 
     /// The style too: hits are found in the styled text, so switching
     /// Clean/Verbatim must re-run the search (the "only in words the Clean
-    /// view leaves out" bar stayed up after turning Clean off).
+    /// view leaves out" bar would stay up after turning Clean off).
     private struct SearchKey: Hashable { let query: String; let style: TranscriptStyle; let texts: [Int] }
 
     private func searchBar(_ query: String) -> some View {
@@ -1846,7 +1843,7 @@ struct OutputPane: View {
         VStack(alignment: .leading, spacing: 0) {
             HairlineSoft()
             HStack(spacing: AppMetric.m) {
-                // Live status so a multi-minute Gemma generation never looks
+                // Live status so a multi-minute text generation never looks
                 // like a dead button.
                 switch runStatus {
                 case .queued:
@@ -1912,7 +1909,7 @@ struct OutputPane: View {
                 OutputHistoryList(model: model, presetId: presetId) { showingHistory = false }
             } else if let doc {
                 ScrollView {
-                    // Outputs saved before v5.4 may still carry "$\rightarrow$".
+                    // Older saved outputs may still carry "$\rightarrow$".
                     Text(LocalizedStringKey(ModelText.replacingLaTeXSymbols(doc.markdown)))
                         .font(AppFont.text(16))
                         .lineSpacing(6)
@@ -2088,7 +2085,7 @@ enum RecordingRename {
                 recording.title = new
                 // Explicit save + backup: main-context autosave would get
                 // there eventually, but the file shadow only refreshes on
-                // repository writes — a manual rename never reached it.
+                // repository writes — a manual rename would never reach it.
                 try? recording.modelContext?.save()
                 BackupService.backupRecording(recording)
             }

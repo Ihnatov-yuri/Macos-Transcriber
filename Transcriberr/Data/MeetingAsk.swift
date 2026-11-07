@@ -227,7 +227,7 @@ nonisolated enum MeetingAsk {
             for i in both { score[i, default: 0] += bonus }
         }
         // The question names something rare, such as a company: only
-        // passages that hold it are read. Given others, the model stretched
+        // passages that hold it are read. Given others, the model would stretch
         // them into an answer (Kaiko "discussed" where nobody said it).
         let names = Set(wanted.map(stem))
         let rare = Set(plan.named.flatMap { words($0) }.map(stem)).subtracting(names).filter { s in

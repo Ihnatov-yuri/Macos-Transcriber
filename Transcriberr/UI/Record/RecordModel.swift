@@ -52,9 +52,9 @@ final class RecordModel {
 
     var uiState: UIState = .idle
     var autoTranscribe: Bool { didSet { container.uiPrefs.autoTranscribe = autoTranscribe } }
-    /// Both reach a recording already running: Live switched on mid-meeting
-    /// used to do nothing until the next recording (only `beginRecording`
-    /// looked at it), which read as "live does not work".
+    /// Both reach a recording already running: otherwise Live switched on
+    /// mid-meeting does nothing until the next recording (if only
+    /// `beginRecording` looks at it), which reads as "live does not work".
     var liveEnabled: Bool {
         didSet {
             container.uiPrefs.liveEnabled = liveEnabled
@@ -92,7 +92,7 @@ final class RecordModel {
     /// the app made for sleep is resumed on wake — never the user's own.
     private var sleptAt: Date?
     /// Removes the sleep/wake observers when this model goes away (one
-    /// model per window: they used to pile up in the workspace centre).
+    /// model per window: otherwise they pile up in the workspace centre).
     /// A box with its own deinit, so no main-actor deinit is needed here.
     private let powerObservers = NotificationObserverBag(center: NSWorkspace.shared.notificationCenter)
 
@@ -110,10 +110,10 @@ final class RecordModel {
         watchSleep()
     }
 
-    /// Closing the lid sleeps the Mac and the audio stops arriving, but the
-    /// session used to stay on RECORDING with nothing said about it
-    /// (2026-10-01: a meeting ran 50 min on the clock, 30 min on disk).
-    /// Now the recording pauses for the sleep and carries on after wake.
+    /// Closing the lid sleeps the Mac and the audio stops arriving; without
+    /// this the session stays on RECORDING with nothing said about it (a
+    /// meeting ran 50 min on the clock, 30 min on disk). The recording
+    /// pauses for the sleep and carries on after wake.
     private func watchSleep() {
         let center = NSWorkspace.shared.notificationCenter
         powerObservers.add(center.addObserver(
@@ -190,11 +190,11 @@ final class RecordModel {
 
     /// Set for the whole of `beginRecording`, including across its awaits.
     /// `uiState` alone can't guard a double press: the first tap hops off
-    /// the main actor inside `recorder.start()`, so the second tap saw
-    /// `.idle`, called start again, hit the recorder's own "already
-    /// starting" guard — which returns SUCCESSFULLY — and set `.recording`
-    /// with no engine behind it. Pressing Stop then found the recorder still
-    /// idle and returned nil, leaving the first start to open the mic with
+    /// the main actor inside `recorder.start()`, so the second tap would see
+    /// `.idle`, call start again, hit the recorder's own "already
+    /// starting" guard (which returns SUCCESSFULLY) and set `.recording`
+    /// with no engine behind it. Pressing Stop would then find the recorder
+    /// still idle and return nil, leaving the first start to open the mic with
     /// nothing on screen able to stop it.
     private var isStarting = false
 
@@ -206,7 +206,7 @@ final class RecordModel {
         notice = nil
         // Dictation already refuses to start while a recording is running;
         // without the mirror image, ⌘N (or the Record button) during a
-        // dictation session opened a second engine — and a second
+        // dictation session would open a second engine — and a second
         // voice-processing unit — on the same input device.
         if container.dictation.phase == .listening {
             lastError = "DICTATION IS LISTENING · FINISH IT FIRST"
@@ -301,7 +301,7 @@ final class RecordModel {
             guard let url else {
                 // Say something. A nil URL here means the recorder had
                 // already failed (or never started) and the session is gone —
-                // silently dropping back to idle looked like the Stop button
+                // silently dropping back to idle would look like the Stop button
                 // simply discarding the recording.
                 // Only the mic recorder keeps a failure state; for a meeting
                 // it would be a stale reason from some other session.
@@ -348,10 +348,10 @@ final class RecordModel {
             uiState = .finished(url)
 
             // Echo-cancel rebuild + AAC compression run in the BACKGROUND,
-            // never awaited here — they used to block this function (and,
-            // when autoTranscribe was on, block transcription from even
-            // starting), so pressing Stop looked hung for however long that
-            // took. TranscriptionRunner decodes the whole file into memory
+            // never awaited here: awaiting them would block this function
+            // (and, when autoTranscribe is on, block transcription from even
+            // starting), so pressing Stop would look hung for however long
+            // that takes. TranscriptionRunner decodes the whole file into memory
             // up front regardless of format, so it doesn't need the
             // compressed/rebuilt version — it can start on the raw WAV
             // immediately. Post-processing only has to wait until that

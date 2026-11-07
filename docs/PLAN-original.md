@@ -1,5 +1,7 @@
 # Transcriberr (macOS) — Port Plan
 
+> Historical document: the plan written before the first line of code. Several choices here changed (macOS 26.4, Gemma on MLX after a LiteRT period, WhisperKit, the Super ensemble). The [README](../README.md) describes the app as it is.
+
 A native SwiftUI macOS reproduction of the [Transcriber-Android](../../Documents/Claude/Projects/Transcriber-Android/) app, designed to use **bigger / more powerful models** (Gemma 4 via MLX as the local default, plus pluggable cloud API backends) while preserving the Android app's proven architecture, UX, and feature set.
 
 ---

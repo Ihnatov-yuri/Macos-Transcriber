@@ -7,7 +7,7 @@ import Foundation
 /// invite, and the names that keep coming up in earlier meetings with the
 /// same people. A run gets these as vocabulary for that run only: the word
 /// vote settles a split between the engines in their favour, the vocabulary
-/// pass puts the invite's spelling on near misses, and Gemma's arbitration
+/// pass puts the invite's spelling on near misses, and the arbiter
 /// is told what meeting it is reading.
 nonisolated struct MeetingContext: Codable, Sendable, Equatable {
     var title: String
@@ -45,14 +45,14 @@ nonisolated struct MeetingContext: Codable, Sendable, Equatable {
         return Self.dedup(out)
     }
 
-    /// Everything that goes into the vote and Gemma's prompts.
-    /// What the vote and Gemma treat as authoritative: the calendar's own
+    /// Everything that goes into the vote and the text model's prompts.
+    /// What the vote and the text model treat as authoritative: the calendar's own
     /// spellings only. Past meetings' terms are transcribed text (an old
     /// draft's "Kaico" would cancel the user's "Kaiko" in the vote), so
-    /// they reach Gemma as a hint and nowhere else.
+    /// they reach the text model as a hint and nowhere else.
     var allTerms: [String] { calendarTerms }
 
-    /// Gemma's lines for this meeting: who, then the spellings, each list
+    /// The text model's lines for this meeting: who, then the spellings, each list
     /// capped so the user's own vocabulary after it is never crowded out.
     var promptBlock: String {
         var s = promptLine + "\n"
@@ -63,9 +63,9 @@ nonisolated struct MeetingContext: Codable, Sendable, Equatable {
         return s
     }
 
-    /// One line for Gemma's arbitration prompt.
+    /// One line for the arbiter's prompt.
     /// Invite text written by whoever sent it, as one short line: it goes
-    /// into Gemma's prompt and must not carry instructions or layout.
+    /// into the text model's prompt and must not carry instructions or layout.
     static func promptSafe(_ s: String, max: Int) -> String {
         String(s.split(whereSeparator: \.isNewline).joined(separator: " ")
             .replacingOccurrences(of: #"[<>{}\[\]`]"#, with: " ", options: .regularExpression)
@@ -236,9 +236,9 @@ nonisolated struct MeetingContext: Codable, Sendable, Equatable {
     /// Which candidate the recording belongs to, or nil. A candidate must
     /// cover most of the recording or ten minutes of it. Among those, the
     /// best match of the two time spans wins (overlap over union), so a
-    /// three-hour focus block or an all-day-ish workshop no longer beats the
-    /// half-hour call that starts and ends with the recording: the longest
-    /// overlap used to win, and a long block overlaps everything inside it.
+    /// three-hour focus block or an all-day-ish workshop does not beat the
+    /// half-hour call that starts and ends with the recording, as it would if
+    /// the longest overlap won: a long block overlaps everything inside it.
     /// Double-booked slots match equally; then an accepted invite beats a
     /// tentative or unanswered one, and one with people beats a bare block.
     static func bestCandidate(_ candidates: [Candidate], start: Date, end: Date) -> Int? {
@@ -299,7 +299,7 @@ nonisolated struct MeetingContext: Codable, Sendable, Equatable {
     /// An invite term worth forcing as a spelling: a code, CamelCase, or a
     /// word no dictionary knows ("Kaiko", "Blits Insurance"). Title words
     /// like "Rollout" or "Planning" are not: given to the vocabulary pass,
-    /// "roll out" became "Rollout" in the text.
+    /// "roll out" would become "Rollout" in the text.
     static func isCoined(_ term: String) -> Bool {
         term.split(separator: " ").contains { w in
             let word = String(w)

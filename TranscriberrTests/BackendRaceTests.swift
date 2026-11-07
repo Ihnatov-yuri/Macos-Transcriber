@@ -2,8 +2,7 @@ import XCTest
 import Synchronization
 @testable import Transcriberr
 
-/// Backend fixes that need no model: speaker numbering, and the Gemini
-/// thinking budget.
+/// Backend fixes that need no model: speaker numbering.
 final class BackendRaceTests: XCTestCase {
 
     // MARK: - Speaker numbering
@@ -19,14 +18,6 @@ final class BackendRaceTests: XCTestCase {
         let n = SpeakerHint.number(fromKey: "GUEST")
         XCTAssertEqual(n, SpeakerHint.number(fromKey: "GUEST"))
         XCTAssertTrue((10..<100).contains(n))
-    }
-
-    // MARK: - Gemini
-
-    func testGeminiThinkingBudget() {
-        // 2.5 Pro cannot disable thinking; Flash can.
-        XCTAssertEqual(GoogleGeminiBackend.minimalThinkingBudget(for: "gemini-2.5-pro"), 128)
-        XCTAssertEqual(GoogleGeminiBackend.minimalThinkingBudget(for: "gemini-2.5-flash"), 0)
     }
 }
 

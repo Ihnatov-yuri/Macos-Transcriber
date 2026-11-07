@@ -33,9 +33,8 @@ nonisolated enum MeetingMixRebuilder {
         var mic = cleanedMic
         // The canceller gave up on an echo it could not remove: a mix of
         // the raw mic and the far side plays every far-side word twice.
-        // This used to keep the live-gated mix instead, on the theory that
-        // it was the better file. It was not: with a loud speaker the live
-        // gate passed the echo in full (see EchoGate). Gate the raw mic
+        // The live-gated mix is no better: with a loud speaker the live
+        // gate passes the echo in full (see EchoGate). Gate the raw mic
         // offline, where the echo level and delay are known. (The
         // transcript is not affected: it reads the sidecars and removes
         // that echo by timing.)
@@ -99,10 +98,10 @@ nonisolated enum MeetingMixRebuilder {
             defer { try? FileManager.default.removeItem(at: tmp) }
             try write(mix, to: tmp)
 
-            // NEVER delete-then-move: the old code removed `mainURL` first,
-            // and a failed move then left the recording's row pointing at a
-            // file that no longer existed — playback and re-transcription
-            // both dead, the audio surviving only in the sidecars. Replace
+            // NEVER delete-then-move: removing `mainURL` first and then
+            // failing the move leaves the recording's row pointing at a
+            // missing file (playback and re-transcription both dead, the
+            // audio surviving only in the sidecars). Replace
             // atomically instead, exactly as AudioCompressor's header
             // demands ("never delete then fail").
             //

@@ -59,18 +59,16 @@ nonisolated final class AppContainer: @unchecked Sendable {
     // MARK: - Cross-screen signals
     /// Bumped by File → New Recording (⌘N). AppShell watches it to switch to
     /// the Record section; RecordView consumes `pendingNewRecording` to
-    /// actually start recording once it's on screen. The counter alone
-    /// wasn't enough — a RecordView created AFTER the bump never sees a
-    /// change, and for a season the menu item did nothing at all because
-    /// nothing observed either.
+    /// actually start recording once it's on screen. The counter alone is
+    /// not enough: a RecordView created AFTER the bump never sees a change.
     private(set) var newRecordingRequested = 0
     /// Bumped when the menu bar (or a shortcut) wants the Dictate screen.
     private(set) var dictatePaneRequested = 0
     private(set) var settingsPaneRequested = 0
     /// Read by a main window that opens because of the request.
     var settingsPanePending = false
-    /// Bumped to open Settings at Models (the text-model prompt after an
-    /// upgrade from LiteRT left nothing downloaded).
+    /// Bumped to open Settings at Models (the prompt shown when no text
+    /// model is downloaded).
     private(set) var modelsPaneRequested = 0
     /// Set with the request, cleared by Settings once it has scrolled: a
     /// Settings screen built after the bump (the request switched to it)
@@ -119,11 +117,10 @@ nonisolated final class AppContainer: @unchecked Sendable {
         }
         modelContainer = mc
         // MAIN context, not a private one: the UI's @Query lives on the
-        // main context, and a season of bugs (library delete, version
-        // restore, orphaned segment rows, unsaved titles) all traced back to
-        // the repository mutating view-context objects from a parallel
-        // context — a silent no-op in SwiftData. One shared context ends
-        // that entire class.
+        // main context, and mutating view-context objects from a parallel
+        // context is a silent no-op in SwiftData (it breaks library delete,
+        // version restore, segment cleanup and title saves). One shared
+        // context rules out that whole class of bug.
         repository = RecordingRepository(
             context: mc.mainContext,
             postProcessTracker: audioPostProcessTracker
@@ -279,8 +276,8 @@ nonisolated final class AppContainer: @unchecked Sendable {
 
     /// Recordings of the last week that still carry a default title and have
     /// a transcript, with no run of their own coming: the title their run
-    /// should have set when the text engine failed (on 26 Oct the GPU calls
-    /// timed out under a training job, and the failure was silent).
+    /// should have set when the text engine failed (e.g. GPU calls that
+    /// time out under a training job, silently).
     @MainActor
     private func retitleMissed() async {
         let weekAgo = Int64(Date().addingTimeInterval(-7 * 86_400).timeIntervalSince1970 * 1000)
@@ -323,7 +320,7 @@ nonisolated final class AppContainer: @unchecked Sendable {
             return
         }
         // Captured before the (possibly model-loading) await: a title the
-        // user types while Gemma thinks must win over the generated one.
+        // user types while the model thinks must win over the generated one.
         let titleBefore = recording.title
 
         // Titles are text generation — run on the configured text engine.
@@ -358,8 +355,8 @@ nonisolated final class AppContainer: @unchecked Sendable {
                 AppLog.warn("app", "auto-title: the text engine's answer was not a usable title")
             }
         } catch {
-            // Best-effort, but never silent: a failure here once left meetings
-            // unnamed with nothing in the log.
+            // Best-effort, but never silent: a quiet failure here leaves
+            // meetings unnamed with nothing in the log.
             AppLog.warn("app", "auto-title failed: \(error.localizedDescription)")
         }
     }
@@ -373,7 +370,7 @@ nonisolated final class AppContainer: @unchecked Sendable {
     func requestDeleteRecording() {
         // ⌘⌫ is a menu key equivalent, so it reaches the menu before the
         // focused text field: typing in search, a title or a note and
-        // pressing ⌘⌫ asked to delete the recording instead of deleting to
+        // pressing ⌘⌫ would ask to delete the recording instead of deleting to
         // the start of the line. Typed while text has focus, the keystroke
         // goes back to the text; the menu item clicked still deletes.
         if NSApp.currentEvent?.type == .keyDown,
@@ -415,8 +412,14 @@ nonisolated final class AppContainer: @unchecked Sendable {
         if meetingRecorder.isRunning { return "A meeting is being recorded. Stop it, then update." }
         switch dictation.phase {
         case .listening, .transcribing, .inserting: return "Dictation is running. Let it finish, then update."
-        default: return nil
+        default: break
         }
+        // Quitting would ask about the call, and a cancelled quit would leave
+        // the update stuck at "relaunching" for the rest of the session.
+        if VirtualMicrophone.shared.isInUseByCall {
+            return "A call is using the Transcriberr Microphone. End the call, then update."
+        }
+        return nil
     }
 
     /// The Update button, wherever it sits. Recording or dictating blocks

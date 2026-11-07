@@ -1,13 +1,13 @@
 import Foundation
 
-/// Split-track meetings are transcribed in ~26 s chunks per track, and until
-/// this step every chunk became one segment with the chunk's span: the mic's
-/// chunks and the far side's overlap on the clock, so the transcript read as
-/// alternating 26 s blocks — a reply printed before the question it answers,
-/// sentences cut in half by the other side's block — and a far-side chunk
-/// carried ONE speaker (the diarizer cluster overlapping it most) however
-/// many people spoke in it. 2026-10-14 meeting: five voices on the far side,
-/// 98% of segments overlapping the next.
+/// Split-track meetings are transcribed in ~26 s chunks per track. Kept as
+/// one segment per chunk with the chunk's span, the mic's chunks and the far
+/// side's overlap on the clock, so the transcript would read as alternating
+/// 26 s blocks (a reply printed before the question it answers, sentences
+/// cut in half by the other side's block), and a far-side chunk would carry
+/// ONE speaker (the diarizer cluster overlapping it most) however many people
+/// spoke in it. Measured on one meeting: five voices on the far side, 98% of
+/// segments overlapping the next.
 ///
 /// Parakeet reads each whole track with word times in seconds (the far side
 /// for echo-by-timing already). The chunk's final text is aligned onto those
@@ -32,7 +32,7 @@ nonisolated enum TurnTiming {
     /// they open on energy, a little after the first syllable.
     static let micSpeechPad = 1.0
     /// Pieces at least this long must be this much covered by the intervals.
-    /// 2026-10-14 call on speakers: the user's real lines were 59-64%
+    /// Measured on a call on speakers: the user's real lines were 59-64%
     /// covered, Whisper's inventions over echo residue (26 s unanchored
     /// chunks, "Hello, I'm Joe" x8) under 5% — single 0.3 s blips.
     static let longPieceSeconds = 3.0
@@ -146,7 +146,7 @@ nonisolated enum TurnTiming {
             if isMe, let far = timelines[0], !far.isEmpty {
                 // Echo by timing, as Super does per chunk: the far side's
                 // words heard again on the mic sit at the same time as the
-                // originals. The Parakeet draft had only the sentence scrub,
+                // originals. The Parakeet draft has only the sentence scrub,
                 // which misses copies mixed into the user's own line.
                 let n = tokens.count
                 tokens = echoFree(tokens, farSide: far)
@@ -275,8 +275,8 @@ nonisolated enum TurnTiming {
 
     /// Unanchored words follow the anchored word before them at a speaking
     /// pace, not spread across the whole gap to the next anchor: spread, two
-    /// words Whisper added ("Okay. Nice place.") bridged a 3 s pause and the
-    /// user's answer printed before the question asked in it. Before the
+    /// words Whisper added ("Okay. Nice place.") would bridge a 3 s pause and
+    /// the user's answer would print before the question asked in it. Before the
     /// first anchor or after the last they sit on it.
     static func interpolate(_ tokens: inout [Token]) {
         let anchors = tokens.indices.filter { tokens[$0].anchored }

@@ -7,7 +7,7 @@ import Foundation
 /// Two runtimes: MLX (Apple's array framework, Metal) for Gemma, uzu
 /// (Mirai) for Qwen3.5 9B, which it decodes about twice as fast as MLX.
 /// Both load a plain Hugging Face repo folder; every model is pinned to a
-/// commit and every file to its checksum, as the LiteRT bundles were. uzu
+/// commit and every file to its checksum. uzu
 /// loads its folder by path, so the app never asks Mirai's catalog server.
 nonisolated struct ModelEntry: Sendable, Identifiable, Hashable {
     enum Runtime: String, Sendable, Hashable {
@@ -34,14 +34,14 @@ nonisolated struct ModelEntry: Sendable, Identifiable, Hashable {
     /// that the repo does not carry.
     var generatedFiles: [String: String] = [:]
     let sizeBytes: Int64
-    /// Peak memory measured on the 2026-11-04 bench (M3 Pro, 13k-token prompt).
+    /// Peak memory measured on a bench (M3 Pro, 13k-token prompt).
     let peakMemoryGB: Int
     /// Smallest Mac it is offered as a default on.
     let minRAMGB: Int
     let purpose: String
     let measured: Measured
 
-    /// What Settings → Models shows as bars: the 2026-11-04 bench through
+    /// What Settings → Models shows as bars: a bench through
     /// the app's own backends (M3 Pro 36 GB, decode tokens per second) and
     /// the round-two blind test (1-5, mean over the Ukrainian tasks: CLEAN,
     /// Summary, brief, dictation, hour-long meetings, people briefs; and the
@@ -153,9 +153,9 @@ nonisolated enum ModelCatalog {
 
     /// The model that runs for `role`: the pick when it is downloaded,
     /// else the best downloaded one that fits this Mac, else any downloaded
-    /// one, else the pick (whose load then says it needs downloading). An
-    /// upgrade from LiteRT starts with the default picked and nothing on
-    /// disk; whatever the user downloads first is used for both roles.
+    /// one, else the pick (whose load then says it needs downloading). A
+    /// Mac with nothing on disk starts with the default picked; whatever the
+    /// user downloads first is used for both roles.
     static func selected(_ role: Role) -> ModelEntry {
         resolve(pick: chosen(role), ramGB: Int(ProcessInfo.processInfo.physicalMemory >> 30), installed: isInstalled)
     }
@@ -189,15 +189,15 @@ nonisolated enum ModelCatalog {
 
 nonisolated extension ModelCatalog {
     /// Purge-proof model storage. ~/Library/Caches is evicted by macOS under
-    /// disk pressure (it silently deleted the 10 GB MLX Gemma) — single-file
+    /// disk pressure (it would silently delete the 10 GB MLX Gemma) — single-file
     /// bundles we manage ourselves live in Application Support instead.
     static func durableModelsDirectory() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Transcriberr/models", isDirectory: true)
     }
 
-    /// The LiteRT Gemma bundles (2.6 and 3.7 GB) that v5.3 and earlier
-    /// downloaded. Nothing loads them since v5.4; they only took disk.
+    /// The retired LiteRT Gemma bundles (2.6 and 3.7 GB) that older builds
+    /// downloaded. Nothing loads them; they only take disk.
     static func removeRetiredModels() {
         let dir = durableModelsDirectory().appendingPathComponent("litert-community", isDirectory: true)
         guard FileManager.default.fileExists(atPath: dir.path) else { return }
@@ -210,7 +210,7 @@ nonisolated extension ModelCatalog {
     }
 
     /// Keep the multi-GB model bundles out of Time Machine: they are
-    /// downloaded again on demand, and backing them up cost every backup
+    /// downloaded again on demand, and backing them up would cost every backup
     /// several GB. The flag is set on the folder, so it covers everything
     /// downloaded into it later.
     static func excludeModelsFromBackup() {

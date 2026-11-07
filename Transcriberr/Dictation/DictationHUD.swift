@@ -36,7 +36,7 @@ final class DictationHUD {
         guard let panel else { return }
         // Choose the screen when the HUD APPEARS; while it stays up it stays
         // put — `show()` runs on every phase change, and following the
-        // pointer made the card hop displays between LISTENING and
+        // pointer would make the card hop displays between LISTENING and
         // RECOGNIZING.
         if !panel.isVisible || lingering { position(panel) }
         observeScreenChanges()
@@ -64,10 +64,8 @@ final class DictationHUD {
         p.level = .floating
         p.isOpaque = false
         p.backgroundColor = .clear
-        // The glass card draws its own precise lift shadow; the window-level
-        // shadow would double up on it (and, being silhouette-based, would
-        // roughly coincide with it anyway now that the card is glass, not a
-        // flat opaque fill).
+        // The card draws its own precise lift shadow; the window-level
+        // shadow would double up on it.
         p.hasShadow = false
         p.ignoresMouseEvents = true
         p.hidesOnDeactivate = false
@@ -75,13 +73,10 @@ final class DictationHUD {
         p.becomesKeyOnlyIfNeeded = true
         p.isReleasedWhenClosed = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        // .hudWindow material (below) renders dark by design regardless of
-        // the app's own appearance — it's Apple's material for exactly
-        // this "floating overlay while doing something else" case (Quick
-        // Look info, the volume/brightness HUD). Pin the panel to match so
-        // vibrancy computes against the right base, and DictationHUDView's
-        // colors below are the night-ground tokens the rest of the app
-        // already uses for the same fixed-inversion idiom.
+        // The HUD is dark regardless of the app's own appearance, like
+        // other floating overlays (Quick Look info, the volume/brightness
+        // HUD). DictationHUDView's colors below are the night-ground tokens
+        // the rest of the app uses for the same fixed-inversion idiom.
         p.appearance = NSAppearance(named: .darkAqua)
         let host = NSHostingView(rootView: DictationHUDView(controller: controller, cardSize: cardSize, margin: shadowMargin))
         host.frame = NSRect(origin: .zero, size: size)
@@ -99,8 +94,9 @@ final class DictationHUD {
 
     private var screenObserver: NSObjectProtocol?
 
-    /// A display unplugged or a resolution change mid-session left the
-    /// borderless panel where the old geometry had it — possibly off-screen.
+    /// A display unplugged or a resolution change mid-session would leave the
+    /// borderless panel where the previous geometry had it, possibly
+    /// off-screen.
     private func observeScreenChanges() {
         guard screenObserver == nil else { return }
         screenObserver = NotificationCenter.default.addObserver(

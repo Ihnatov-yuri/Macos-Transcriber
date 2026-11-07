@@ -21,7 +21,7 @@ struct FinalizeDump: Codable {
     var sysVoice: [[Double]]?
     var micEcho: Bool?
     var clusterVoice: [String: Float]?
-    /// Where the call track has sound (since 4.4.1).
+    /// Where the call track has sound (nil in older dumps).
     var sysSound: [[Double]]?
 
     init(segments: [RawSegment], diarize: Bool, splitTracks: Bool, expectedSpeakers: Int,

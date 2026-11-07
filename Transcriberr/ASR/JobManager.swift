@@ -3,14 +3,12 @@ import Observation
 
 /// Mac port of `asr/TranscriptionJobManager.kt`.
 ///
-/// One job at a time (Gemma 4 engine is process-wide). Subsequent enqueues
+/// One job at a time (the engines are loaded once, process-wide). Subsequent enqueues
 /// queue and drain in order. Failures stop the current job but don't drop
 /// the queue.
 /// `@MainActor` on the whole class, not just `runOne`: `statuses`, `queue`,
-/// `currentJob` and `currentRecordingId` were mutated from the nonisolated
-/// `enqueue`/`cancel` as well as from the main-actor run loop. Every current
-/// call site happens to be on the main actor already, so this codifies
-/// what's true rather than changing behaviour — but it closes a real hole in
+/// `currentJob` and `currentRecordingId` are mutated from `enqueue`/`cancel`
+/// as well as from the main-actor run loop. It also closes a hole in
 /// `drain()`, which assigns `currentJob` AFTER creating the task: an
 /// off-main caller whose job finished instantly would have its `defer`'s
 /// `currentJob = nil` overwritten by that assignment, wedging the queue at
@@ -37,11 +35,11 @@ final class TranscriptionJobManager: @unchecked Sendable {
     private let repository: RecordingRepository
     private var queue: [(Recording, TranscriptionRunner.Params, (() -> Void)?)] = []
     private var currentJob: Task<Void, Never>?
-    /// Which recording `currentJob` is working on. cancel() used to infer
-    /// "is this the running job?" from `fraction > 0`, which is false for
-    /// the first moments of a run (and for any run whose stage events
-    /// haven't advanced the fraction yet) — so cancelling right after
-    /// pressing Run removed the status row but let the job keep running.
+    /// Which recording `currentJob` is working on, so cancel() can tell the
+    /// running job. `fraction > 0` cannot: it is false for the first moments
+    /// of a run (and for any run whose stage events haven't advanced the
+    /// fraction yet), so cancelling right after pressing Run would remove the
+    /// status row but let the job keep running.
     private var currentRecordingId: UUID?
     /// Run queued for a recording once its current job finishes cleanly —
     /// the Super refinement after a meeting's quick draft. In memory only:
@@ -59,8 +57,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
     /// AppContainer points this at `BackendFactory.releaseTextIfIdle`.
     ///
     /// Why the queue owns this: auto-titling a run loads the text model,
-    /// 5-16 GB resident, and nothing else ever released it —
-    /// `releaseLocalBackends` has no call site. The delay is long enough that back-to-back runs
+    /// 5-16 GB resident, and `releaseLocalBackends` has no call site.
+    /// The delay is long enough that back-to-back runs
     /// and a preset fired straight after a run keep the engine warm.
     var onIdle: (() async -> Bool)?
     /// Suspends until nothing is rewriting this recording's audio files (mix
@@ -75,8 +73,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
     static let idleReleaseSeconds: UInt64 = 120
     private var idleTask: Task<Void, Never>?
     /// Held while the queue has work: a Super run on a long meeting takes
-    /// most of an hour with nobody touching the Mac, and idle sleep stopped
-    /// it halfway. (The assertion existed from the start; nothing held it.)
+    /// most of an hour with nobody touching the Mac, and idle sleep would
+    /// stop it halfway.
     private let keepAwake = IdleAssertion()
 
     init(runner: TranscriptionRunner, repository: RecordingRepository) {
@@ -94,8 +92,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
 
     nonisolated static func shouldAutoTitle(_ title: String) -> Bool {
         // Default titles: "Recording <date>" and "Meeting <date>". The
-        // meeting form failed BOTH old checks — wrong prefix, and its
-        // "09:19" timestamp tripped the no-colon rule of the generic clause.
+        // meeting form needs its own prefix check: its "09:19" timestamp
+        // trips the no-colon rule of the generic clause.
         title.hasPrefix("Recording ") || title.hasPrefix("Recording_") ||
         title.hasPrefix("Meeting ") ||
         title.range(of: #"^[A-Za-z0-9 _\-\.]+$"#, options: .regularExpression) != nil
@@ -226,7 +224,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
             }
             guard let recording = try? repository.get(id: task.recordingId),
                   let backend = BackendFactory.Kind(rawValue: task.backend),
-                  // A Gemma-audio run left over from v5.3: that engine is gone.
+                  // A Gemma-audio run left by an older build: that engine is gone.
                   backend.supportsAudio,
                   FileManager.default.fileExists(atPath: recording.audioPath),
                   !isActive(recording.id)
@@ -245,8 +243,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 expectedSpeakers: task.expectedSpeakers,
                 expectedSpeakersExact: recording.runSpeakersExact ?? false,
                 // An interrupted background refinement resumes in the
-                // background: as a foreground run its first chunk wiped the
-                // readable draft. (`modelDirectory` is not persisted: every
+                // background: as a foreground run its first chunk would wipe
+                // the readable draft. (`modelDirectory` is not persisted: every
                 // enqueue passes nil and the engines self-resolve.)
                 keepVisibleUntilDone: task.keepVisibleUntilDone ?? false
             ))
@@ -323,10 +321,10 @@ final class TranscriptionJobManager: @unchecked Sendable {
         }
     }
 
-    // @MainActor is load-bearing: the repository now writes the MAIN
-    // ModelContext, and this method previously hopped to a background
-    // executor (nonisolated async) — concurrent main-context access crashed
-    // SwiftData with dynamicCastFailure mid-run.
+    // @MainActor is load-bearing: the repository writes the MAIN
+    // ModelContext, and as a nonisolated async method this would hop to a
+    // background executor. Concurrent main-context access crashes SwiftData
+    // with dynamicCastFailure mid-run.
     @MainActor
     private func runOne(recording: Recording, params: TranscriptionRunner.Params, onSourceConsumed: (() -> Void)?) async {
         // Guaranteed to fire exactly once no matter how the run ends —
@@ -341,9 +339,9 @@ final class TranscriptionJobManager: @unchecked Sendable {
         }
         defer { fireSourceConsumed() }
 
-        // A Run pressed seconds after Stop (auto-transcribe off) raced the
-        // background mix rebuild + compression: the decode met a half-written
-        // or already-deleted WAV. Wait for it, then use the path the
+        // A Run pressed seconds after Stop (auto-transcribe off) would race
+        // the background mix rebuild + compression: the decode would meet a
+        // half-written or already-deleted WAV. Wait for it, then use the path the
         // recording points at NOW — the one captured at enqueue may be gone.
         var params = params
         await waitForAudio?(recording.id)
@@ -379,17 +377,17 @@ final class TranscriptionJobManager: @unchecked Sendable {
         // deduped inside snapshotVersion, so post-run snapshots don't double.
         if !recording.segments.isEmpty {
             let prevId = recording.transcribedWithBackend ?? "unknown"
-            // "gemma4-litert" now names the text model; a transcript with it
-            // was made by the Gemma audio engine (LiteRT, until v5.3).
+            // "gemma4-litert" names the text model; a transcript with it
+            // was made by the retired Gemma audio engine.
             let prevLabel = prevId == BackendFactory.Kind.localText.rawValue
                 ? "Gemma 4 audio (LiteRT)"
                 : BackendFactory.Kind(rawValue: prevId)?.displayName ?? "Earlier run (\(prevId))"
             try? repository.snapshotVersion(of: recording, engineId: prevId, engineLabel: prevLabel)
         }
         // Stamped when the run first PRODUCES something, not up front: a run
-        // that fails before any output (missing API key, model missing) used
-        // to leave the old transcript labelled with the engine and language
-        // of the failed attempt — and the next rescue snapshot copied that.
+        // that fails before any output (missing API key, model missing) would
+        // leave the old transcript labelled with the engine and language of
+        // the failed attempt, and the next rescue snapshot would copy that.
         var stamped = false
         func stampRunMetadata() {
             guard !stamped else { return }
@@ -492,7 +490,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         )
                     }
                     // Same-track splice, like the store's: in a split-track
-                    // meeting a time-only removal dropped the other track's
+                    // meeting a time-only removal would drop the other track's
                     // rows in this window.
                     let replaces = RecordingRepository.refinementReplaces(
                         start, end, replacementSpeakers: segs.map(\.speaker))
@@ -511,10 +509,10 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 case .done(let finalRaws):
                     // A run that produced NOTHING is not a success. Without
                     // this, an all-silence file (or a run whose every chunk
-                    // wedged twice and returned "") left the previous
-                    // transcript in place, stamped a version row with the
-                    // engine that produced zero output, and reported "Done."
-                    // — the user sees an unchanged transcript and a bogus
+                    // wedged twice and returned "") would leave the previous
+                    // transcript in place, stamp a version row with the
+                    // engine that produced zero output, and report "Done.":
+                    // the user would see an unchanged transcript and a bogus
                     // entry in VERSIONS.
                     if finalRaws.isEmpty && allSegments.isEmpty {
                         // A background refinement never touched the draft on
@@ -635,7 +633,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 }
             }
             // A cancelled consumer ends the stream quietly instead of
-            // throwing, so the catch below never saw a user's Cancel.
+            // throwing, so the catch below never sees a user's Cancel.
             if Task.isCancelled { AppLog.warn("job", "cancelled") }
         } catch is CancellationError {
             AppLog.warn("job", "cancelled")

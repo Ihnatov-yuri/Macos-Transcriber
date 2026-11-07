@@ -62,7 +62,7 @@ d.node(870, r, 258, 100, "Who spoke", ["pyannote diarizer, then voice", "prints 
 # --- understand ---------------------------------------------------------------
 Y = 636
 d.arrow([(600, 600), (600, Y - 4)])
-section(Y, 120, "Understand", "Gemma 4 through Google's LiteRT-LM, loaded only while it works")
+section(Y, 120, "Understand", "Gemma 4 on MLX or Qwen3.5 on uzu, loaded only while it works")
 r = Y + 56
 d.node(72, r, 344, 50, "Titles, summaries, minutes", [], title_y=r + 31)
 d.node(432, r, 336, 50, "Your own presets and rewrites", [], title_y=r + 31)

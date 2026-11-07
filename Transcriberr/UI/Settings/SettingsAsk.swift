@@ -110,8 +110,8 @@ enum SettingKind: Equatable {
             let folded = SettingsFilter.fold(s.trimmingCharacters(in: .whitespaces))
             if let hit = options.first(where: { SettingsFilter.fold($0.value) == folded }) { return hit.value }
             if let hit = options.first(where: { SettingsFilter.fold($0.name) == folded }) { return hit.value }
-            // The catalog's "value (name)" copied back whole: the 26B did,
-            // and the right choice was turned down.
+            // The catalog's "value (name)" copied back whole (the 26B does
+            // this): without this match the right choice is turned down.
             if let hit = options.first(where: { folded.hasPrefix(SettingsFilter.fold($0.value) + " (") }) { return hit.value }
             // Numbers written another way ("10.0" for "10").
             if let x = Double(folded), let hit = options.first(where: { Double($0.value) == x }) { return hit.value }
@@ -654,7 +654,7 @@ struct OnDeviceSettingsAskModel: SettingsAskModel {
     static let patience: TimeInterval = 5
 
     /// The whole request, a first model load included. One answer took
-    /// 123 s instead of the usual 10 (2026-11-05); the person should not
+    /// 123 s instead of the usual 10; the person should not
     /// watch "thinking" for that long.
     static let deadline: TimeInterval = 60
 

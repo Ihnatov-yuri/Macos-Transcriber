@@ -48,8 +48,8 @@ nonisolated struct AudioDecoder: Sendable {
         do {
             // Inside the fallback's reach: loading the track is where
             // AVFoundation refuses a file it cannot open, with nothing but
-            // "The operation could not be completed", and that used to end
-            // the decode before the AVAudioFile path was tried.
+            // "The operation could not be completed", and that must not end
+            // the decode before the AVAudioFile path is tried.
             guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
                 throw DecoderError.noAudioTrack
             }
@@ -106,7 +106,7 @@ nonisolated struct AudioDecoder: Sendable {
             } catch {
                 // Both readers' own reasons, with domain and code: the
                 // fallback's message alone ("The operation could not be
-                // completed") said nothing about what went wrong.
+                // completed") says nothing about what went wrong.
                 throw DecoderError.undecodable(file: file.lastPathComponent,
                                                reader: first, audioFile: Self.describe(error))
             }
@@ -124,7 +124,7 @@ nonisolated struct AudioDecoder: Sendable {
         }
         // Without this a 2 → 1 conversion REMAPS: it keeps the left channel
         // and drops the right, so a stereo import with a voice panned right
-        // (one side of a call per channel) decoded as silence there. The
+        // (one side of a call per channel) decodes as silence there. The
         // AVAssetReader path above mixes down; this path must too. Stereo
         // only: wider files with no channel layout are left to the remap.
         if f.processingFormat.channelCount == 2 { converter.downmix = true }
@@ -146,10 +146,14 @@ nonisolated struct AudioDecoder: Sendable {
                 out.append(contentsOf: UnsafeBufferPointer(start: p, count: Int(outBuf.frameLength)))
             }
             // Keep draining until the converter itself says end-of-stream —
-            // breaking on our EOF flag dropped its buffered filter tail.
+            // breaking on our EOF flag drops its buffered filter tail.
             if status == .endOfStream || (feed.reachedEOF && outBuf.frameLength == 0) {
                 draining = false
             }
+        }
+        if let readError = feed.readError {
+            // Said out loud: a short transcript must be traceable to this.
+            AppLog.warn("decoder", "read failed at frame \(f.framePosition) of \(f.length) in \(file.lastPathComponent), keeping what was decoded: \(readError.localizedDescription)")
         }
         AppLog.info("decoder", "AVAudioFile fallback decoded \(out.count) samples from \(file.lastPathComponent)")
         return out
@@ -209,8 +213,8 @@ nonisolated struct AudioDecoder: Sendable {
     ///
     /// Each cut is measured from the PREVIOUS cut, not from a fixed 28 s grid:
     /// on the grid, one boundary snapping early and the next snapping late
-    /// (plus the recap) made chunks of up to 33 s, and the engine of the
-    /// time truncated at 28 — up to 5 s at such a seam was never transcribed.
+    /// (plus the recap) makes chunks of up to 33 s, and an engine that
+    /// truncates at 28 s leaves up to 5 s at such a seam untranscribed.
     func computeCutPoints(silences: [Silence], durationSeconds: Double) -> [Double] {
         let stride = Self.chunkSeconds - Self.overlapSeconds - Self.alignFlexSeconds
         var cuts: [Double] = []
@@ -336,6 +340,9 @@ nonisolated final class ConverterInput: @unchecked Sendable {
     private var fed = false
     /// The file ran out (or failed to read) while feeding.
     private(set) var reachedEOF = false
+    /// A read that failed before the end of the file: the decode stops
+    /// there, keeping what it has (a damaged file is salvaged, not lost).
+    private(set) var readError: Error?
 
     /// One buffer, then `whenDone` (`.noDataNow` for a stream that goes on,
     /// `.endOfStream` for the last one).
@@ -356,7 +363,10 @@ nonisolated final class ConverterInput: @unchecked Sendable {
                 if buffer.frameLength == 0 { reachedEOF = true; status.pointee = .endOfStream; return nil }
                 status.pointee = .haveData
                 return buffer
-            } catch { reachedEOF = true; status.pointee = .endOfStream; return nil }
+            } catch {
+                if file.framePosition < file.length { readError = error }
+                reachedEOF = true; status.pointee = .endOfStream; return nil
+            }
         }
         if fed { status.pointee = whenDone; return nil }
         fed = true

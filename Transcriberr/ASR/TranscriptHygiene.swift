@@ -6,7 +6,7 @@ import Foundation
 ///   - PHANTOMS: on silence Whisper emits a stock closing line ("Дякую.",
 ///     "Дякую за перегляд!") learned from subtitle data, while Parakeet
 ///     returns nothing or a stray number ("100"). 30 of 44 "hard conflicts"
-///     in one day's log were exactly this pair, each costing a Gemma call
+///     in one day's log were exactly this pair, each costing an arbiter call
 ///     and leaving a fake "Дякую." in the transcript.
 ///   - SEAMS: chunks share a 1 s recap, so the word spoken across a boundary
 ///     is transcribed by both chunks ("…дивувати." / "дивувати. І от…").
@@ -21,8 +21,8 @@ nonisolated enum TranscriptHygiene {
 
     /// The comparison key of one word: lowercased letters and digits only.
     /// U+02BC "ʼ", the Ukrainian apostrophe, is a modifier LETTER (Lm) to
-    /// Swift, so a plain letter filter kept it while dropping "'" and "’":
-    /// "памʼятаєш" and "пам'ятаєш" voted, matched echo and trimmed seams as
+    /// Swift, so a plain letter filter keeps it while dropping "'" and "’":
+    /// "памʼятаєш" and "пам'ятаєш" would vote, match echo and trim seams as
     /// two different words. Every engine's `norm` goes through here.
     static func wordKey<S: StringProtocol>(_ s: S) -> String {
         s.lowercased().filter { ($0.isLetter || $0.isNumber) && $0 != "ʼ" }

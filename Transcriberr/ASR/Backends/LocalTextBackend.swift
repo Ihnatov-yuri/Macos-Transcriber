@@ -19,10 +19,10 @@ nonisolated struct LocalTextStats: Sendable {
 
 /// One generation at a time per text model. Two decodes side by side on one
 /// model only split the GPU, and each holds its own KV cache: a brief, a
-/// preset and Super's arbiter arriving together would have tripled the
+/// preset and Super's arbiter arriving together would triple the
 /// memory for no gain in total time.
 ///
-/// Dictation must not wait behind them (v3.12.1):
+/// Dictation must not wait behind them:
 /// Super's arbiter reading a whole meeting holds the model for minutes.
 ///   - `interactive` requests go ahead of background ones;
 ///   - `patience` bounds the wait: past it the request throws `Busy`, and

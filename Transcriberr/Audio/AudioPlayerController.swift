@@ -4,7 +4,7 @@ import Observation
 
 /// Mirror of `audio/AudioPlayerController.kt` and Android's PlayerBar.
 /// AVPlayer-backed playback with position tracking for transcript highlight + scrub.
-/// `@MainActor` removed — same `_SwiftData_SwiftUI` interaction as
+/// Not `@MainActor`: same `_SwiftData_SwiftUI` interaction as
 /// `AppContainer` / `WavRecorder`.
 @Observable
 nonisolated final class AudioPlayerController: @unchecked Sendable {
@@ -18,8 +18,8 @@ nonisolated final class AudioPlayerController: @unchecked Sendable {
 
     /// Lazy-build peak amplitude buckets for the waveform scrubber (200 buckets).
     private(set) var waveform: [Float] = []
-    /// The in-flight peak extraction, cancelled when another file loads —
-    /// clicking through a few long meetings used to leave one full decode
+    /// The in-flight peak extraction, cancelled when another file loads.
+    /// Otherwise clicking through a few long meetings leaves one full decode
     /// per click running to the end, each result then thrown away.
     @ObservationIgnored private var waveformTask: Task<Void, Never>?
 

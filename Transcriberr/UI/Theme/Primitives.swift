@@ -33,8 +33,8 @@ struct TapButton<Label: View>: View {
     var body: some View {
         label()
             .opacity(pressed ? 0.6 : 1.0)
-            // A disabled button must look it: a primary pill read as
-            // pressable while its action was off (found 2026-10-24).
+            // A disabled button must look it: a primary pill would read as
+            // pressable while its action is off.
             .opacity(isEnabled ? 1 : 0.4)
             .contentShape(Rectangle())
             .onTapGesture { if isEnabled { action() } }
@@ -44,8 +44,8 @@ struct TapButton<Label: View>: View {
                     .onEnded { _ in pressed = false }
             )
             // A tap gesture alone is invisible to accessibility: VoiceOver
-            // read these as text and could not press them (found 2026-10-23
-            // when a sheet's Cancel could not be pressed through AX).
+            // reads these as text and cannot press them (a sheet's Cancel
+            // could not be pressed through AX).
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { if isEnabled { action() } }
@@ -67,8 +67,8 @@ extension TapButton where Label == Text {
 // not a drawn line.
 
 /// 1.5pt divider at `hairStrong` (22% ink — the strongest hairline Lit
-/// Field defines; it's still a light touch by design, not the old opaque
-/// rule). The harder of the two internal-divider strengths — sparing use,
+/// Field defines; it's still a light touch by design). The harder of the
+/// two internal-divider strengths — sparing use,
 /// e.g. a list's single most important split.
 struct InkRule: View {
     var body: some View {
@@ -263,10 +263,10 @@ struct LedgerRow<Body: View, Meta: View>: View {
 /// static rather than looping).
 ///
 /// The ring grows with `scaleEffect`, a drawing transform, inside a fixed
-/// frame. It used to animate its `.frame` size, which is layout: every
-/// display frame re-laid out whatever contained the dot, and the "Run
-/// transcription" bar shows one on every recording, so an idle app with a
-/// recording open burned about half a core in SwiftUI layout.
+/// frame. Animating its `.frame` size would be layout: every display frame
+/// would re-lay out whatever contains the dot, and the "Run transcription"
+/// bar shows one on every recording, so an idle app with a recording open
+/// burned about half a core in SwiftUI layout.
 struct PulseDot: View {
     var diameter: CGFloat = 8
     /// Idle call-to-action footers pass false: a repeat-forever animation
@@ -381,8 +381,8 @@ struct TagPair: View {
                     Text(label).uiLabel(10, color: AppColor.ink2)
                     Text(value).uiLabel(10)
                 }
-                // One line, at its own width — in a crowded row a pair used
-                // to wrap mid-value; rows of pairs wrap as a whole instead
+                // One line, at its own width — in a crowded row a pair would
+                // wrap mid-value; rows of pairs wrap as a whole instead
                 // (FlowLayout).
                 .lineLimit(1)
                 .fixedSize()

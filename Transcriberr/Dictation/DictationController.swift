@@ -136,11 +136,10 @@ nonisolated final class DictationController: @unchecked Sendable {
     private var pipelineTail: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
     private var trustPoll: Task<Void, Never>?
-    /// Bumped by cancel(): queued passes from a cancelled session are dropped.
-    /// Sessions the user cancelled. Per session, not a global generation
-    /// counter: cancelling the session being HELD (a too-short press, a
-    /// modifier combo) used to discard the previous session's passage that
-    /// was still being recognized — silently.
+    /// Sessions the user cancelled; their queued passes are dropped. Per
+    /// session, not a global generation counter: cancelling the session being
+    /// HELD (a too-short press, a modifier combo) would otherwise silently
+    /// discard the previous session's passage that is still being recognized.
     private var cancelledSessions: Set<Int> = []
     /// Bumped by begin(): background loops belonging to an older session stop.
     private var sessionID = 0
@@ -376,9 +375,10 @@ nonisolated final class DictationController: @unchecked Sendable {
         // trigger this while the user is holding the key down — the HOTKEY
         // pill being cycled in settings, `refreshTrust` on app activation,
         // either permission poller — and `uninstall()` only resets the
-        // MONITOR's state. The release then never reached `handleHotkey`, so
-        // the phase stayed `.listening` with the HUD up until the 180-second
-        // watchdog fired and dumped the whole recording into the target app.
+        // MONITOR's state. The release would then never reach `handleHotkey`,
+        // so the phase would stay `.listening` with the HUD up until the
+        // 180-second watchdog fired and dumped the whole recording into the
+        // target app.
         if isHeldByHotkey {
             AppLog.warn("dictation", "hotkey re-armed during a hold session — cancelling it")
             cancel(quiet: true)
@@ -553,8 +553,8 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// Stream Deck, scripts… (`transcriberr://dictate` alone toggles). A
     /// session a link starts always writes to the Dictate screen, also under
     /// `open -g`: any app or web page can open the link, and pasting into the
-    /// front app let one without microphone access bring itself forward and
-    /// receive what the room said. The hotkey, the menu and the Shortcuts
+    /// front app would let one without microphone access bring itself forward
+    /// and receive what the room said. The hotkey, the menu and the Shortcuts
     /// actions still paste into the front app. Settings → Dictation can turn
     /// the links off.
     @MainActor
@@ -637,8 +637,8 @@ nonisolated final class DictationController: @unchecked Sendable {
         updateHUD()
         // The ready cue plays when the first buffer lands, not now: the
         // engine takes 30–300 ms to open (more on Bluetooth), and a Pop
-        // before that invited the user to speak into a closed mic — the
-        // first word of a short utterance was routinely lost.
+        // before that invites the user to speak into a closed mic, losing
+        // the first word of a short utterance.
         capture.onAudioArrived = { [weak self] in
             guard let self, self.sessionID == session, self.phase == .listening else { return }
             self.micOpen = true
@@ -786,7 +786,8 @@ nonisolated final class DictationController: @unchecked Sendable {
         }
         // Only this session's queued passes: an earlier session's passage
         // still being recognized keeps "writing…" until it lands (a reset
-        // to 0 hid it, then its own decrements were clamped away).
+        // to 0 would hide it, and its own decrements would then be clamped
+        // away).
         pendingCounter.cancel(session: sessionID)
         pendingPasses = pendingCounter.total
         if quiet {
@@ -862,10 +863,10 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// but a passage deliberately OUTLIVES its session (`canBegin` allows a
     /// new one while the previous passage is still being recognized, which
     /// is the normal tap-stop-tap-start rhythm). Reading them from `self`
-    /// later meant a passage dictated into Slack got formatted with the next
-    /// session's mode and tone, prompted with the next session's surrounding
-    /// text, and delivered to the next session's target — landing in the
-    /// scratch pad, or in whatever app the second session was aimed at.
+    /// later would format a passage dictated into Slack with the next
+    /// session's mode and tone, prompt it with the next session's surrounding
+    /// text, and deliver it to the next session's target: the scratch pad,
+    /// or whatever app the second session was aimed at.
     private struct Passage {
         let target: Target
         let context: DictationContext
@@ -918,10 +919,10 @@ nonisolated final class DictationController: @unchecked Sendable {
             return
         }
 
-        // A password is never sent to a cloud engine. Every other
-        // safeguard (verbatim mode, no polish, no history, no pane) kept it
-        // on this Mac — except the recognition itself, which with OpenAI or
-        // Gemini as the dictation engine uploaded the spoken password.
+        // A password is never sent to a cloud engine. The other
+        // safeguards (verbatim mode, no polish, no history, no pane) keep it
+        // on this Mac, but not the recognition itself: with OpenAI or
+        // Gemini as the dictation engine it would upload the spoken password.
         if Self.mustRefuseSecure(passage.context, engine: settings.engine) {
             AppLog.warn("dictation", "password field with a cloud engine — passage dropped, nothing sent")
             if final {
@@ -962,7 +963,7 @@ nonisolated final class DictationController: @unchecked Sendable {
             if settings.spokenCommands, passage.mode != .verbatim, DictationText.isScratchOnly(recognized),
                !cancelledSessions.contains(passage.session) {
                 if !final { deliveredSessions.insert(passage.session) }
-                await scratchLastInsertion(final: final)
+                await scratchLastInsertion(final: final, passage: passage)
                 return
             }
             var cleaned: String
@@ -995,11 +996,10 @@ nonisolated final class DictationController: @unchecked Sendable {
             return
         }
 
-        // A password field only switched the mode to verbatim, and the
-        // passage then went everywhere a normal one goes: the HUD, name
-        // suggestions, and with history on a Recording row, the JSON
-        // backups and the knowledge base served over MCP. It is pasted and
-        // nothing else.
+        // A password-field passage is pasted and nothing else. Switching the
+        // mode to verbatim alone would still send it everywhere a normal one
+        // goes: the HUD, name suggestions, and with history on a Recording
+        // row, the JSON backups and the knowledge base served over MCP.
         let secret = passage.context.isSecure
         lastText = secret ? String(repeating: "•", count: min(text.count, 12)) : text
         previewText = ""
@@ -1027,6 +1027,9 @@ nonisolated final class DictationController: @unchecked Sendable {
             case .appChanged:
                 finalMessage(secret ? "You switched apps — password not inserted"
                                     : "You switched apps — pastes when you return")
+            case .fieldChanged:
+                finalMessage(secret ? "You left the password field — password not inserted"
+                                    : "Password field — the text is in the Dictate pad")
             }
         } else if outcome == .copiedOnly {
             // Keep listening, but tell the user once.
@@ -1034,7 +1037,7 @@ nonisolated final class DictationController: @unchecked Sendable {
         }
     }
 
-    private enum DeliveryOutcome: Equatable { case pasted, paneAppended, copiedOnly, appChanged }
+    private enum DeliveryOutcome: Equatable { case pasted, paneAppended, copiedOnly, appChanged, fieldChanged }
 
     @MainActor
     private func deliver(_ text: String, passage: Passage) -> DeliveryOutcome {
@@ -1057,13 +1060,13 @@ nonisolated final class DictationController: @unchecked Sendable {
             updateHUD()
         }
         // The app that was in front when the hotkey went down is the app
-        // that gets the text — and nothing checked that until now.
-        // Recognition takes anywhere from a moment to the 45 s polish
-        // timeout, and a ⌘-Tab in between sent the ⌘V somewhere else
-        // entirely: a terminal (where a spoken "new paragraph" then EXECUTES
-        // the line), a password field, somebody else's chat window. The
-        // secure-field and mode decisions were all made for the old app too,
-        // so a passage cleared for a normal field could land in a secure one.
+        // that gets the text, so check it is still in front. Recognition
+        // takes anywhere from a moment to the 45 s polish timeout, and a
+        // ⌘-Tab in between would send the ⌘V somewhere else entirely: a
+        // terminal (where a spoken "new paragraph" then EXECUTES the line),
+        // a password field, somebody else's chat window. The secure-field and
+        // mode decisions were all made for the original app, so a passage
+        // cleared for a normal field could land in a secure one.
         var text = text
         if let expected = passage.context.bundleId,
            let current = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
@@ -1078,20 +1081,38 @@ nonisolated final class DictationController: @unchecked Sendable {
                 lastInsertion = nil
                 return .appChanged
             }
-            // Back in the target app: earlier held passages go first.
-            let held = takeHeld(for: expected)
+            // Same app, but the focus may have moved between a password
+            // field and a normal one since the session began. Only a read
+            // that reached the field (it has a role) decides.
+            let focus = DictationContext.capture(readText: false)
+            if focus.role != nil, focus.isSecure != secret {
+                if secret {
+                    // A password must not land as visible text: dropped.
+                    AppLog.warn("dictation", "left the password field before delivery — passage dropped")
+                } else {
+                    // Prose must not be typed into a password field: the
+                    // pad keeps it.
+                    AppLog.warn("dictation", "focus moved to a password field — passage kept in the pad")
+                    paneText = DictationText.join(existing: paneText, new: text)
+                }
+                lastInsertion = nil
+                return .fieldChanged
+            }
+            // Back in the target app: earlier held passages go first, never
+            // in front of a password (they would be pasted into its field).
+            let held = secret ? [] : takeHeld(for: expected)
             if !held.isEmpty {
                 text = (held.map(\.text) + [text]).reduce("") { DictationText.join(existing: $0, new: $1) }
             }
         }
         // Context-aware join: look at what's left of the caret when the
         // target app exposes it through Accessibility. Never for a password:
-        // the spacing rule appended a space (or capitalized the first
-        // letter), so the dictated password no longer matched. And it is
+        // the spacing rule would append a space (or capitalize the first
+        // letter), so the dictated password would not match. And it is
         // never left on the clipboard for the next ⌘V anywhere.
         // A passage right behind the previous one (a toggle-mode pause
-        // flush, then the stop) read the field before the previous ⌘V had
-        // landed, so it was spaced and capitalized against the text from
+        // flush, then the stop) would read the field before the previous ⌘V
+        // has landed, and be spaced and capitalized against the text from
         // BEFORE that passage: "…first passage.Second passage". What will
         // sit left of the caret by then is the passage still in flight.
         let preceding: String?
@@ -1123,10 +1144,18 @@ nonisolated final class DictationController: @unchecked Sendable {
 
     /// "Scratch that" as a whole passage: take back the previous one.
     @MainActor
-    private func scratchLastInsertion(final: Bool) async {
+    private func scratchLastInsertion(final: Bool, passage: Passage) async {
+        // Only a session that types into apps may take back what it typed
+        // there: a link-started or pad session must never send Backspace to
+        // another app (any app or web page can open the link).
+        if passage.target != .frontmostApp, lastInsertion?.target == .frontmostApp {
+            AppLog.warn("dictation", "scratch that from a pad session → the last passage went to an app, not removing")
+            if final { finalMessage("Nothing to scratch") }
+            return
+        }
         // The passage to take back may still be queued behind an earlier
-        // ⌘V (or not yet read by the app): Backspace now deleted the text
-        // BEFORE it, and the paste then landed anyway. Wait for it.
+        // ⌘V (or not yet read by the app): Backspace now would delete the
+        // text BEFORE it, and the paste would then land anyway. Wait for it.
         if lastInsertion?.target == .frontmostApp {
             let deadline = ContinuousClock.now + .seconds(5)
             while TextInserter.isPasteInFlight, ContinuousClock.now < deadline {
@@ -1169,7 +1198,7 @@ nonisolated final class DictationController: @unchecked Sendable {
         if final { finalMessage(removed ? "Removed the last passage" : "Couldn't remove the last passage") }
     }
 
-    // MARK: - Polish (optional Gemma pass)
+    // MARK: - Polish (optional text-model pass)
 
     @MainActor
     private func polish(_ text: String, passage: Passage) async -> String {
@@ -1278,8 +1307,9 @@ nonisolated final class DictationController: @unchecked Sendable {
             try repository.save(recording)
         } catch {
             // Inserted before the failing save: left in the main context it
-            // was written by the next save of anything — an untitled-looking
-            // row with no transcript, outside the Dictation folder.
+            // would be written by the next save of anything, as an
+            // untitled-looking row with no transcript, outside the Dictation
+            // folder.
             try? repository.delete(recording)
             try? FileManager.default.removeItem(at: url)
             throw error
@@ -1291,8 +1321,9 @@ nonisolated final class DictationController: @unchecked Sendable {
                 ?? (try repository.createFolder(named: Folder.dictationName, allowReserved: true))
             try repository.move(recording, to: folder)
         } catch {
-            // Saved already: a failure here left a row with no transcript,
-            // or one outside the Dictation folder (in All, among meetings).
+            // Saved already: a failure here would leave a row with no
+            // transcript, or one outside the Dictation folder (in All, among
+            // meetings).
             // Take the whole entry back.
             try? repository.delete(recording)
             try? FileManager.default.removeItem(at: url)
@@ -1438,8 +1469,8 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// A final pass with nothing to insert. When a pause flush already
     /// delivered this session's words, the session ends the way a
     /// successful one does — the Tink and the brief result strip. "Nothing
-    /// heard" after a 0.4 s silent tail, right after the words had visibly
-    /// landed, was the most common false alarm in the log.
+    /// heard" after a 0.4 s silent tail, right after the words have visibly
+    /// landed, is a false alarm (the most common one in the log).
     @MainActor
     private func endEmptyFinal(passage: Passage) {
         guard deliveredSessions.remove(passage.session) != nil else {
@@ -1508,9 +1539,9 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// Wall-clock guard for native calls that don't observe cancellation.
     ///
     /// Unstructured on purpose: a task group awaits ALL its children before
-    /// it returns or throws, so a native call that ignores cancellation kept
-    /// the "timeout" waiting for exactly the hang it was meant to bound — and
-    /// every later passage queued behind it. The abandoned operation is left
+    /// it returns or throws, so a native call that ignores cancellation would
+    /// keep the "timeout" waiting for exactly the hang it is meant to bound,
+    /// and every later passage queued behind it. The abandoned operation is left
     /// to finish (or not) on its own.
     private static func withTimeout<T: Sendable>(
         seconds: TimeInterval,

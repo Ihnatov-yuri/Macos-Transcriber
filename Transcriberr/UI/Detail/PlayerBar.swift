@@ -59,7 +59,7 @@ struct PlayerBar: View {
             container.audioPlayer.load(url: URL(fileURLWithPath: recording.audioPath), startAt: startAt)
         }
         // The player is app-wide: closing or deleting the recording, or
-        // leaving the Library, took this bar away while the audio kept
+        // leaving the Library, would take this bar away while the audio kept
         // playing with nothing on screen able to stop it.
         .onDisappear { container.audioPlayer.pause() }
     }

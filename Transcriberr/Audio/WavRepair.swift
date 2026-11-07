@@ -173,9 +173,9 @@ nonisolated enum WavRepair {
         guard write(handle, UInt32(newData), at: dataHeader + 4),
               write(handle, UInt32(newEnd - 8), at: 4) else { return .unrepairable("write failed") }
         if !clamped, newEnd < fileLength {
-            try? handle.truncate(atOffset: newEnd)
+            AppLog.attempt("repair", "cutting the tail off \(url.lastPathComponent)") { try handle.truncate(atOffset: newEnd) }
         }
-        try? handle.synchronize()
+        AppLog.attempt("repair", "flushing \(url.lastPathComponent)") { try handle.synchronize() }
         let frames = Int64(newData / blockAlign)
         return .repaired(frames: frames, seconds: Double(frames) / sampleRate)
     }

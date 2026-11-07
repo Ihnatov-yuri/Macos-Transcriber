@@ -14,9 +14,15 @@ LOG=~/Library/Logs/Transcriberr/transcriberr.log
 DOMAIN=nl.ihnatov.Transcriberr
 PHRASE="This is a dictation test comma the quick brown fox jumps over the lazy dog period new paragraph second passage question mark"
 
-prev_ns="$(defaults read $DOMAIN recorder.noiseSuppression 2>/dev/null || echo 1)"
+prev_ns="$(defaults read $DOMAIN recorder.noiseSuppression 2>/dev/null || echo unset)"
 defaults write $DOMAIN recorder.noiseSuppression -bool false
-restore() { defaults write $DOMAIN recorder.noiseSuppression -bool "$prev_ns"; }
+restore() {
+  case "$prev_ns" in
+    unset) defaults delete $DOMAIN recorder.noiseSuppression 2>/dev/null || true ;;
+    1) defaults write $DOMAIN recorder.noiseSuppression -bool true ;;
+    *) defaults write $DOMAIN recorder.noiseSuppression -bool false ;;
+  esac
+}
 trap restore EXIT
 
 pkill -f "Transcriberr.app/Contents/MacOS/Transcriberr" 2>/dev/null; sleep 2

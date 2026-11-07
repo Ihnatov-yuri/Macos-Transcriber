@@ -10,7 +10,7 @@ actor AnthropicBackend: ASRBackend {
     private let model: String
     private var apiKey: String?
 
-    init(model: String = "claude-opus-4-7") {
+    init(model: String = CloudRequests.Models.anthropic) {
         self.model = model
     }
 
@@ -52,16 +52,8 @@ actor AnthropicBackend: ASRBackend {
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let payload: [String: Any] = [
-            "model": model,
-            "max_tokens": maxTokens,
-            "temperature": 0.3,
-            "system": systemInstruction,
-            "messages": [
-                ["role": "user", "content": userMessage]
-            ]
-        ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        req.httpBody = try JSONSerialization.data(withJSONObject: CloudRequests.anthropicText(
+            model: model, system: systemInstruction, user: userMessage, maxTokens: maxTokens))
 
         let (data, resp) = try await CloudHTTP.session.data(for: req)
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -71,7 +63,7 @@ actor AnthropicBackend: ASRBackend {
         }
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         // A reply cut at max_tokens is not a finished output (as for OpenAI
-        // and Gemini): it used to be saved as a whole summary.
+        // and Gemini): it would otherwise be saved as a whole summary.
         if json?["stop_reason"] as? String == "max_tokens" {
             throw ASRError.backendUnavailable(reason: "Claude's answer was cut off at its length limit.")
         }

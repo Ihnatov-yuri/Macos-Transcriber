@@ -31,7 +31,7 @@ nonisolated struct PostProcessingPreset: Sendable, Identifiable, Codable, Equata
         self.kind = kind
     }
 
-    /// Presets saved before 4.5 have no `kind`; the three rewrite built-ins
+    /// Presets saved before `kind` existed have none; the three rewrite built-ins
     /// were told apart by id in PostProcessor.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -118,6 +118,10 @@ nonisolated final class PresetStore: @unchecked Sendable {
             let builtinIds = Set(Builtin.all.map(\.id))
             let userAdded = presets.filter { !builtinIds.contains($0.id) }
             presets = Builtin.all + userAdded
+            // Saved by hand: an assignment inside init does not reliably run
+            // didSet, and the flag above is already set, so an unsaved
+            // upgrade would be lost for good at the next launch.
+            persist()
         }
     }
 
@@ -181,7 +185,7 @@ nonisolated final class PresetStore: @unchecked Sendable {
     }
 
     /// A new preset at the end; returns its id. The default prompts ask
-    /// for something short so a first try on Gemma comes back quickly.
+    /// for something short so a first try on a local model comes back quickly.
     @discardableResult
     func add(name: String = "New preset") -> String {
         let preset = PostProcessingPreset(
@@ -384,7 +388,7 @@ nonisolated final class PresetStore: @unchecked Sendable {
         static let all = [summary, minutes, contextRewrite, clean, translatePolish]
         static let ids = Set(all.map(\.id))
         /// What PostProcessor ran chunked before presets had a `kind`; the
-        /// decoder uses it for presets saved by 4.4 and earlier.
+        /// decoder uses it for presets saved without one.
         static let rewriteIds: Set<String> = ["clean", "context_rewrite", "translate_polish"]
     }
 }

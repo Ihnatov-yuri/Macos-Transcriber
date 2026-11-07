@@ -236,6 +236,23 @@ final class DictationContextTests: XCTestCase {
             "No problem, I mean it.")
     }
 
+    /// A cue that starts a new sentence corrects nothing: it deleted the
+    /// sentence before it.
+    func testCueAfterASentenceEndIsNotACorrection() {
+        XCTAssertEqual(
+            DictationText.applySelfCorrections("That's fine. Actually, let's wait."),
+            "That's fine. Actually, let's wait.")
+        XCTAssertEqual(
+            DictationText.applySelfCorrections("Are you coming tonight? No, I can't."),
+            "Are you coming tonight? No, I can't.")
+    }
+
+    /// Spoken punctuation replaces only a terminator the recognizer added,
+    /// never a symbol that belongs to the word.
+    func testSpokenPunctuationKeepsSymbols() {
+        XCTAssertEqual(DictationText.applyCommands("we grew 50% period"), "we grew 50%.")
+    }
+
     func testAutoSpacingFromContext() {
         XCTAssertEqual(DictationText.forInsertion("hello there.", spacing: .auto, preceding: ""), "Hello there.")
         XCTAssertEqual(DictationText.forInsertion("hello there.", spacing: .auto, preceding: "Dear Kim,\n"), "Hello there.")

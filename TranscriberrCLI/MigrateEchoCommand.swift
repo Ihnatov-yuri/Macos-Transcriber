@@ -5,9 +5,9 @@ import AVFoundation
 // `transcriberrcli migrate-echo [--dry-run]` — one-time backfill: reruns
 // offline echo cancellation (EchoCanceller via MeetingMixRebuilder) against
 // every meeting recording whose .mic/.sys sidecars are still on disk,
-// replacing the live-gated mix (recorded before v2.5.2) with a properly
-// echo-cancelled one. Recordings made AFTER v2.5.2 already went through this
-// at record time — rerunning it on them is a safe no-op, since
+// replacing a live-gated mix (from builds without record-time echo
+// cancellation) with a properly echo-cancelled one. Recordings echo-cancelled
+// at record time are a safe no-op, since
 // EchoCanceller declines to touch audio it can't measurably improve (its own
 // ERLE check), so this is safe to run more than once.
 

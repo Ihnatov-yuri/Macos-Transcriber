@@ -220,8 +220,8 @@ nonisolated enum Benchmark {
 
     /// The 16 kHz mono samples of `from`…`to` seconds of an audio file,
     /// read by seeking: marking an hour-long meeting as checked cuts a few
-    /// hundred lines, and decoding the whole file for each one took minutes
-    /// and ~230 MB per decode.
+    /// hundred lines, and decoding the whole file for each one would take
+    /// minutes and ~230 MB per decode.
     static func readRange(_ url: URL, from: Double, to: Double) -> [Float]? {
         guard let f = try? AVAudioFile(forReading: url) else { return nil }
         let rate = f.processingFormat.sampleRate

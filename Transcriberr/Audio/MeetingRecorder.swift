@@ -45,7 +45,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         /// Raw per-source tracks saved alongside the mix: <base>.mic.wav (you)
         /// and <base>.sys.wav (everyone else). The mix stays the primary
         /// recording; the tracks preserve ground truth for split-track
-        /// (re-)transcription — even for meetings recorded before that ships.
+        /// (re-)transcription.
         var micConverter: AVAudioConverter?
         var micFile: AVAudioFile?
         var sysConverter: AVAudioConverter?
@@ -100,7 +100,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
 
     /// Live captions consume these one-second chunks in real time; if the
     /// consumer falls behind (a stalled main thread), an unbounded stream
-    /// grew for the whole session and the captions fell further and further
+    /// grows for the whole session and the captions fall further and further
     /// behind the audio. Dropping the oldest backlog keeps captions near the
     /// live edge — the transcript of record comes from the file, not from
     /// this feed. The live worker only appends on arrival, so 40 s of slack
@@ -156,7 +156,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// stream) are claimed and released on the main actor rather than
     /// written from the pool underneath SwiftUI and `publishStats`.
     /// `@concurrent` keeps it on the pool: a plain nonisolated async function
-    /// now runs on its caller's actor, which for the Record button is main.
+    /// runs on its caller's actor, which for the Record button is main.
     @concurrent
     func start() async throws {
         let claimed = await MainActor.run { () -> Bool in
@@ -224,7 +224,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     @concurrent
     func stop() async throws -> URL? {
         // A stop that lands while start() is still setting up must wait for
-        // it: returning nil here let start() finish afterwards and leave a
+        // it: returning nil here would let start() finish afterwards and leave a
         // capture running — mic open, files growing — that nothing could stop.
         while await MainActor.run(body: { self.isStarting }) {
             try? await Task.sleep(nanoseconds: 20_000_000)
@@ -277,7 +277,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             if let url = self.fileURL, !io.meIntervals.isEmpty,
                let data = try? JSONEncoder().encode(io.meIntervals) {
                 let sidecar = url.deletingPathExtension().appendingPathExtension("me.json")
-                try? data.write(to: sidecar)
+                AppLog.attempt("meeting", "writing \(sidecar.lastPathComponent)") { try data.write(to: sidecar) }
                 AppLog.info("meeting", "me-timeline: \(io.meIntervals.count) intervals → \(sidecar.lastPathComponent)")
                 io.meIntervals.removeAll()   // written once, even if finish runs twice
             }
@@ -316,9 +316,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         listen(watchedMic, kAudioDevicePropertyDeviceIsAlive)
         listen(watchedAggregate, kAudioDevicePropertyDeviceIsAlive)
         // A rate change (Audio MIDI Setup, another app, a Bluetooth profile
-        // switch) left the converters resampling from the old rate: the
-        // file sped up or slowed down with no sign of it. Now the
-        // converters are rebuilt for the new rate (`rebuildConverters`).
+        // switch) would leave the converters resampling from the old rate,
+        // and the file would speed up or slow down with no sign of it, so
+        // the converters are rebuilt for the new rate (`rebuildConverters`).
         listen(watchedMic, kAudioDevicePropertyNominalSampleRate)
         listen(watchedAggregate, kAudioDevicePropertyNominalSampleRate)
         listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
@@ -464,14 +464,18 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     // MARK: - Capture graph
 
     private func setupCapture() async throws {
+        // Still the last meeting's file until the new one is named below: a
+        // start that fails before then would delete that meeting's audio in the
+        // cleanup (its tracks may not be compressed or rebuilt yet).
+        fileURL = nil
         // 0. Apple's echo filter, before the aggregate reads the mic's
         //    format (bringing it up can change that format). Skipped on
         //    headphones: no echo to remove, and it would still turn every
         //    other app down 4 dB. Assigned at once so a throw further down
         //    still releases it through `teardownCoreAudio`.
         //    With the Transcriberr Microphone on, the call and the recording
-        //    share its one unit (a second one on the same mic is what broke
-        //    the call's mic before), whatever the output.
+        //    share its one unit (a second one on the same mic breaks the
+        //    call's mic), whatever the output.
         let shared = VirtualMicrophone.shared.acquireForRecording()
         if shared.held {
             ioQueue.sync { io.voiceMic = shared.unit; io.voiceMicBorrowed = true }
@@ -496,11 +500,11 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
 
         // 1. System-audio process tap (all processes, mixed down). Its
         //    channel count is picked so it can never equal the microphone's:
-        //    `handleIO` tells the two apart by channel count, and with the
-        //    old always-stereo tap a stereo microphone left it guessing by
-        //    position — the guess that produced v3.2.2's reversed split,
-        //    where the mic gate muted everyone else in the meeting instead of
-        //    the room. Next to a stereo mic the tap is mono; the downmix
+        //    `handleIO` tells the two apart by channel count, and with an
+        //    always-stereo tap a stereo microphone would leave it guessing by
+        //    position. A wrong guess reverses the split: the mic gate mutes
+        //    everyone else in the meeting instead of the room. Next to a
+        //    stereo mic the tap is mono; the downmix
         //    treats both the same.
         let mic = selectedInputDevice()
         let micStreams = mic.map { AudioInputDevices.inputStreamChannelCounts($0.id) } ?? []
@@ -511,7 +515,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         // device), after this tap is built. Left in, the user would be
         // recorded as the far side too. With it off, nothing of ours feeds
         // anything, and sound played from Transcriberr during a call (a clip
-        // shared with the others) stays in the call track as before.
+        // shared with the others) stays in the call track.
         let excludeOwn = RecorderSettings.virtualMicrophoneNow || VirtualMicrophone.shared.isActive
         let excluded = excludeOwn ? VirtualMicrophone.ownProcessObject().map { [$0] } ?? [] : []
         let desc = tapChannels == 1
@@ -683,9 +687,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             let p = raw.assumingMemoryBound(to: Float.self)
             let isTap = tapIndex.map { bi == $0 } ?? (bi == list.count - 1)
             // Average only the channels carrying signal in this buffer — the
-            // WavRecorder.downmixToMono rule. A plain average let the silent
+            // WavRecorder.downmixToMono rule. A plain average lets the silent
             // input 2 of a two-input interface halve a mic on input 1 (-6 dB),
-            // which also skewed the gate and the me-timeline against the user.
+            // which also skews the gate and the me-timeline against the user.
             // A bitmask, not an array: this runs once per HAL cycle. Past 64
             // channels (or all silent) it falls back to averaging everything.
             var activeMask: UInt64 = 0
@@ -731,7 +735,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         // side is quiet; ~40 ms smoothing (0.25/cycle at ~10 ms callbacks).
         // FULL gate, not a soft duck: the far side's voice already arrives
         // pristine from the system tap — any mic contribution while only
-        // they speak is pure room echo (the audible 12% floor of v1.7).
+        // they speak is pure room echo (a 12% floor was audible).
         // Asymmetric ramps: open near-instantly when the user speaks so no
         // syllable is clipped; close gently so it never pumps.
         // Open on relative dominance OR clear absolute speech energy — a

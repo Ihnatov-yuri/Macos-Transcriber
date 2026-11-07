@@ -277,7 +277,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             meAll += iv.filter { $0.count == 2 }.map { [$0[0] + offsetSeconds, $0[1] + offsetSeconds] }
         }
         if !meAll.isEmpty, let data = try? JSONEncoder().encode(meAll) {
-            try? data.write(to: sidecarPath(url.path, "me.json"))
+            AppLog.attempt("repo", "writing the merged me.json") { try data.write(to: sidecarPath(url.path, "me.json")) }
         }
 
         // Save with the WAV path FIRST — compressing before the row exists
@@ -311,14 +311,20 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         // AND the recording is safely persisted. Bracketed with the busy
         // marker exactly as `split()` does: the compressor DELETES the WAV
         // the row currently points at, and without the marker a Run pressed
-        // on the fresh merge saw `waitUntilIdle` return instantly and opened
-        // a file that was about to vanish mid-read.
+        // on the fresh merge would see `waitUntilIdle` return instantly and
+        // open a file that was about to vanish mid-read.
         await postProcessTracker.markBusy(merged.id)
         let finalURL = await AudioCompressor.compressRecordingFiles(mainURL: url, includeSidecars: true)
         if finalURL != url {
-            try? updateAudioPath(finalURL, for: merged)
+            AppLog.attempt("repo", "pointing the merge at its compressed audio") { try updateAudioPath(finalURL, for: merged) }
         }
         await postProcessTracker.markIdle(merged.id)
+        // The row was in the Library during the compression and can have
+        // been deleted there: segments inserted into a deleted model crash.
+        guard merged.modelContext != nil, !merged.isDeleted else {
+            throw NSError(domain: "Merge", code: -3, userInfo: [NSLocalizedDescriptionKey:
+                "The merged recording was deleted before its transcript was copied."])
+        }
 
         // Remap b's SPEAKER_NN keys past a's highest index.
         var maxIdx = -1
@@ -335,8 +341,20 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
                 bMaxIdx = max(bMaxIdx, n)
             }
         }
+        // Tagged keys are numbered from 1 in every recording: b's TAGGED_1
+        // is a different person from a's and gets a fresh key.
+        let aKeys = Set(segsA.compactMap(\.speaker))
+        var takenKeys = aKeys.union(segsB.compactMap(\.speaker))
+        var taggedMap: [String: String] = [:]
         func remap(_ key: String?) -> String? {
             guard let key else { return nil }
+            if key.hasPrefix(Self.taggedKeyPrefix), aKeys.contains(key) {
+                if let mapped = taggedMap[key] { return mapped }
+                let fresh = Self.newTaggedKey(taken: takenKeys)
+                takenKeys.insert(fresh)
+                taggedMap[key] = fresh
+                return fresh
+            }
             if key == "ME" { return key }               // same user in both
             if key.hasPrefix("SPEAKER_"), let n = Int(key.dropFirst("SPEAKER_".count)) {
                 return String(format: "SPEAKER_%02d", n + maxIdx + 1)
@@ -374,7 +392,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
                 try appendSegments(copies, to: merged)
             } catch {
                 // The row is already saved and backed up by now: without
-                // this a failed append left a merged recording in the
+                // this a failed append would leave a merged recording in the
                 // library with its audio and none of its transcript.
                 rollbackMerge(merged, at: url)
                 throw error
@@ -397,7 +415,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         if let merged {
             // The id before the delete: a deleted, saved model is not read.
             let id = merged.id
-            try? delete(merged)
+            AppLog.attempt("repo", "deleting the rolled-back merge") { try delete(merged) }
             BackupService.removeBackups(for: id)
         }
         for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
@@ -538,18 +556,18 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
                 }
             }
             if !meA.isEmpty, let data = try? JSONEncoder().encode(meA) {
-                try? data.write(to: sidecarPath(urlA.path, "me.json"))
+                AppLog.attempt("repo", "writing the first part's me.json") { try data.write(to: sidecarPath(urlA.path, "me.json")) }
             }
             if !meB.isEmpty, let data = try? JSONEncoder().encode(meB) {
-                try? data.write(to: sidecarPath(urlB.path, "me.json"))
+                AppLog.attempt("repo", "writing the second part's me.json") { try data.write(to: sidecarPath(urlB.path, "me.json")) }
             }
         }
 
         // Two parts of the same meeting: each keeps when it really ended.
         // createdAtMillis is the STOP time, so the second part keeps the
         // source's and the first ends earlier by what follows it. Stamping
-        // "now" moved an August meeting to today in the Library, People and
-        // Ask, and merging the parts back put them in the wrong order.
+        // "now" would move an August meeting to today in the Library, People
+        // and Ask, and merging the parts back would put them in the wrong order.
         let firstEnd = recording.createdAtMillis - Int64((totalSeconds - cutSeconds) * 1000)
         let first = Recording(
             title: "\(recording.title) (1)", audioPath: urlA.path,
@@ -597,8 +615,8 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             async let ca = AudioCompressor.compressRecordingFiles(mainURL: urlA, includeSidecars: true)
             async let cb = AudioCompressor.compressRecordingFiles(mainURL: urlB, includeSidecars: true)
             let (finalA, finalB) = await (ca, cb)
-            if finalA != urlA { try? updateAudioPath(finalA, for: first) }
-            if finalB != urlB { try? updateAudioPath(finalB, for: second) }
+            if finalA != urlA { AppLog.attempt("repo", "pointing the first part at its compressed audio") { try updateAudioPath(finalA, for: first) } }
+            if finalB != urlB { AppLog.attempt("repo", "pointing the second part at its compressed audio") { try updateAudioPath(finalB, for: second) } }
 
             guard recording.modelContext != nil, !recording.isDeleted else {
                 throw NSError(domain: "Split", code: -3, userInfo: [
@@ -693,11 +711,11 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             let firstID = first.id, secondID = second.id
             await postProcessTracker.markIdle(firstID)
             await postProcessTracker.markIdle(secondID)
-            try? delete(first)
-            try? delete(second)
+            AppLog.attempt("repo", "deleting the rolled-back first part") { try delete(first) }
+            AppLog.attempt("repo", "deleting the rolled-back second part") { try delete(second) }
             // Both halves were saved, so both have backup files; without
-            // this `restore-backups` brought them back as empty rows over
-            // deleted audio (merge's rollback got the same fix in v3.2.6).
+            // this `restore-backups` would bring them back as empty rows over
+            // deleted audio (merge's rollback does the same).
             BackupService.removeBackups(for: firstID)
             BackupService.removeBackups(for: secondID)
             for url in [urlA, urlB] {
@@ -853,8 +871,8 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
     /// Which existing rows a second-pass refinement of [start, end] replaces:
     /// those fully inside the window AND on the refined chunk's own track.
     /// In a split-track meeting, mic and sys chunks share one timeline, so a
-    /// splice by time alone deleted the OTHER track's rows in that window —
-    /// the runner's own in-memory splice has been same-track only all along.
+    /// splice by time alone would delete the OTHER track's rows in that
+    /// window (the runner's own in-memory splice is same-track only too).
     /// The event carries no track, but a mic chunk's rows are all "ME" by
     /// construction and nothing else is before finalize, so the replacement
     /// tells us. An EMPTY replacement can't, so it replaces nothing: the
@@ -950,9 +968,9 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
     }
 
     /// A hand correction of one segment. Returns false when the text did not
-    /// change. A failed save puts the old text back and throws: the sheet
-    /// used `try? save()` and closed, so the correction looked saved and was
-    /// gone on the next launch.
+    /// change. A failed save puts the old text back and throws: a swallowed
+    /// failure would close the sheet with a correction that looks saved and
+    /// is gone on the next launch.
     @discardableResult
     func correctSegment(_ segment: Segment, to text: String) throws -> Bool {
         let before = segment.text
@@ -977,7 +995,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
     /// The one write path for a generated output: PostProcessor goes
     /// through here too, so what the tests cover is what production runs.
     /// The output it replaces is kept as an OutputVersion first (one made
-    /// before 4.5.0 has none yet), and the new one gets its own.
+    /// by an older build has none yet), and the new one gets its own.
     func replaceOutput(_ doc: OutputDoc, for recording: Recording,
                        provenance: OutputProvenance? = nil) throws {
         for old in recording.outputs where old.presetId == doc.presetId {
@@ -1030,7 +1048,12 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         let current = recording.outputs.first { $0.presetId == version.presetId }
         guard current?.markdown != version.markdown else { return }
         let doc = OutputDoc(presetId: version.presetId, title: current?.title ?? version.title,
-                            markdown: version.markdown, createdAtMillis: version.createdAtMillis)
+                            markdown: version.markdown,
+                            // Now, not the version's date: restore-backups keeps
+                            // the newest output per preset, and the old date
+                            // would bring back the output this restore replaced.
+                            // The history keeps the original date (same text).
+                            createdAtMillis: Int64(Date().timeIntervalSince1970 * 1000))
         try replaceOutput(doc, for: recording)
     }
 
@@ -1076,26 +1099,23 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         }
         // Canonical key order for storage. JSONEncoder's default key order is
         // NOT stable across encodes of the same value (it varies with heap
-        // layout) — proven by a standalone reproduction: 131/150 duplicate
+        // layout). Measured in a standalone reproduction: 131/150 duplicate
         // saves with string-compare dedup, 0/300 with content compare. That
-        // instability — not SwiftData view staleness, as previously believed —
-        // was the source of both the full-suite test flake and the
-        // same-second duplicate versions in production logs.
+        // instability causes test flakes and same-second duplicate versions.
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = String(decoding: try encoder.encode(payload), as: UTF8.self)
         // Dedup by DECODED content, never by string equality: legacy rows
         // were stored with arbitrary key order and would never string-match.
-        // Checked against both the relationship array and a store fetch
-        // (tolerating a nil-hydrated inverse) — either view seeing the
-        // duplicate is enough.
+        // Checked against both the relationship array and a store fetch:
+        // either view seeing the duplicate is enough.
         //
         // SEGMENT COUNT FIRST, and pushed into the fetch predicate. This runs
-        // on the main actor at the START of every re-run, and the unfiltered
-        // fetch used to hydrate EVERY version row in the whole store and
-        // JSON-decode all of them — megabytes of decoding for a library of
-        // any size, which is exactly the "app freezes for a moment right
-        // after pressing Run" stall. A version with a different segment count
+        // on the main actor at the START of every re-run, and an unfiltered
+        // fetch would hydrate EVERY version row in the whole store and
+        // JSON-decode all of them: megabytes of decoding for a library of
+        // any size, and the app freezes for a moment right after pressing
+        // Run. A version with a different segment count
         // can never be an identical version, so the count is a free,
         // conclusive reject that leaves only a handful of rows to decode.
         let recID = recording.persistentModelID
@@ -1104,12 +1124,12 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             predicate: #Predicate { $0.segmentCount == count }
         )
         let fetched = (try? context.fetch(descriptor)) ?? []
-        // Owner-scoped, both views. The store view used to also accept any
-        // row whose inverse hydrated as nil, which meant a DIFFERENT
-        // recording's identical transcript counted as "already snapshotted"
-        // — two imports of the same audio, or two runs of the same dictated
-        // phrase, and the second recording silently got no version at all,
-        // leaving healEmptyTranscripts nothing to restore after an
+        // Owner-scoped, both views. Accepting a fetched row whose inverse
+        // hydrated as nil would let a DIFFERENT recording's identical
+        // transcript count as "already snapshotted" (two imports of the same
+        // audio, or two runs of the same dictated phrase): the second
+        // recording would silently get no version at all, leaving
+        // healEmptyTranscripts nothing to restore after an
         // interrupted run. A stray duplicate row is cheap; a missing version
         // is the only copy of a transcript.
         let dup = recording.versions.contains { $0.segmentCount == count && decodeVersion($0) == payload }
@@ -1170,7 +1190,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         for rec in all where rec.segments.isEmpty {
             guard let newest = rec.versions.max(by: { $0.createdAtMillis < $1.createdAtMillis })
             else { continue }
-            if (try? restoreVersion(newest, to: rec)) != nil {
+            if AppLog.attempt("repo", "healing '\(rec.title)' from its newest version", { try restoreVersion(newest, to: rec) }) != nil {
                 healed += 1
                 AppLog.info("repo", "healed empty transcript for '\(rec.title)' from \(newest.engineId) version (\(newest.segmentCount) segments)")
             }
@@ -1310,9 +1330,10 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         }
         // Fall back to the SOURCE speaker's name when the target has none.
         // The merge menu is offered in both directions, so "Sarah → merge
-        // into SPEAKER_01" is one click away — and it used to overwrite every
-        // one of Sarah's segments with a nil name and then drop her from the
-        // stored map, erasing a hand-typed name with no way back.
+        // into SPEAKER_01" is one click away. Without the fallback it would
+        // overwrite every one of Sarah's segments with a nil name and then
+        // drop her from the stored map, erasing a hand-typed name with no
+        // way back.
         let targetName = stored[target] ?? namedInSegments(target)
             ?? stored[from] ?? namedInSegments(from)
         for seg in recording.segments where seg.speaker == from {
@@ -1428,7 +1449,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
 
     /// Speakers of one recording that carry the same name are one person:
     /// the diarizer splitting a voice, or lines tagged with a name before a
-    /// speaker got it, showed as two "Alex" chips whose voice could not be
+    /// speaker got it, would show as two "Alex" chips whose voice cannot be
     /// learned as one. They are merged, into the microphone's own key first,
     /// then a diarized speaker, then a tagged one.
     @discardableResult
@@ -1510,12 +1531,17 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         }
         folder.name = trimmed
         try context.save()
+        // Each backup names its folder: restore-backups would bring the old name back.
+        folder.recordings.forEach(BackupService.backupRecording)
     }
 
     /// Recordings survive (nullify delete rule clears their `folder`).
     func deleteFolder(_ folder: Folder) throws {
+        let recordings = folder.recordings
         context.delete(folder)
         try context.save()
+        // Rewritten without the folder, or restore-backups recreates it.
+        recordings.forEach(BackupService.backupRecording)
     }
 
     /// nil = remove from its folder.

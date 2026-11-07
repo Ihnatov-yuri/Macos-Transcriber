@@ -7,8 +7,8 @@ import Foundation
 /// a dedicated ASR model with real accuracy. The on-device text model
 /// (`ModelCatalog`: Gemma 4 on MLX, Qwen3.5 on uzu) does all text
 /// generation (summaries, cleanup, translation, titles, Super's arbiter).
-/// `@MainActor` dropped — same _SwiftData_SwiftUI crash story as the
-/// other store classes.
+/// Not `@MainActor`, for the same _SwiftData_SwiftUI crash as the other
+/// store classes.
 nonisolated final class BackendFactory: @unchecked Sendable {
     enum Kind: String, CaseIterable, Sendable {
         case parakeet   = "parakeet-v3"
@@ -77,7 +77,7 @@ nonisolated final class BackendFactory: @unchecked Sendable {
         /// The Parakeet family: one FluidAudio graph, different weights.
         var isParakeet: Bool { self == .parakeet || self == .parakeetV2 || self == .parakeetUK }
         /// Engines that may TRANSCRIBE. The on-device text models are
-        /// text-only (Gemma audio went with LiteRT in v5.4).
+        /// text-only.
         var supportsAudio: Bool { self != .anthropic && self != .localText }
         /// Backends that can run PostProcessor presets / title generation.
         /// Acoustic models (and the merge wrapper) can't — text work goes to the local text model.
@@ -87,7 +87,7 @@ nonisolated final class BackendFactory: @unchecked Sendable {
             default: return true
             }
         }
-        /// Diarization is ALWAYS hybrid now: the FluidAudio diarizer pre-pass
+        /// Diarization is ALWAYS hybrid: the FluidAudio diarizer pre-pass
         /// runs for every engine (acoustic engines get labels assigned from it).
         var needsDiarizerForSpeakers: Bool { true }
         /// Live captioning cycles through these. The ensemble merge is far
@@ -103,11 +103,11 @@ nonisolated final class BackendFactory: @unchecked Sendable {
     /// The engine cache is read from several executors at once — the main
     /// actor (`TranscriptionRunner.runImpl`, `PostProcessor.perform`), the
     /// cooperative pool (`LiveTranscriber.start`) and the ensemble actor
-    /// (`EnsembleBackend.load` resolving its sub-engines). Two of them
-    /// arriving on a cold cache both saw nil and both built and loaded the
-    /// same CoreML models — double the ANE memory, one instance orphaned —
-    /// and the concurrent writes to the class references were undefined
-    /// behaviour on top.
+    /// (`EnsembleBackend.load` resolving its sub-engines). Without the lock,
+    /// two of them arriving on a cold cache would both see nil and both build
+    /// and load the same CoreML models (double the ANE memory, one instance
+    /// orphaned), and the concurrent writes to the class references would be
+    /// undefined behaviour on top.
     private let cacheLock = NSLock()
     private var sharedParakeet: ParakeetBackend?
     private var sharedParakeetV2: ParakeetBackend?
@@ -235,11 +235,11 @@ nonisolated final class BackendFactory: @unchecked Sendable {
 
     // MARK: - Idle release
     //
-    // The transcription queue used to be the only thing that released the
-    // text model. Person briefs, the speech coach, presets, dictation polish
-    // and the launch title catch-up all load it outside that queue, and the
-    // engine then stayed resident until the next transcription, in swap for
-    // hours.
+    // The transcription queue is not the only thing that loads the text
+    // model. Person briefs, the speech coach, presets, dictation polish and
+    // the launch title catch-up all load it outside that queue; without an
+    // idle release the engine stays resident until the next transcription,
+    // in swap for hours.
 
     /// Quiet spell after the last generation before the engine goes.
     static let textIdleSeconds: UInt64 = 180
@@ -272,8 +272,8 @@ nonisolated final class BackendFactory: @unchecked Sendable {
     }
 
     /// Hands pages the allocator kept after a big free back to the system.
-    /// Without it the dropped engine's buffers stayed in the footprint (and
-    /// in swap) as empty malloc regions: 4.3 GB of them on 26 Oct.
+    /// Without it the dropped engine's buffers stay in the footprint (and
+    /// in swap) as empty malloc regions (measured: 4.3 GB of them).
     static func returnFreedMemory() {
         _ = malloc_zone_pressure_relief(nil, 0)
     }

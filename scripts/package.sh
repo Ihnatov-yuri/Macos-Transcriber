@@ -49,7 +49,8 @@ if [ "$SIGN" = "-" ]; then
 else
   codesign --force -s "$SIGN" "${HARDEN[@]}" "$APP"
 fi
-codesign --verify --deep "$APP" && echo "signed OK: $APP"
+codesign --verify --deep "$APP" || { echo "signature check failed: $APP" >&2; exit 1; }
+echo "signed OK: $APP"
 # The CLI (MCP server) built next to the app gets the same stable requirement:
 # with the default cdhash requirement every rebuild re-asked for Documents
 # access. No hardened runtime here: it would turn on library validation for
@@ -62,5 +63,6 @@ if [ -f "$CLI" ]; then
   else
     codesign --force -s "$SIGN" "$CLI"
   fi
-  codesign --verify "$CLI" && echo "signed OK: $CLI"
+  codesign --verify "$CLI" || { echo "signature check failed: $CLI" >&2; exit 1; }
+  echo "signed OK: $CLI"
 fi

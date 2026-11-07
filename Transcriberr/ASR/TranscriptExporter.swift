@@ -37,7 +37,7 @@ enum TranscriptExporter {
         var cue = 0
         for seg in segments {
             // A blank line ends an SRT cue: text carrying one (an LLM chunk
-            // with paragraphs) cut its own cue short.
+            // with paragraphs) would cut its own cue short.
             let text = seg.text.split(whereSeparator: \.isNewline)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
@@ -138,14 +138,19 @@ enum TranscriptExporter {
             },
             uniquingKeysWith: { first, _ in first }
         )
-        guard !mapping.isEmpty else { return }
+        guard !mapping.isEmpty else {
+            // A re-run with no names must not leave the last run's names
+            // beside the new transcript.
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(stem).speakers.json"))
+            return
+        }
         let data = try JSONSerialization.data(withJSONObject: mapping, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: dir.appendingPathComponent("\(stem).speakers.json"))
     }
 
     static func srtTime(_ s: Double) -> String {
-        // Round once in whole milliseconds: truncating the fraction put 2.3 s
-        // at 00:00:02,299 (binary 0.2999…), and Int() traps on NaN/inf.
+        // Round once in whole milliseconds: truncating the fraction would put
+        // 2.3 s at 00:00:02,299 (binary 0.2999…), and Int() traps on NaN/inf.
         let totalMs = s.isFinite ? Int((max(0, s) * 1000).rounded()) : 0
         let h = totalMs / 3_600_000
         let m = (totalMs % 3_600_000) / 60_000

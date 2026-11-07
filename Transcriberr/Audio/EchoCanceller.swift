@@ -23,16 +23,16 @@ nonisolated enum EchoCanceller {
     /// Ukrainian split-track meeting: the filter's output came out 7.3 dB
     /// LOUDER than the raw mic, so the suppressor below, fed a garbage echo
     /// estimate, muted the user's own words (43 of 404 lost to one slice).
-    /// 0.1: that meeting +9.9 dB, the English ones 4.7 / 13.8 dB (was 4.8 / 11.2).
+    /// 0.1: that meeting +9.9 dB, the English ones 4.7 / 13.8 dB (4.8 / 11.2 at 0.5).
     static let stepSize: Float = 0.1
     static let maxDelaySamples = 4000      // up to 250 ms output latency + air
     static let delayGuard = 256            // 16 ms of slack ahead of the estimate
     static let warmupSamples = 16_000 * 5  // far-end audio before doubletalk gating
     static let minCorrelation: Float = 0.1 // below this there is no echo path
     static let nlpFrame = 320              // 20 ms suppressor decision window
-    // Residual/predicted echo meaning "user is here too". Was 3: with the
-    // step fixed, 1.5 lost 12 of the user's words across the reference
-    // slices where 3 lost 21 (and 0.5-step + 3 lost 58), for ~the same echo.
+    // Residual/predicted echo meaning "user is here too". At step 0.1, 1.5
+    // lost 12 of the user's words across the reference slices where 3 lost
+    // 21 (and step 0.5 with 3 lost 58), for ~the same echo.
     static let nlpNearEndRatio: Float = 1.5
     static let nlpFloor: Float = 0        // echo-only frames go to silence
     // Below this the suppressor is working from noise. Median per-second
@@ -171,8 +171,8 @@ nonisolated enum EchoCanceller {
         // ---- 1. Bulk delay via cross-correlation (8× decimated, ≤60 s) ----
         // Searched inside the LOUDEST stretches of the reference, not the
         // first 60 s. A call whose opening minute is digital silence — nobody
-        // has joined the meeting yet — gave the estimator nothing to lock
-        // onto, and the junk lag it returned parked the filter's 64 ms window
+        // has joined the meeting yet — gives the estimator nothing to lock
+        // onto, and the junk lag it returns parks the filter's 64 ms window
         // thousands of samples away from the real echo path.
         // Several windows, not one: on a real 32-minute call the loudest
         // minute of the far side read 0.065 — "no echo path", nothing
@@ -218,9 +218,9 @@ nonisolated enum EchoCanceller {
         // ref[j-taps ..< j]. For the first `taps` positions that window
         // starts before the reference does, so a small zero-padded head
         // (`taps` zeros then the first `taps` samples) serves those; every
-        // later position reads the reference in place. This used to be a
-        // full zero-padded COPY of the reference — one more whole-meeting
-        // buffer at the memory peak of a split-track run.
+        // later position reads the reference in place. A full zero-padded
+        // COPY of the reference would be one more whole-meeting buffer at
+        // the memory peak of a split-track run.
         var head = [Float](repeating: 0, count: taps)
         head.append(contentsOf: ref.prefix(taps))
         if head.count < 2 * taps {
@@ -233,11 +233,11 @@ nonisolated enum EchoCanceller {
         // "the user is talking" from "the filter hasn't learned yet": with
         // w ≈ 0 the prediction is ~0, every sample reads as doubletalk, and
         // the filter freezes at its initial value for the rest of the file
-        // (measured: 1023 adaptations in a 12 s clip, then nothing). What
-        // used to get it moving was the `yhat != 0` clause, which stops
-        // applying the moment any tap goes nonzero — so whether it ever
-        // bootstrapped came down to whether the delay estimate happened to
-        // land right on the echo. Adapting freely through warm-up makes
+        // (measured: 1023 adaptations in a 12 s clip, then nothing). A
+        // `yhat != 0` escape clause stops applying the moment any tap goes
+        // nonzero, so whether the filter bootstraps would come down to
+        // whether the delay estimate happens to land right on the echo.
+        // Adapting freely through warm-up makes
         // convergence unconditional; the strict test then refines it
         // (measured on a real call: 5.5 dB of echo removed by warm-up alone,
         // 11.2 dB once the strict test takes over).
@@ -284,13 +284,13 @@ nonisolated enum EchoCanceller {
         }
         // The suppressor decides from the filter's echo PREDICTION. When the
         // linear stage explains next to nothing, there is no linear echo path
-        // (see `minLinearERLE`) and that prediction is noise: muting on it deleted the
+        // (see `minLinearERLE`) and that prediction is noise: muting on it deletes the
         // user's own words. Hand back the raw mic instead; the far side's
         // words are then removed downstream by timing
         // (`EnsembleBackend.echoFiltered`) — that slice: 19.9 → 16.7% WER.
         // Measured as the MEDIAN over 1 s blocks where the far side talks,
         // not over the whole file: the user's own speech is (rightly) never
-        // cancelled, so a few seconds of doubletalk dragged a whole-file
+        // cancelled, so a few seconds of doubletalk drag a whole-file
         // figure for a textbook echo down to 2.8 dB.
         do {
             let block = 16_000
@@ -319,7 +319,7 @@ nonisolated enum EchoCanceller {
 
     /// Step 3 over a `linearStage` result. With a `guide` from the user's
     /// voice print, its two rules override the residual test (see
-    /// `VoiceGuide`); without one this is the suppressor as it always was.
+    /// `VoiceGuide`); without one the residual test decides alone.
     static func suppress(_ l: Linear, mic: [Float], guide: VoiceGuide? = nil) -> Result {
         var out = l.out
         let n = l.n, delay = l.delay, echoDelay = l.echoDelay
@@ -361,11 +361,11 @@ nonisolated enum EchoCanceller {
         }
         // Measure BOTH sides over the SAME span. The adaptation loop skips
         // the first `delay` samples (no reference history yet, so `out`
-        // there is just the raw mic), but the energy sums used to cover
-        // different ranges — signal from `delay` onward, residual over all
-        // n. That biased ERLE down by up to about a dB on a short track with
-        // a long delay, which is enough to trip the do-no-harm guard below
-        // and hand back the uncancelled mic — putting the far side into the
+        // there is just the raw mic), so both sums start at `delay`. Sums
+        // over different ranges (signal from `delay` onward, residual over
+        // all n) bias ERLE down by up to about a dB on a short track with a
+        // long delay, which is enough to trip the do-no-harm guard below
+        // and hand back the uncancelled mic, putting the far side into the
         // user's own transcript, the very thing this filter exists to stop.
         var num = 0.0, den = 0.0
         for i in delay..<n {
@@ -379,13 +379,13 @@ nonisolated enum EchoCanceller {
                                   guide == nil ? "" : " (voice-print guided)"))
         // Do no harm: a cleaned track louder than the raw mic means the filter
         // added noise, so keep the original. Only "louder", not "less than
-        // 0.5 dB quieter" as before: by now the linear stage has measured a
+        // 0.5 dB quieter": by now the linear stage has measured a
         // real echo path over the far side's own seconds (`minLinearERLE`),
         // and this whole-track figure mostly says how much of the mic is the
         // user. With the user talking three quarters of the time over a
-        // -6 dB echo it read 0.4 dB with every echo stretch muted, and the raw
-        // mic, far side included, went back to the ASR (the e2e meeting
-        // fixture, 2026-11-04). Real calls in the log ran as low as 1.1 dB.
+        // -6 dB echo it read 0.4 dB with every echo stretch muted, and a
+        // 0.5 dB bar sent the raw mic, far side included, back to the ASR
+        // (the e2e meeting fixture). Real calls in the log ran as low as 1.1 dB.
         guard erle > 0 else {
             AppLog.info("aec", "no echo to cancel — keeping original mic track")
             return (mic, .noEcho, echoDelay, 0)
@@ -449,8 +449,8 @@ nonisolated enum EchoCanceller {
 /// the linear stage tops out around 13 dB (the speakers' own processing is
 /// not in the reference). It opens on echo the filter failed to predict —
 /// a far-side phrase start played back at full level — and it mutes the
-/// user's sentence starts over the far side. Measured on the 22 Oct speaker
-/// calls and 21 of the user's phrases mixed over real echo (2026-10-27):
+/// user's sentence starts over the far side. Measured on real speaker
+/// calls and 21 of the user's phrases mixed over real echo:
 /// audible echo bursts 140 → 76 and 84 → 48, sentence starts losing more
 /// than 6 dB 5 → 4, the typical start −2.3 → 0.0 dB. Chosen by ear over a
 /// looser "it's you" bar (0.35: two fewer clipped starts, but louder echo
@@ -466,8 +466,8 @@ nonisolated struct VoiceGuide {
     static let notYou: Float = 0.10
     /// The target-speaker threshold the voice timeline uses. Echo residue
     /// on loud far speech reaches 0.40-0.43 now and then (one far-side word
-    /// transcribed as the user's on the 22 Oct call), but a stricter bar
-    /// over echo-dominated frames (0.45, tried 2026-10-27) also cut the
+    /// transcribed as the user's on one speaker call), but a stricter bar
+    /// over echo-dominated frames (0.45) also cut the
     /// user's own "Thank you" at the end of that call: kept at 0.40.
     static let youOn: Float = VoiceActivity.onThreshold
     /// A cell starting this soon after a frame vouches for it too, so the
@@ -476,7 +476,7 @@ nonisolated struct VoiceGuide {
 
     /// Highest score among the cells from 2 hops before `a` (a window
     /// reaching into the frame) to `b`; nil when none of them was scored.
-    /// The span is the one the tuning (by ear, 2026-10-27) was done with.
+    /// The span is the one the tuning (by ear) was done with.
     func maxScore(from a: Double, to b: Double) -> Float? {
         let hop = VoiceActivity.hop, window = VoiceActivity.window
         let lo = max(0, Int(((a - window) / hop).rounded(.down)) + 1)
@@ -496,10 +496,10 @@ nonisolated struct VoiceGuide {
         // The residual test would open while the filter predicts echo, but
         // nothing over the frame sounds like the user (every cell below the
         // bar, or silent): an echo burst. Stay muted. Deliberately as strict
-        // as this: letting unscored or faint-echo frames through (tried
-        // 2026-10-27) passed echo just before the user's replies, and the
-        // transcript's echo filter then dropped their first words with it
-        // ("Yeah," "Okay," lost on the 22 Oct call).
+        // as this: letting unscored or faint-echo frames through passed
+        // echo just before the user's replies, and the transcript's echo
+        // filter then dropped their first words with it ("Yeah," "Okay,"
+        // lost on a real speaker call).
         if base == 1, echoPower > 0, (maxScore(from: t, to: t) ?? -1) < Self.notYou {
             return EchoCanceller.nlpFloor
         }

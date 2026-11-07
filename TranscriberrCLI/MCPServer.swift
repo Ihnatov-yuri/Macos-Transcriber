@@ -11,10 +11,10 @@ import Foundation
 //
 // Register with:  claude mcp add transcriberr -- <path>/transcriberrcli mcp
 
-/// Protocol revisions this server speaks, newest first. `initialize` used
-/// to echo whatever the client asked for, claiming revisions it has never
-/// seen; the spec says to answer with a version we support (the client's
-/// if it is one of them, else our latest) and let the client decide.
+/// Protocol revisions this server speaks, newest first. Per the spec,
+/// `initialize` answers with a version we support (the client's if it is
+/// one of them, else our latest) and lets the client decide, rather than
+/// echoing a revision it has never seen.
 private let mcpSupportedProtocols = ["2025-06-18", "2025-03-26", "2024-11-05"]
 private let mcpProtocolFallback = mcpSupportedProtocols[0]
 
@@ -38,8 +38,8 @@ final class MCPServer {
 
     /// This executable as it was when the server started. A client keeps one
     /// server process for as long as it runs (days), so after a release the
-    /// old code went on reading a store whose schema had moved on, and every
-    /// call failed ("Cannot migrate store in-place") until the user
+    /// old code would go on reading a store whose schema had moved on, and
+    /// every call would fail ("Cannot migrate store in-place") until the user
     /// reconnected by hand. When the file on disk changes, the server
     /// re-executes itself in place: same process, same stdin/stdout, so the
     /// client's connection survives, and the unread requests are handed over.
@@ -97,7 +97,7 @@ final class MCPServer {
                 discarding = false
             }
             // A client (or anything else on the pipe) sending bytes with no
-            // newline grew this buffer without bound.
+            // newline would grow this buffer without bound.
             if buffer.firstIndex(of: 0x0A) == nil, buffer.count > Self.maxRequestBytes {
                 rejectOversized()
                 buffer.removeAll()
@@ -157,8 +157,8 @@ final class MCPServer {
             let requested = params["protocolVersion"] as? String
             let negotiated = requested.flatMap { mcpSupportedProtocols.contains($0) ? $0 : nil }
                 ?? mcpProtocolFallback
-            // The CLI's embedded Info.plist carries $(MARKETING_VERSION); the
-            // old "2.3.0" fallback went stale ten releases ago.
+            // The CLI's embedded Info.plist carries $(MARKETING_VERSION), so
+            // the reported version follows the release; no hard-coded fallback.
             reply(id, result: [
                 "protocolVersion": negotiated,
                 "capabilities": ["tools": [String: Any]()],

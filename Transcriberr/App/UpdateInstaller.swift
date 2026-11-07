@@ -112,6 +112,11 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
             AppLog.info("update", "installing \(release.version) over \(currentVersion)")
             try Self.launchSwapHelper(newApp: app, target: target, stage: stage)
             await MainActor.run { NSApp.terminate(nil) }
+            // terminate returns only when the quit was cancelled (the app
+            // delegate can refuse it). The helper gives up on its own; the
+            // Update button must work again.
+            AppLog.info("update", "quit was cancelled; \(release.version) not installed")
+            await setPhase(.failed("The update was cancelled because Transcriberr did not quit"))
         } catch {
             try? FileManager.default.removeItem(at: stage)
             let text = (error as? Failure)?.message ?? "The update couldn't be downloaded"

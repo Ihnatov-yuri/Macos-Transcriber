@@ -415,8 +415,14 @@ nonisolated final class AppContainer: @unchecked Sendable {
         if meetingRecorder.isRunning { return "A meeting is being recorded. Stop it, then update." }
         switch dictation.phase {
         case .listening, .transcribing, .inserting: return "Dictation is running. Let it finish, then update."
-        default: return nil
+        default: break
         }
+        // Quitting would ask about the call, and a cancelled quit left the
+        // update stuck at "relaunching" for the rest of the session.
+        if VirtualMicrophone.shared.isInUseByCall {
+            return "A call is using the Transcriberr Microphone. End the call, then update."
+        }
+        return nil
     }
 
     /// The Update button, wherever it sits. Recording or dictating blocks

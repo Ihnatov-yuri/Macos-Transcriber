@@ -3,7 +3,7 @@ name: E2E
 # Headless end-to-end checks of transcriberrcli on a macOS runner: speech
 # made with `say`, run through the CLI's subcommands (scripts/ci-e2e.sh).
 # The build mirrors ci.yml (CLI only). Speech models are cached between
-# runs; Whisper (~3 GB) and Gemma (~2.6 GB) only run when asked for from
+# runs; Whisper (~3 GB) and Gemma (~5.2 GB) only run when asked for from
 # "Run workflow", so a push stays at Parakeet, the diarizer and the voice
 # model (~1 GB, cached).
 
@@ -21,7 +21,7 @@ on:
         type: boolean
         default: true
       gemma:
-        description: "Download Gemma 4 E2B (~2.6 GB) and run litert, gentest, brief"
+        description: "Download Gemma 4 E4B on MLX (~5.2 GB) and run gentest, brief"
         type: boolean
         default: false
       skip_models:
@@ -46,7 +46,7 @@ env:
     CODE_SIGN_STYLE=Manual
     DEVELOPMENT_TEAM=
     ENABLE_HARDENED_RUNTIME=NO
-  # Same LFS workaround as ci.yml (see setup.sh).
+  # Same LFS setting as ci.yml.
   GIT_LFS_SKIP_SMUDGE: "1"
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: lfs.fetchexclude

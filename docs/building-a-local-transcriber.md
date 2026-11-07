@@ -2,6 +2,8 @@
 
 *Transcriberr is a native macOS app: record, transcribe, diarize, rewrite — all on-device. No audio leaves the Mac. Building it was hard in places I didn't expect. Here's what broke, and what held.*
 
+> Written up to v5.3. In v5.4 the text models moved from LiteRT-LM to MLX (Gemma) and uzu (Qwen), and Gemma's audio mode went with LiteRT, so the LiteRT dylib signing and the inference gate described below are history. The lessons stand.
+
 ## The shape of the machine
 
 The map first. One pipeline, every recording. Every lesson below lives at one of these stations:

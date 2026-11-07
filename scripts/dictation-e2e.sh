@@ -18,8 +18,8 @@ EXPECT="the quick brown fox jumps over the lazy dog."
 
 osascript -e "tell application id \"$DEF\" to quit" >/dev/null 2>&1; sleep 2
 pkill -f "Transcriberr.app/Contents/MacOS/Transcriberr" 2>/dev/null; sleep 1
-PREV_NS=$(defaults read $DEF recorder.noiseSuppression 2>/dev/null || echo 1)
-[ "$PREV_NS" = "1" ] && PREV_NS=true || PREV_NS=false
+# Unset stays unset afterwards: the app's default (off) is not a saved value.
+PREV_NS=$(defaults read $DEF recorder.noiseSuppression 2>/dev/null || echo unset)
 PREV_HIST=$(defaults read $DEF dictation.keepHistory 2>/dev/null || echo unset)
 # The phrase is English: pin the recognizer language for the run and put
 # the user's own choice back afterwards (exported as a plist, restored 1:1).
@@ -56,7 +56,11 @@ else:
     subprocess.run(["defaults", "write", domain, "dictation.languages", "-array", *prev], capture_output=True)
 PY
 rm -f "$PREV_LANG_PLIST"
-defaults write $DEF recorder.noiseSuppression -bool "$PREV_NS"
+case "$PREV_NS" in
+  unset) defaults delete $DEF recorder.noiseSuppression 2>/dev/null || true ;;
+  1) defaults write $DEF recorder.noiseSuppression -bool true ;;
+  *) defaults write $DEF recorder.noiseSuppression -bool false ;;
+esac
 if [ "$PREV_HIST" = "unset" ]; then
   defaults delete $DEF dictation.keepHistory 2>/dev/null
 elif [ "$PREV_HIST" = "1" ]; then

@@ -55,7 +55,6 @@ actor AnthropicBackend: ASRBackend {
         let payload: [String: Any] = [
             "model": model,
             "max_tokens": maxTokens,
-            "temperature": 0.3,
             "system": systemInstruction,
             "messages": [
                 ["role": "user", "content": userMessage]

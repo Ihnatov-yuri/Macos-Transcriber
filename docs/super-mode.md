@@ -12,7 +12,7 @@ The echo canceller is an NLMS filter (step 0.1) followed by a suppressor that mu
 
 The chunker cuts each track into chunks of at most 28 s, cutting in silence where it can. Each chunk after the first repeats the last second of the one before it (the "recap"), so a word spoken across a cut is never lost. The mic and system chunks share one timeline.
 
-The **engine pair** comes from Detail → RUN → MERGE A / MERGE B. The default is Parakeet v3 with Parakeet v2. Parakeet v2 only knows English, so in a non-English run it is replaced by Whisper large-v3, which then leads the pair. The referee is the local text engine, Gemma 4 on LiteRT, used in text mode only (its audio mode is not trusted).
+The **engine pair** comes from Detail → RUN → MERGE A / MERGE B. The default is Whisper with Parakeet UK, two engines that make different mistakes and are both strong in Ukrainian and English. Parakeet v2 only knows English, so when it is picked for a non-English run it is replaced (by Whisper large-v3, which then leads the pair, or by Parakeet v3 when the other engine is already Whisper). The referee is the local text model picked for Super in Settings › Models (Gemma 4 on MLX, or Qwen3.5 on uzu). It reads text only.
 
 **The timeline (Max quality).** Before pass 1 the whole tracks are read once onto the shared clock. Whisper reads them in every language but English, and each chunk then takes the Whisper words timed inside it; Parakeet still runs per chunk, and in a split-track meeting also reads both whole tracks in a few seconds.
 
@@ -36,15 +36,15 @@ Three chunks are in progress at any time. For each chunk:
 
 The runner then trims the recap repeat at the seam, drops a line that echoes the previous one, shows the voted text live, and stores the raw text from each engine plus the agreement score for pass 2.
 
-**The inference gate.** LiteRT's Metal path hangs if another engine runs inference at the same moment. `InferenceGate` is a readers-writer lock: Whisper and Parakeet share it, so all six engine calls (three chunks, two engines) can overlap, while Gemma takes it exclusively and runs alone. A Gemma call that is waiting blocks new shared calls, so it can't be starved. Before v3.8.0 the gate was held whenever LiteRT was merely loaded, which made the whole first pass run one call at a time while Gemma sat idle.
+**Concurrency.** All six engine calls (three chunks, two engines) can overlap. Whisper runs the chunks on one shared WhisperKit, each call with its own transcribe task and progress object, because WhisperKit's own `transcribe` swaps a shared property and crashed when two calls finished together. The `InferenceGate` readers-writer lock that kept Gemma alone on the GPU went with LiteRT in v5.4: its Metal path hung when another engine ran at the same moment, and the MLX and uzu runtimes do not.
 
-Code: `EnsembleBackend.transcribeChunkRich`, `EnsembleBackend.roverMerge`, `WhisperBackend.transcribeDetailed`, `InferenceGate`.
+Code: `EnsembleBackend.transcribeChunkRich`, `EnsembleBackend.roverMerge`, `WhisperBackend.transcribeDetailed`.
 
 ## 03 · Pass 2: Gemma reads, and rules in English
 
 This pass runs only when **Max quality** is on (Settings).
 
-1. **Read the whole thing.** Gemma reads the voted transcript in sections of about 3,000 tokens and writes a brief: topic, people, and names as spelled in this recording. It may also propose spelling fixes, which are kept only if they pass the guards in `MeetingBrief.swift` (the replacement already appears in the transcript, the two words sound alike, and so on). Larger reads were measured to hang LiteRT.
+1. **Read the whole thing.** Gemma reads the voted transcript in sections of about 3,000 tokens and writes a brief: topic, people, and names as spelled in this recording. It may also propose spelling fixes, which are kept only if they pass the guards in `MeetingBrief.swift` (the replacement already appears in the transcript, the two words sound alike, and so on). The size was set when larger reads hung LiteRT (the runtime until v5.4) and is kept so a section fits the smallest model's context; `TRANSCRIBERR_BRIEF_TOKENS` overrides it.
 2. **Rulings, English runs only by default** (Settings → "Gemma rules on disputed chunks": English / all / never). Chunks with agreement below 0.8, the worst 10, go to Gemma with both readings, the text around them, your vocabulary and the brief; its ruling replaces the chunk.
 
 What was measured. Of 581 logged rulings, 52% were Whisper's text verbatim, 9% Parakeet's, 16% one of them with a character or two changed, 23% new text: a small model asked to rewrite a chunk mostly copies an input. On the reference set that helps a little in English (en-a 9.9 → 8.9% WER, and 13.1 → 12.1% on an older build; en-b unchanged) and not in Ukrainian (uk-a 16.5 vs 16.7%, uk-b 12.2% without rulings against 15.2% with). A redesign that asked Gemma only "A or B" per disputed stretch was tried and lost in both languages: on the 40 stretches where the reference shows the right reading, Gemma chose right 21 times, a coin flip, preferring Parakeet's Russian-leaning garble to Whisper's Ukrainian; the word vote chose right 26 times. The limit is the model, not the prompt.
@@ -59,10 +59,10 @@ Code: `TranscriptionRunner.finalizeSegments`.
 
 ## If an engine hangs
 
-Every chunk has a 120 s limit. After a timeout each engine checks whether one of its own calls has been running for too long (60 s for Whisper and Parakeet, 120 s for Gemma, whose healthy generations run longer); only that engine is rebuilt (the new one is built before the old one is let go, so the other chunks in flight keep running), its stuck hold on the inference gate is evicted, and the chunk is retried. If it hangs again, the healthy engine transcribes the chunk alone. After two hangs in one run, Gemma is benched and the rest of the run uses a single engine, so the run still finishes.
+Every chunk has a 120 s limit. After a timeout each speech engine checks whether one of its own calls has been running for too long (Whisper by the time since its last token, Parakeet by the age of the call); only that engine is rebuilt (the new one is built before the old one is let go, so the other chunks in flight keep running), and the chunk is retried. If it hangs again, one engine transcribes the chunk alone. A Gemma ruling that hangs (also 120 s) rebuilds the text model and keeps the voted text for that chunk; an arbiter that cannot be rebuilt is dropped and the rest of the run keeps the vote, so the run still finishes.
 
 ## Where the time goes
 
 On a 42-minute split-track meeting (v3.7.0), pass 1 took about 96% of the run and pass 2 about a minute. In v3.8.0 the engines overlap, silent chunks are skipped, and the low-confidence refine pass no longer runs for Super (its re-runs never changed the text). On a 6-minute slice this cut the run from 241 s to 183 s with the same words. Three Whisper large-v3 calls at once give about 1.5×, not 3×, because they compete for the same Neural Engine and GPU.
 
-To measure a change on a real recording, see [Real-world regression check](../README.md#real-world-regression-check); to score it against checked text, see [Reference set](../README.md#reference-set-word-error-rate).
+To measure a change on a real recording, use `scripts/realworld-test.sh`; to score it against checked text, use `scripts/eval-set.sh` (both in [Tests](../README.md#tests)).

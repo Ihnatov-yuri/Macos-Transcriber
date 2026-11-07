@@ -45,8 +45,8 @@ d.node(536, r1, 220, 152, "Chunker",
 d.arrow([(172, r2 + 68), (172, r2 + 80), (855, r2 + 80), (855, r2 + 72)], dashed=True)
 d.node(782, r2, 152, 68, "Diarizer", ["tells the others apart"], line_size=12)
 d.node(946, r1, 182, 152, "Engine pair",
-       ["Merge A × Merge B", "default: Parakeet v3 × v2", "non-English: Whisper",
-        "replaces v2 and leads", ("referee: Gemma 4, text", "accent")], line_size=12)
+       ["Merge A × Merge B", "default: Whisper ×", "Parakeet UK; v2 is",
+        "English-only, replaced", ("referee: local text model", "accent")], line_size=12)
 d.arrow([(646, r1 + 152), (646, Y + 236 + 36)])
 d.text(657, Y + 236 + 24, "chunks", size=12.5, fill=INK4)
 
@@ -77,19 +77,17 @@ d.node(1012, cy - 48, 116, 96, "Word vote", ["ROVER: align,", "then decide", "wo
 
 # the inference gate
 gx, gy, gw, gh = 72, Y + 262, 520, 186
-d.node(gx, gy, gw, gh, "The inference gate", [
-    "Whisper and Parakeet share it: three chunks × two engines",
-    "run at once. Gemma takes it alone; LiteRT hangs if another",
-    "engine infers beside it. A waiting Gemma call holds back new",
-    "shared calls, so it is never starved.",
+d.node(gx, gy, gw, gh, "Six calls at once", [
+    "Three chunks × two engines run side by side. Whisper gives",
+    "every call its own transcribe task on one shared model.",
+    "Gemma rules in pass 2, after the engines are done, so it",
+    "never competes with them for the GPU.",
 ])
 tl = gy + gh - 42  # mini timeline
 bars = [(0, 150, 0, DATA[0]), (30, 130, 1, DATA[3]), (60, 170, 2, DATA[0])]
 for x0, x1, lane, c in bars:
     d.raw(f'<rect x="{gx + 16 + x0}" y="{tl + lane * 9}" width="{x1 - x0}" height="6" rx="3" fill="{c}"/>')
-d.raw(f'<rect x="{gx + 200}" y="{tl + 4}" width="120" height="14" rx="7" fill="{ACCENT}"/>')
-d.text(gx + 260, tl + 15, "Gemma alone", size=11, fill=INK, anchor="middle")
-for x0, x1, lane, c in [(338, 470, 0, DATA[0]), (352, 440, 1, DATA[3])]:
+for x0, x1, lane, c in [(160, 330, 1, DATA[3]), (180, 470, 0, DATA[0]), (340, 440, 2, DATA[3])]:
     d.raw(f'<rect x="{gx + 16 + x0}" y="{tl + lane * 9}" width="{x1 - x0}" height="6" rx="3" fill="{c}"/>')
 d.text(gx + 16, tl + 36, "Whisper", size=11, fill=DATA[0])
 d.text(gx + 76, tl + 36, "Parakeet", size=11, fill=DATA[3])
@@ -181,7 +179,7 @@ d.panel(48, Y, W - 96, 98, fill=VEIL)
 d.display(72, Y + 36, "If an engine hangs", size=17, weight=700)
 d.text(72, Y + 62, "A chunk over 120 s: the engine is rebuilt and the chunk retried; stuck again, the healthy engine does it alone.",
        size=13.5, fill=INK3, max_width=W - 144)
-d.text(72, Y + 82, "Two hangs in one run: Gemma is benched and the rest of the run is single-engine, so the run still finishes.",
+d.text(72, Y + 82, "A hung ruling keeps the voted text; an arbiter that cannot be rebuilt is dropped, so the run still finishes.",
        size=13.5, fill=INK3, max_width=W - 144)
 
 d.save(os.path.join(ROOT, "docs", "img", "super.svg"))

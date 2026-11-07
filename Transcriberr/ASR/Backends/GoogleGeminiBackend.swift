@@ -124,6 +124,10 @@ actor GoogleGeminiBackend: ASRBackend {
         req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        // Thinking tokens count against maxOutputTokens here too: a 32-token
+        // title spent them all thinking on 2.5 Pro and came back MAX_TOKENS.
+        // Hold thinking to the model's floor and add that floor on top.
+        let thinking = Self.minimalThinkingBudget(for: model)
         let payload: [String: Any] = [
             "system_instruction": ["parts": [["text": systemInstruction]]],
             "contents": [[
@@ -132,7 +136,8 @@ actor GoogleGeminiBackend: ASRBackend {
             ]],
             "generationConfig": [
                 "temperature": 0.3,
-                "maxOutputTokens": maxTokens
+                "maxOutputTokens": maxTokens + thinking,
+                "thinkingConfig": ["thinkingBudget": thinking]
             ]
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)

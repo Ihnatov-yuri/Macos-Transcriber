@@ -118,6 +118,10 @@ nonisolated final class PresetStore: @unchecked Sendable {
             let builtinIds = Set(Builtin.all.map(\.id))
             let userAdded = presets.filter { !builtinIds.contains($0.id) }
             presets = Builtin.all + userAdded
+            // Saved by hand: an assignment inside init does not reliably run
+            // didSet, and the flag above is already set, so an unsaved
+            // upgrade would be lost for good at the next launch.
+            persist()
         }
     }
 

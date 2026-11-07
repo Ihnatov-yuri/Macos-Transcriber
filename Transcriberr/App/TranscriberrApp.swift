@@ -127,6 +127,11 @@ struct TranscriberrApp: App {
         case .failed(let why):
             alert.messageText = why
             alert.informativeText = "Try again later."
+        case .checking:
+            // Another check (the one at launch) is still out: "up to date"
+            // here could hide a release it is about to find.
+            alert.messageText = "Already checking for updates"
+            alert.informativeText = "Try again in a moment."
         default:
             alert.messageText = "Transcriberr is up to date"
             alert.informativeText = "This is the latest version."

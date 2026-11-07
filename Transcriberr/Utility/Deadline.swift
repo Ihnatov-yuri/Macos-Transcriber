@@ -4,7 +4,7 @@ import Synchronization
 /// Wall-clock deadline for work that may never return — native
 /// inference blocks its thread and ignores Swift cancellation. Shared by the
 /// chunk loop (`TranscriptionRunner`), post-processing (`PostProcessor`) and
-/// live captions (`LiveTranscriber`), which used to hand-write the same race.
+/// live captions (`LiveTranscriber`).
 ///
 /// Three ways the call can end; the first one wins and every later one is
 /// dropped (exactly one resume):
@@ -16,11 +16,11 @@ import Synchronization
 ///    waits on it any more);
 ///  - the calling task is cancelled → `CancellationError`, and the work is
 ///    cancelled. Both sides are DETACHED tasks, which inherit nothing —
-///    cancellation included — so without this the caller sat out the whole
-///    deadline after Cancel.
+///    cancellation included — so without this the caller would sit out the
+///    whole deadline after Cancel.
 ///
 /// NOT a task group: a group awaits every child before it returns, which
-/// pinned each call to the full deadline even when the work finished at once.
+/// would pin each call to the full deadline even when the work finished at once.
 ///
 /// Named `Deadline.run` rather than a free `withDeadline` so it is never
 /// shadowed by (or shadows) a type's own `withDeadline` member.

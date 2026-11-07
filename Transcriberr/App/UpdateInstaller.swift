@@ -164,10 +164,10 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
     }
 
     /// Streamed to disk with the size cap enforced as it arrives: a whole
-    /// download first and the check after let a hostile or broken server
-    /// fill the disk before anything looked. A declared Content-Length over
+    /// download first and the check after would let a hostile or broken
+    /// server fill the disk before anything looked. A declared Content-Length over
     /// the cap is refused before a byte is read. Chunks come from a data
-    /// delegate (the per-byte AsyncBytes loop cost seconds of CPU per
+    /// delegate (a per-byte AsyncBytes loop costs seconds of CPU per
     /// 100 MB update).
     private static func download(_ url: URL, into stage: URL) async throws -> URL {
         let dest = stage.appendingPathComponent("update.zip")
@@ -285,8 +285,8 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
               let id = info["CFBundleIdentifier"] as? String, id == Bundle.main.bundleIdentifier,
               info["CFBundleShortVersionString"] as? String == version
         else { throw Failure("The download isn't the expected version") }
-        // v5.4 raised the floor to macOS 26.4 (uzu): swapping it in on an
-        // older macOS left a bundle that does not launch, and no app.
+        // A release can need a newer macOS (uzu needs 26.4): swapping it in
+        // on an older macOS would leave a bundle that does not launch, and no app.
         if let minimum = info["LSMinimumSystemVersion"] as? String, !runs(minimum: minimum) {
             throw Failure("Version \(version) needs macOS \(minimum) or later. Update macOS first; this version stays installed.")
         }

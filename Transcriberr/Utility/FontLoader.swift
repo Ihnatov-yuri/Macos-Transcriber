@@ -8,8 +8,8 @@ enum FontLoader {
     static func registerBundledFonts() {
         guard let resURL = Bundle.main.resourceURL else { return }
         // XcodeGen adds Resources/Fonts as a group, and Xcode copies group
-        // files flat into Contents/Resources, so the fonts were never found
-        // under Fonts/ and every custom face fell back to the system font.
+        // files flat into Contents/Resources, so a search of Fonts/ alone
+        // finds nothing and every custom face falls back to the system font.
         // Both layouts are searched.
         let dirs = [resURL.appendingPathComponent("Fonts", isDirectory: true), resURL]
         for dir in dirs {

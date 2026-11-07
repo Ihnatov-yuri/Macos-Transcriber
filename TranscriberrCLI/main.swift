@@ -4,16 +4,14 @@ import Foundation
 import FluidAudio
 import WhisperKit
 
-// CLI test harness for the Transcriberr audio pipeline.
+// CLI test harness for the Transcriberr pipeline: recording, decoding,
+// transcription, diarization, text models, the knowledge base, backups and
+// migrations. `main()` below dispatches the commands; `transcriberrcli help`
+// lists them.
 //
-// Run:  transcriberrcli record [seconds]   — captures from default mic
-//       transcriberrcli decode <file>      — decodes + VAD-chunks any file
-//       transcriberrcli noisesup <file>    — runs the offline noise-suppression pass
-//       transcriberrcli help
-//
-// All paths exercise the same code the app uses (WavRecorder, AudioDecoder,
-// NoiseSuppressor) so a green CLI run means the audio layer is healthy
-// independent of the SwiftUI / SwiftData stack.
+// The commands exercise the same code the app uses (WavRecorder,
+// AudioDecoder, TranscriptionRunner, …) so a green CLI run means that layer
+// is healthy independent of the SwiftUI / SwiftData stack.
 
 let args = CommandLine.arguments
 let command = args.count > 1 ? args[1] : "help"
@@ -138,7 +136,7 @@ func cmdRecord(seconds: Double) async -> Int32 {
 
     // Sanity: 5 seconds at 16 kHz mono Float32 ≈ 5 × 16000 × 4 = 320 KB plus
     // 44 bytes of WAV header. Anything under 100 KB means the tap never
-    // delivered audio — the bug we hit before.
+    // delivered audio.
     let expectedMin = Int64(seconds * 16_000 * 4 * 0.5)   // 50% margin
     if size < expectedMin {
         print("[record] ❌ output suspiciously small (expected ≥ \(expectedMin) bytes)")
@@ -407,9 +405,9 @@ func cmdWhisperBench(placement: String, language: String, paths: [String]) async
     print(String(format: "load %.1fs", Date().timeIntervalSince(tl)))
     let audio = tracks.map { Double($0.1.count) / 16_000 }.reduce(0, +)
     let t0 = Date()
-    // At most `parallel` files at once: the bench once read 20 short clips
-    // together, every one ran past Whisper's decode budget, and each came
-    // back empty with no error. Override with TRANSCRIBERR_BENCH_PARALLEL.
+    // At most `parallel` files at once: with 20 short clips read together,
+    // every one runs past Whisper's decode budget and each comes back empty
+    // with no error. Override with TRANSCRIBERR_BENCH_PARALLEL.
     let parallel = max(1, Int(ProcessInfo.processInfo.environment["TRANSCRIBERR_BENCH_PARALLEL"] ?? "") ?? 2)
     print("reading \(tracks.count) file(s), \(min(parallel, tracks.count)) at a time")
     let results = await withTaskGroup(of: (Int, Result<String, Error>, Double).self) { group in
@@ -546,7 +544,7 @@ func cmdAsk(_ question: String) async -> Int32 {
 }
 
 /// Three concurrent generations at the text model: they must queue, not
-/// starve one another (the v2.2.1 LiteRT bug left one empty).
+/// starve one another (a starved one comes back empty).
 @MainActor
 func cmdGenTest() async -> Int32 {
     let prompts = PromptStore()
@@ -580,7 +578,7 @@ func cmdGenTest() async -> Int32 {
     }
 }
 
-/// Meeting brief on a real transcript (.txt) with the local Gemma — shows
+/// Meeting brief on a real transcript (.txt) with the local text model — shows
 /// what the model proposes, what the guards accept, and how long one
 /// whole-transcript read takes.
 @MainActor
@@ -655,8 +653,8 @@ func cmdRun(path: String, speakers: Int, backend: String = "parakeet-v3",
     }
     let prompts = PromptStore()
     let factory = BackendFactory(prompts: prompts, apiKeys: APIKeyStore())
-    // The whole process is one job: as in the app while a job runs, Gemma's
-    // idle release must not fire. It did after 3 quiet minutes and took
+    // The whole process is one job: as in the app while a job runs, the text
+    // model's idle release must not fire. After 3 quiet minutes it would take
     // Super's engines with it ("Ensemble backend not loaded").
     factory.textReleaseAllowed = { false }
     let runner = TranscriptionRunner(factory: factory, prompts: prompts, diarization: DiarizationRunner())

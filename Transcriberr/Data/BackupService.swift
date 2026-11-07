@@ -164,7 +164,7 @@ nonisolated enum BackupService {
         ioQueue.async {
             do {
                 // Owner-only, like the briefs and voice files: these are
-                // full transcripts, and the default umask left them
+                // full transcripts, and the default umask leaves them
                 // world-readable (0644) wherever the backup root points.
                 // Folders made before this keep their old mode unless reset.
                 let fm = FileManager.default

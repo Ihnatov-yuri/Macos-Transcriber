@@ -91,7 +91,7 @@ nonisolated struct SpeechLine: Equatable, Sendable {
 
 /// One person in one meeting.
 ///
-/// Calibrated on the user's library (2026-10-23): line timestamps include
+/// Calibrated on the user's library: line timestamps include
 /// the pauses inside a line, and a split-track meeting's microphone lines
 /// run 10-60 s across the other side's speech. Seconds therefore overstate
 /// talk (your mic lines read 58 words/min), so talk share counts words,
@@ -164,12 +164,12 @@ nonisolated enum SpeechMeasure {
     /// "Дякую." held 29 s, and her lines covered 73 of a 75 min 1:1 in
     /// which she said a third of the words. Tight lines in the library
     /// run at a median 129 (Ukrainian) and 154 (English) words a minute,
-    /// with a tenth at 81-96 or slower (2026-11-04).
+    /// with a tenth at 81-96 or slower.
     static let slowPace = 90.0
     /// An unnamed voice with less than this share of a meeting's words is
     /// a stray piece of someone's voice (a diarizer split, a few "Угу" in
-    /// a 1:1), not one more participant: counted as one, it shrank the
-    /// fair share and made a quiet side of a 1:1 read as dominating it
+    /// a 1:1), not one more participant: counted as one, it would shrink the
+    /// fair share and make a quiet side of a 1:1 read as dominating it
     /// (33 words of "Угу" took Iryna from 85 to 128). Its words still
     /// count towards the meeting's. In the library, real unnamed voices
     /// had at least 1.3% of their meeting's words, strays at most 0.5%.

@@ -12,8 +12,7 @@ enum AssistantAccess {
     static let allowedKey = "assistants.allowed"
     static let lastReadKey = "assistants.lastRead"
 
-    /// On unless switched off: the library has been open to assistants
-    /// since 2.3.0.
+    /// On unless switched off: a missing preference means open to assistants.
     static var isAllowed: Bool {
         CFPreferencesAppSynchronize(domain)
         return (CFPreferencesCopyAppValue(allowedKey as CFString, domain) as? Bool) ?? true

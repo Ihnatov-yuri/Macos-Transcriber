@@ -2,8 +2,8 @@ import Foundation
 
 /// Which links in model-written text a click may open.
 ///
-/// Preset outputs (summaries, action items) are Markdown written by Gemma or
-/// a cloud model from the transcript, and the transcript is whatever anyone
+/// Preset outputs (summaries, action items) are Markdown written by the local
+/// text model or a cloud model from the transcript, and the transcript is whatever anyone
 /// in the meeting said — or what a crafted calendar invite or an imported
 /// file put in front of the model. SwiftUI renders `[text](url)` in those
 /// outputs as a live link whose label says nothing about where it goes, and

@@ -173,9 +173,8 @@ enum RecordingFolderExporter {
     /// The export folder is always fresh, so a file already at `url` was
     /// written by this export: two outputs whose titles `safe()` makes
     /// equal ("Notes" and "Notes" from two presets, "A/B" and "A:B"), or two
-    /// earlier versions stamped in the same second. The second one used to
-    /// replace the first, so the export silently lacked it. It gets a
-    /// number instead.
+    /// earlier versions stamped in the same second. Replacing the first would
+    /// silently drop it from the export, so the second gets a number.
     static func write(_ text: String, to url: URL) throws {
         let fm = FileManager.default
         var target = url

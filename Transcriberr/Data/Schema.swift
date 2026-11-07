@@ -33,8 +33,8 @@ final class Recording {
     var translateToEnglish: Bool
 
     // Per-recording RUN settings (nil = fall back to app defaults). Without
-    // these, the run panel re-seeded from GLOBAL prefs on every open, so
-    // tuning one recording silently changed what every other showed.
+    // these, the run panel would re-seed from GLOBAL prefs on every open, so
+    // tuning one recording would silently change what every other showed.
     var runBackend: String?
     var runLanguages: String?     // comma-joined
     var runDiarize: Bool?
@@ -59,8 +59,8 @@ final class Recording {
     @Relationship(deleteRule: .cascade, inverse: \TranscriptVersion.recording)
     var versions: [TranscriptVersion] = []
 
-    /// Every generated output, kept when Generate replaces it (4.5.0). The
-    /// current one per preset is still the OutputDoc in `outputs`.
+    /// Every generated output, kept when Generate replaces it. The
+    /// current one per preset is the OutputDoc in `outputs`.
     @Relationship(deleteRule: .cascade, inverse: \OutputVersion.recording)
     var outputVersions: [OutputVersion] = []
 
@@ -191,7 +191,7 @@ final class OutputVersion {
     var markdown: String
     /// When the output was generated (not when it was archived).
     var createdAtMillis: Int64
-    /// Nil for outputs made before 4.5.0, archived without this record.
+    /// Nil for outputs archived by older builds without this record.
     var engineLabel: String?
     var systemPrompt: String?
     var userPrompt: String?
@@ -283,8 +283,8 @@ final class PendingTask {
     var waitForCharger: Bool       // kept for parity; unused on Mac
     var queuedAtMillis: Int64
     /// A background Super refinement (Params.keepVisibleUntilDone). Without
-    /// it, a refinement interrupted by a quit resumed as an ordinary run and
-    /// streamed over the readable draft. Optional so the store migrates
+    /// it, a refinement interrupted by a quit would resume as an ordinary run
+    /// and stream over the readable draft. Optional so the store migrates
     /// lightweight — rows written by older builds read as nil (foreground).
     var keepVisibleUntilDone: Bool?
 

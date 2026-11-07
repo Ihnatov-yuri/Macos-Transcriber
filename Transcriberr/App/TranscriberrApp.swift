@@ -14,7 +14,7 @@ struct TranscriberrApp: App {
         AppLog.bootBanner()
         AppLog.info("app", "log file: \(AppLog.logFileURL.path)")
         WhisperModel.migrateSettings()
-        // Transcript backups are written off the caller's thread now; make
+        // Transcript backups are written off the caller's thread; make
         // sure a quit waits for whatever is still in that queue.
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
@@ -37,8 +37,9 @@ struct TranscriberrApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
-        // First launch opened at the 980×640 minimum, where the detail pane
-        // is 398 pt wide — the layout breathes from ~1250 pt up.
+        // Without a default size the first launch opens at the 980×640
+        // minimum, where the detail pane is 398 pt wide; the layout breathes
+        // from ~1250 pt up.
         .defaultSize(width: 1320, height: 860)
         .windowResizability(.contentMinSize)
         .commands {
@@ -96,11 +97,11 @@ struct TranscriberrApp: App {
             SettingsView()
                 .environment(container)
                 // People → Add person lists recordings with @Query: without
-                // the store here that sheet had no container to read.
+                // the store here that sheet has no container to read.
                 .modelContainer(container.modelContainer)
                 .frame(minWidth: 560, minHeight: 480)
                 // The palette is light-only, like the main window's: left to
-                // follow a dark system appearance, this window drew dark
+                // follow a dark system appearance, this window draws dark
                 // grey and dark red text on a dark background.
                 .background(AppColor.base.ignoresSafeArea())
                 .preferredColorScheme(.light)

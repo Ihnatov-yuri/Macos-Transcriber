@@ -1,6 +1,6 @@
 # <img src="docs/icon.png" width="42" align="center" alt=""> Transcriberr
 
-Transcriberr is a transcription studio for the Mac that never sends your audio anywhere. It records meetings with the call and your microphone on separate tracks, transcribes them with speech models running on the Neural Engine and the GPU, works out who said what, learns the voices of the people you talk to, writes the minutes with a local language model, and lets you dictate into any app by holding a key. The library it builds can be read by AI assistants through a read-only MCP server, so an hour-long meeting from last Tuesday is one question away.
+Transcriberr is a transcription studio for the Mac that never sends your audio anywhere. It records meetings with the call and your microphone on separate tracks, transcribes them with speech models running on the Neural Engine and the GPU, works out who said what, learns the voices of the people you talk to, writes the minutes with a local language model, and lets you dictate into any app by holding a key. You can ask the library a question and get an answer that links to the moment it was said, and AI assistants can read it through a read-only MCP server, so an hour-long meeting from last Tuesday is one question away.
 
 I built it because I wanted the quality of the cloud services without handing them every conversation I have at work. It runs on Apple Silicon, needs macOS 26.4, and is free for personal and other noncommercial use.
 
@@ -12,7 +12,7 @@ I built it because I wanted the quality of the cloud services without handing th
 
 ## How it works
 
-A recording passes through four stages, and every one of them runs on the Mac. Audio comes in from the microphone, from the call (tapped digitally from the system's audio, so Zoom, Teams and Meet all work without a plug-in), from a file you import, or from the dictation key. Speech engines turn it into words with timings and confidence. A diarizer separates the voices, and voice prints you have saved turn "Speaker 2" into a name. Then Gemma, Google's open model, reads the transcript to give it a title, write a summary or minutes, run your own prompts, and keep a short brief on each person you meet.
+A recording passes through four stages, and every one of them runs on the Mac. Audio comes in from the microphone, from the call (tapped digitally from the system's audio, so Zoom, Teams and Meet all work without a plug-in), from a file you import, or from the dictation key. Speech engines turn it into words with timings and confidence. A diarizer separates the voices, and voice prints you have saved turn "Speaker 2" into a name. Then a local text model (Google's Gemma 4 or Alibaba's Qwen3.5) reads the transcript to give it a title, write a summary or minutes, run your own prompts, answer questions about your meetings, and keep a short brief on each person you meet.
 
 ![How Transcriberr turns a recording into a transcript, minutes and a searchable library](docs/images/overview.svg)
 
@@ -20,7 +20,7 @@ Cloud engines (OpenAI, Anthropic, Gemini) are in the code for anyone who wants t
 
 ## Recording and meetings
 
-The Record screen shows the clock, the level and a rough live caption while you talk, so you can see that it is hearing you. When you stop, the default engine writes a draft you can read straight away. With background refinement on, Super then runs on the meeting and replaces the draft when it finishes, and the draft stays among the versions.
+The Record screen shows the clock, the level and a rough live caption while you talk, so you can see that it is hearing you. A speech check on the Mac keeps clicks and breaths out of the caption while quiet speakers still come through. When you stop, the default engine writes a draft you can read straight away. With background refinement on, Super then runs on the meeting and replaces the draft when it finishes, and the draft stays among the versions.
 
 ![The Record screen during a meeting, with live captions](docs/images/record.jpg)
 
@@ -49,18 +49,23 @@ A 20-minute Teams call with six people on 29 October 2026 shows the setup that r
 | My voice in the file you play back | -20.4 dB, the same as the raw microphone |
 | Words under my name copied from others | 2.1%, the chance level |
 
+### Transcriberr Microphone
+
+For calls on MacBook speakers there is an opt-in virtual microphone, off by default (Settings › Audio input). Transcriberr opens the real microphone, runs Apple's echo cancelling on it, and plays the result into a virtual device named Transcriberr Microphone, which you pick as the microphone in Teams, Zoom or Meet. Only Transcriberr then opens the built-in microphone, so the call and the recording both get the echo cancelling without Teams' own voice processing breaking down next to it. It is a small Core Audio plug-in, installed from Settings with an administrator password. How it works and what it costs: **[docs/virtual-microphone.md](docs/virtual-microphone.md)**.
+
 ## Speech engines
 
 | Engine | Model | Runs on | Good at |
 |---|---|---|---|
 | Parakeet v3 | NVIDIA parakeet-tdt-0.6b-v3, CoreML | Neural Engine, about 100× real time | English and the major European languages, long files |
 | Parakeet UK | Parakeet v3 fine-tuned for Ukrainian ([on Hugging Face](https://huggingface.co/ihnatov-yuri/parakeet-tdt-0.6b-v3-uk)) | Neural Engine | Ukrainian, and English sentences inside Ukrainian speech |
-| Whisper | OpenAI whisper-large-v3 through WhisperKit | GPU and Neural Engine | Ukrainian and rarer languages; turbo models for English |
-| Super | Two of the above, merged word by word, with Gemma as referee | Mixed | The most accurate transcript, at the cost of time |
+| Whisper | OpenAI whisper-large-v3 through WhisperKit, large-v3 turbo compressed for English | GPU and Neural Engine | Rarer languages, and English at speed |
+| Whisper UK | Whisper large-v3 turbo fine-tuned for Ukrainian ([on Hugging Face](https://huggingface.co/ihnatov-yuri/whisper-large-v3-turbo-uk)) | GPU and Neural Engine | Ukrainian, and Ukrainian mixed with English; picked by itself when the speech is Ukrainian |
+| Super | Two of the above (by default Whisper and Parakeet UK), merged word by word, with the text model as referee | Mixed | The most accurate transcript, at the cost of time |
 
-Models download on first use into `~/Library/Application Support/Transcriberr/models`, which macOS does not purge and Time Machine skips. Parakeet UK updates itself from Hugging Face, and every file is checked against its published fingerprint before it is used.
+Models download on first use into `~/Library/Application Support/Transcriberr/models`, which macOS does not purge and Time Machine skips. Parakeet UK and Whisper UK update themselves from Hugging Face (checked once a week), and every file is checked against its published fingerprint before it is used.
 
-Super is the mode I use for anything that matters. Both engines transcribe every chunk at once, a ROVER vote merges their words using each engine's confidence and a per-language prior, and only the chunks where they disagree go to Gemma, which sees both readings, the text on either side and your vocabulary, and is told to choose between them and never to invent. On a 42-minute meeting the arbitration takes about a minute. The full walk-through, stage by stage, is in **[docs/super-mode.md](docs/super-mode.md)**.
+Super is the mode I use for anything that matters. Both engines transcribe every chunk at once, and a ROVER vote merges their words using each engine's confidence and a per-language prior. With Max quality on, the chunks where they still disagree go to the text model, which sees both readings, the text on either side and your vocabulary, and is told to choose between them and never to invent. Its rulings helped in English and not in Ukrainian when measured against checked transcripts, so by default they run for English only. On a 42-minute meeting the arbitration takes about a minute. The full walk-through, stage by stage, is in **[docs/super-mode.md](docs/super-mode.md)**.
 
 [![How Super works, stage by stage](docs/img/super.svg)](docs/super-mode.md)
 
@@ -70,7 +75,7 @@ Each speaker line has its timestamp, its speaker and a colour, and clicking a li
 
 ![A transcript with speakers, the people row and the playback bar; the text of the meeting is blurred](docs/images/transcript.jpg)
 
-Every engine run is kept as a version, so two engines can be compared side by side and any version restored. Summary, Minutes, Clean, Translate & polish and Context-aware rewrite are presets: prompts you can edit, duplicate, reorder or add to, each with a history of earlier prompts and outputs. A deterministic pass removes stutters, phrase echoes and hesitation fillers before Gemma sees the text. In an early test it took 371 fillers out of one meeting before the model saw a word of it. Your vocabulary (names, products, the spellings you care about, global or per language) is fed into the speech engines and every preset, and Transcriberr harvests recurring names from your library and offers them as additions.
+Every engine run is kept as a version, so two engines can be compared side by side and any version restored. Summary, Minutes, Clean, Translate & polish and Context-aware rewrite are presets: prompts you can edit, duplicate, reorder or add to, each with a history of earlier prompts and outputs. A deterministic pass removes stutters, phrase echoes and hesitation fillers before the text model sees the text. In an early test it took 371 fillers out of one meeting before the model saw a word of it. Your vocabulary (names, products, the spellings you care about, global or per language) is fed into the speech engines and every preset, and Transcriberr harvests recurring names from your library and offers them as additions.
 
 Recordings live in folders and tags, audio is stored as AAC, and sidecar files (`.txt`, `.srt`, `.json`, `.speakers.json`) round-trip with the Android app. Share › Export to a folder writes everything about one recording, every version and output included, with a checksummed manifest.
 
@@ -80,7 +85,7 @@ Hold Right ⌥ in any app, talk, and let go: the text lands at the cursor. Parak
 
 ![The Dictate screen with a passage in the scratch pad and two new names offered for the vocabulary](docs/images/dictate.jpg)
 
-Before anything is pasted the text goes through the same cleanup as the transcripts: your spellings first, then stutters and fillers, then spoken commands such as "new paragraph", "comma" or "scratch that" (also in Dutch, German and Ukrainian). The app in front decides how far to go. Terminals and code editors get the words verbatim, most apps get the clean text, and chat and mail can get a smart pass in which Gemma rewrites the passage for that app and its tone, guarded so that the result is used only when it is clearly the same passage. Password fields are never read.
+Before anything is pasted the text goes through the same cleanup as the transcripts: your spellings first, then stutters and fillers, then spoken commands such as "new paragraph", "comma" or "scratch that" (also in Dutch, German and Ukrainian). The app in front decides how far to go. Terminals and code editors get the words verbatim, most apps get the clean text, and chat and mail can get a smart pass in which the text model rewrites the passage for that app and its tone, guarded so that the result is used only when it is clearly the same passage. Password fields are never read.
 
 ![How a dictated passage goes from key press to pasted text](docs/images/dictation-flow.svg)
 
@@ -88,13 +93,17 @@ Dictation needs the Microphone, Accessibility and Input Monitoring permissions o
 
 ## People
 
-Transcriberr can learn the voices of the people you talk to. Name a speaker in one recording and choose to remember their voice; later recordings name them on their own, on calls and in the room. Each person gets a page with every recording they speak in, how sure the app is of recognising them and why, every voice sample with where it came from, and a brief written by Gemma: what they said in their last meeting, what they committed to and the questions they left open, each item linked to the moment it was said.
+Transcriberr can learn the voices of the people you talk to. Name a speaker in one recording and choose to remember their voice; later recordings name them on their own, on calls and in the room. Each person gets a page with every recording they speak in, how sure the app is of recognising them and why, every voice sample with where it came from, and a brief written by the text model: what they said in their last meeting, what they committed to and the questions they left open, each item linked to the moment it was said.
 
 A voice is only added to someone when it clearly sounds like them, measured against everyone else saved, you included. Find people goes through the whole library once and names the people it is sure of, then asks about the rest.
 
 ![The You page: goals and speech measurements from my own meetings; the names of saved people are blurred](docs/images/people-you.jpg)
 
 The You page measures how you speak in meetings, per language: talk share against a fair share, pace, longest turn, how often you cut in, questions, fillers and hedges. Set goals picks up to two things to work on and words them with tips from your own lines, while the numbers alone decide whether a goal is reached. The voices stay on the Mac, outside Time Machine, and deleting a person removes their voice.
+
+## Ask your meetings
+
+The Ask button in the Library answers a question from all your transcripts, in English or Ukrainian, on the Mac. The text model turns the question into search words in both languages, the best passages are ranked, and the model answers from them. Every claim links to the moment it was said, and when the recordings don't answer the question, it says so. A question about a person ("what did Anna say last week?") reads only that person's lines from those dates. The ordinary Find field stays as it was.
 
 ## Your library as a knowledge base
 
@@ -117,17 +126,19 @@ Settings › AI assistants has a switch for this. With it off, a connected assis
 
 ## Privacy
 
-Everything above runs locally: recording, both speech engines, diarization, voice prints, Gemma, search and the MCP server. Audio, transcripts, voices and briefs stay in `~/Library/Application Support/Transcriberr` and your Recordings folder, with transcript backups in `~/Documents/Transcriberr Backups`. The app talks to the network for four things only: downloading a model the first time you need it, checking GitHub for a new version (it asks once, on first launch, and the request is the same from every Mac), asking Hugging Face once a week whether Parakeet UK or Whisper UK has a newer release while those checks are on, and a cloud engine if you add a key for one.
+Everything above runs locally: recording, the speech engines, diarization, voice prints, the text models, Ask, search and the MCP server. Audio, transcripts, voices and briefs stay in `~/Library/Application Support/Transcriberr` and your Recordings folder, with transcript backups in `~/Documents/Transcriberr Backups`. The app talks to the network for four things only: downloading a model the first time you need it, checking GitHub for a new version once a day (it asks once, on first launch, and the request is the same from every Mac), asking Hugging Face once a week whether Parakeet UK or Whisper UK has a newer release while those checks are on, and a cloud engine if you add a key for one.
 
 ## Settings
 
 <p align="center"><img src="docs/images/engines.jpg" width="620" alt="Engine and Super settings"></p>
 
-Settings hold the global defaults: the default and live-caption engines, which Whisper model to use for English and for other languages, the two engines Super merges, whether meetings are refined in the background, the calendar invite, your name for the microphone track, the dictation rules per app, the presets and the vocabulary. Each recording can override the engine, languages, diarization, expected speakers and translation in its own Run sheet.
+Settings hold the global defaults: the default and live-caption engines, which Whisper model to use for English, for Ukrainian and for other languages, the two engines Super merges, whether meetings are refined with Super in the background, the text models (one for Super, one for everything else), the calendar invite, your name for the microphone track, the Transcriberr Microphone, the dictation rules per app, the presets and the vocabulary. Each recording can override the engine, languages, diarization, expected speakers and translation in its own Run sheet.
+
+The Normal view shows what most people change and Advanced shows everything. The search field narrows the screen to the matching settings, always looking through all of them. You can also ask for a change in your own words, such as "turn off the echo filter": the text model proposes the changes, nothing changes until you press Apply, and Undo is offered afterwards. API keys, cloud engines and AI-assistant access can only be changed by hand.
 
 ## Install
 
-Each [release](https://github.com/Ihnatov-yuri/Macos-Transcriber/releases/latest) is a zip with the signed app inside, which goes into Applications. From 3.14.2 on, the app installs its own updates after checking their signature. It needs an Apple Silicon Mac and macOS 26.4. The speech models download themselves on first use (Parakeet about 0.6 GB, Whisper 0.5 to 3 GB); the text models (Gemma 4 E4B and 26B on MLX, Qwen3.5 9B on uzu, 5 to 16 GB) are downloaded from Settings › Models, where each one shows its measured speed, quality and memory.
+Each [release](https://github.com/Ihnatov-yuri/Macos-Transcriber/releases/latest) is a zip with the signed app inside, which goes into Applications. From 3.14.2 on, the app installs its own updates after checking their signature. It needs an Apple Silicon Mac and macOS 26.4. The speech models download themselves on first use (Parakeet about 0.6 GB, Whisper 0.5 to 3 GB); the text models (Gemma 4 E4B and 26B on MLX, Qwen3.5 9B on uzu, 5 to 16 GB) are downloaded from Settings › Models, where each one shows its measured speed, quality and memory. The app suggests Gemma 4 26B on Macs with 32 GB of memory or more and E4B on the others.
 
 ## Build from source
 

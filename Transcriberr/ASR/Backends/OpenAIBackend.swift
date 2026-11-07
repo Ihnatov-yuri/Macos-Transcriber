@@ -12,7 +12,7 @@ actor OpenAIBackend: ASRBackend {
     private let textModel: String
     private var apiKey: String?
 
-    init(asrModel: String = "whisper-1", textModel: String = "gpt-4o") {
+    init(asrModel: String = CloudRequests.Models.openAIAudio, textModel: String = CloudRequests.Models.openAIText) {
         self.asrModel = asrModel
         self.textModel = textModel
     }
@@ -104,16 +104,8 @@ actor OpenAIBackend: ASRBackend {
         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let payload: [String: Any] = [
-            "model": textModel,
-            "max_tokens": maxTokens,
-            "temperature": 0.3,
-            "messages": [
-                ["role": "system", "content": systemInstruction],
-                ["role": "user", "content": userMessage]
-            ]
-        ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        req.httpBody = try JSONSerialization.data(withJSONObject: CloudRequests.openAIText(
+            model: textModel, system: systemInstruction, user: userMessage, maxTokens: maxTokens))
 
         let (data, resp) = try await CloudHTTP.session.data(for: req)
         try ensureOK(resp, data: data)

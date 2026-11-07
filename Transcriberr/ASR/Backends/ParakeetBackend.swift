@@ -370,7 +370,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         maxTokens: Int
     ) async throws -> String {
         throw ASRError.backendUnavailable(
-            reason: "Parakeet is speech-to-text only. Text generation uses Gemma 4."
+            reason: "Parakeet is speech-to-text only. Text generation uses the local text model."
         )
     }
 

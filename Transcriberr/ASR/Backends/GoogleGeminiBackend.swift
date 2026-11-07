@@ -9,7 +9,7 @@ actor GoogleGeminiBackend: ASRBackend {
     private let model: String
     private var apiKey: String?
 
-    init(model: String = "gemini-2.5-pro") {
+    init(model: String = CloudRequests.Models.gemini) {
         self.model = model
     }
 
@@ -73,26 +73,8 @@ actor GoogleGeminiBackend: ASRBackend {
         req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let payload: [String: Any] = [
-            "contents": [[
-                "role": "user",
-                "parts": [
-                    ["inline_data": ["mime_type": "audio/wav", "data": b64]],
-                    ["text": prompt]
-                ]
-            ]],
-            // 2.5 models think by default, and thinking tokens count against
-            // maxOutputTokens: at 1024 a chunk could spend them all thinking
-            // and come back MAX_TOKENS with no text. Transcription needs
-            // no reasoning, so thinking is held to the model's floor, with
-            // room left for a dense 30 s chunk.
-            "generationConfig": [
-                "temperature": 0.1,
-                "maxOutputTokens": 4096,
-                "thinkingConfig": ["thinkingBudget": Self.minimalThinkingBudget(for: model)]
-            ]
-        ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        req.httpBody = try JSONSerialization.data(withJSONObject: CloudRequests.geminiAudio(
+            model: model, wavBase64: b64, prompt: prompt))
 
         let (data, resp) = try await CloudHTTP.session.data(for: req)
         try ensureOK(resp, data: data)
@@ -123,23 +105,8 @@ actor GoogleGeminiBackend: ASRBackend {
         req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        // Thinking tokens count against maxOutputTokens here too: a 32-token
-        // title spent them all thinking on 2.5 Pro and came back MAX_TOKENS.
-        // Hold thinking to the model's floor and add that floor on top.
-        let thinking = Self.minimalThinkingBudget(for: model)
-        let payload: [String: Any] = [
-            "system_instruction": ["parts": [["text": systemInstruction]]],
-            "contents": [[
-                "role": "user",
-                "parts": [["text": userMessage]]
-            ]],
-            "generationConfig": [
-                "temperature": 0.3,
-                "maxOutputTokens": maxTokens + thinking,
-                "thinkingConfig": ["thinkingBudget": thinking]
-            ]
-        ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        req.httpBody = try JSONSerialization.data(withJSONObject: CloudRequests.geminiText(
+            model: model, system: systemInstruction, user: userMessage, maxTokens: maxTokens))
 
         let (data, resp) = try await CloudHTTP.session.data(for: req)
         try ensureOK(resp, data: data)
@@ -150,12 +117,6 @@ actor GoogleGeminiBackend: ASRBackend {
     }
 
     // MARK: - Helpers
-
-    /// 2.5 Pro cannot turn thinking off (its minimum budget is 128); Flash
-    /// and Flash-Lite take 0.
-    nonisolated static func minimalThinkingBudget(for model: String) -> Int {
-        model.contains("flash") ? 0 : 128
-    }
 
     private func ensureOK(_ resp: URLResponse, data: Data) throws {
         guard let http = resp as? HTTPURLResponse else {

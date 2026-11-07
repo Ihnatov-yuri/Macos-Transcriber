@@ -708,7 +708,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 }
                 let words = vocabulary
                 do {
-                    let brief = try await withChunkTimeout(
+                    let brief = try await Self.withChunkTimeout(
                         seconds: MeetingBriefBuilder.buildTimeout(transcript: firstPass)
                     ) {
                         try await ens.prepareBrief(transcript: firstPass, vocabulary: words)
@@ -765,7 +765,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 // keep the confidence-voted text for this chunk.
                 let ruled: String
                 do {
-                    ruled = try await withChunkTimeout(seconds: 120) {
+                    ruled = try await Self.withChunkTimeout(seconds: 120) {
                         await ens.arbitrate(
                             textA: info.textA, textB: info.textB,
                             context: ctx, languages: params.languages)
@@ -1523,89 +1523,26 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         speakerHints: [SpeakerHint],
         continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
     ) async throws -> String {
-        // The ensemble runs two engines + a text-model merge per chunk — give it
-        // more headroom than a single engine before declaring a wedge. A
-        // healthy ensemble chunk finishes in well under a minute even with
-        // lock queueing; 300 s would mean five minutes of frozen UI.
-        let timeout: TimeInterval = params.backend == .ensemble ? 120 : Self.chunkTimeoutSeconds
-        do {
-            return try await withChunkTimeout(seconds: timeout) {
-                try await backend.transcribeChunk(
-                    samples: samples,
-                    languages: params.languages,
-                    translateTo: params.translateTo,
-                    diarize: params.diarize,
-                    previousContext: previousContext,
-                    speakerHints: speakerHints
-                )
-            }
-        } catch let gaveUp as WhisperBackend.DecodeBudgetExceeded {
-            // Whisper ran out of time (a busy Mac). Once more, then the part
-            // stays empty and the run's note says so, instead of coming back
-            // as "" with no error at all.
-            AppLog.warn("runner", "\(gaveUp.localizedDescription) Trying the part once more.")
-            do {
-                return try await withChunkTimeout(seconds: timeout) {
-                    try await backend.transcribeChunk(
-                        samples: samples, languages: params.languages, translateTo: params.translateTo,
-                        diarize: params.diarize, previousContext: previousContext, speakerHints: speakerHints)
-                }
-            } catch is WhisperBackend.DecodeBudgetExceeded {
-                AppLog.error("runner", "Whisper ran out of time on the same part twice; it has no text")
-                RunGapLog.record(.outOfTime)
-                return ""
-            } catch ASRError.chunkTimeout {
-                // The retry hung instead: thrown from here it would skip the
-                // wedge ladder below and end the whole run over one part.
-                AppLog.error("runner", "chunk wedged on its retry — skipping it, recovering engine for the rest")
-                RunGapLog.record(.wedged)
-                try? await backend.recoverWedge(modelPath: params.modelDirectory)
-                return ""
-            }
-        } catch ASRError.chunkTimeout {
-            // Surgical: rebuild only the wedged engine. A full ensemble
-            // release()+load() here would yank engines from under the OTHER
-            // in-flight pipeline chunks, and the watchdog would kill healthy work.
-            continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
-            // A failed rebuild must not end the run from here: the engine
-            // keeps its old instance, and the retry below either works on it
-            // or times out into the skip.
-            do { try await backend.recoverWedge(modelPath: params.modelDirectory) } catch {
-                AppLog.warn("runner", "wedge recovery failed: \(error.localizedDescription)")
-            }
-            do {
-                return try await withChunkTimeout(seconds: timeout) {
-                    try await backend.transcribeChunk(
-                        samples: samples,
-                        languages: params.languages,
-                        translateTo: params.translateTo,
-                        diarize: params.diarize,
-                        previousContext: previousContext,
-                        speakerHints: speakerHints
-                    )
-                }
-            } catch is WhisperBackend.DecodeBudgetExceeded {
-                // Out of time on the retry after a wedge: one part stays
-                // empty, as on the first path above, not the whole run.
-                AppLog.error("runner", "Whisper ran out of time on the retry after a wedge; the part has no text")
-                RunGapLog.record(.outOfTime)
-                return ""
-            } catch ASRError.chunkTimeout {
-                // Twice-wedged chunk: this audio reliably hangs the engine.
-                // One lost chunk must not kill a 30-chunk run — skip it,
-                // recover the engine for the chunks behind it, move on.
-                AppLog.error("runner", "chunk wedged twice — skipping it, recovering engine for the rest")
-                RunGapLog.record(.wedged)
-                try? await backend.recoverWedge(modelPath: params.modelDirectory)
-                return ""
-            }
+        // A healthy chunk, the ensemble's included, finishes well under a
+        // minute; a longer limit would only mean minutes of frozen UI.
+        try await Self.withRetryLadder(
+            timeout: Self.chunkTimeoutSeconds, empty: "", continuation: continuation,
+            recover: { try await backend.recoverWedge(modelPath: params.modelDirectory) },
+            fallback: nil
+        ) {
+            try await backend.transcribeChunk(
+                samples: samples,
+                languages: params.languages,
+                translateTo: params.translateTo,
+                diarize: params.diarize,
+                previousContext: previousContext,
+                speakerHints: speakerHints
+            )
         }
     }
 
-    /// Max-quality first pass with the same recover-retry-degrade ladder as
-    /// runChunkWithRetry. With a bare timeout and no recovery, one wedged
-    /// native call would tear down the whole task group and end the run
-    /// with "error 3" (chunkTimeout).
+    /// Max-quality first pass. A second hang hands the chunk to one engine
+    /// of the pair before giving up on it.
     @MainActor
     private func richChunkWithRetry(
         ens: EnsembleBackend,
@@ -1614,36 +1551,79 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         params: Params,
         continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
     ) async throws -> EnsembleBackend.RichChunk {
-        let timeout: TimeInterval = 120
-        do {
-            return try await withChunkTimeout(seconds: timeout) {
-                try await ens.transcribeChunkRich(
+        try await Self.withRetryLadder(
+            timeout: Self.chunkTimeoutSeconds,
+            empty: EnsembleBackend.RichChunk(text: "", agreement: 1, textA: "", textB: ""),
+            continuation: continuation,
+            recover: { try await ens.recoverWedge(modelPath: nil) },
+            fallback: {
+                try await ens.transcribeChunkSolo(
                     samples: samples, languages: params.languages, window: window)
             }
+        ) {
+            try await ens.transcribeChunkRich(
+                samples: samples, languages: params.languages, window: window)
+        }
+    }
+
+    /// The one recover-retry-skip ladder every chunk call goes through, so
+    /// no path can miss a case (a path without one ended whole runs over a
+    /// single part, or tore down the task group with "error 3").
+    ///
+    /// - A hang (`chunkTimeout`) rebuilds only the stuck engine and retries.
+    ///   A full release and load would pull engines from under the other
+    ///   chunks in flight. A failed rebuild leaves the old engine, and the
+    ///   retry either works on it or times out into the skip.
+    /// - Whisper out of time (a busy Mac) retries as it is.
+    /// - A second failure skips the part, with a note in the run's gaps,
+    ///   after `fallback` (one engine of a pair) if there is one. One lost
+    ///   part never ends a 30-chunk run; cancellation always does.
+    @MainActor
+    static func withRetryLadder<T: Sendable>(
+        timeout: TimeInterval,
+        empty: T,
+        continuation: AsyncThrowingStream<ASREvent, Error>.Continuation,
+        recover: @escaping () async throws -> Void,
+        fallback: (@Sendable () async throws -> T)? = nil,
+        _ attempt: @Sendable @escaping () async throws -> T
+    ) async throws -> T {
+        func rebuild() async {
+            do { try await recover() } catch {
+                AppLog.warn("runner", "wedge recovery failed: \(error.localizedDescription)")
+            }
+        }
+        do {
+            return try await withChunkTimeout(seconds: timeout, attempt)
+        } catch let gaveUp as WhisperBackend.DecodeBudgetExceeded {
+            AppLog.warn("runner", "\(gaveUp.localizedDescription) Trying the part once more.")
         } catch ASRError.chunkTimeout {
             continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
-            try? await ens.recoverWedge(modelPath: nil)
-            do {
-                return try await withChunkTimeout(seconds: timeout) {
-                    try await ens.transcribeChunkRich(
-                        samples: samples, languages: params.languages, window: window)
-                }
-            } catch ASRError.chunkTimeout {
-                AppLog.error("runner", "rich chunk wedged twice — degrading to single engine")
-                try? await ens.recoverWedge(modelPath: nil)
+            await rebuild()
+        }
+        do {
+            return try await withChunkTimeout(seconds: timeout, attempt)
+        } catch is WhisperBackend.DecodeBudgetExceeded {
+            AppLog.error("runner", "Whisper ran out of time on the same part twice; it has no text")
+            RunGapLog.record(.outOfTime)
+            return empty
+        } catch ASRError.chunkTimeout {
+            await rebuild()
+            if let fallback {
+                AppLog.error("runner", "chunk wedged twice — trying it with one engine")
                 do {
-                    return try await withChunkTimeout(seconds: timeout) {
-                        try await ens.transcribeChunkSolo(
-                            samples: samples, languages: params.languages, window: window)
-                    }
+                    return try await withChunkTimeout(seconds: timeout, fallback)
                 } catch is CancellationError {
-                    // A cancelled job must stop here, not come back as an
-                    // empty chunk that triggers yet another recovery.
+                    // Cancelled, not wedged: an empty part here would set
+                    // off yet another recovery.
                     throw CancellationError()
                 } catch {
-                    return EnsembleBackend.RichChunk(text: "", agreement: 1, textA: "", textB: "")
+                    AppLog.error("runner", "one engine failed on it too: \(error.localizedDescription)")
                 }
+            } else {
+                AppLog.error("runner", "chunk wedged twice — skipping it, recovering engine for the rest")
             }
+            RunGapLog.record(.wedged)
+            return empty
         }
     }
 
@@ -1654,7 +1634,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     /// task group — a group would pin every chunk to the full timeout, and
     /// a Cancel would otherwise leave abandoned inference holding the
     /// ANE/GPU while the next queued job waited.
-    private func withChunkTimeout<T: Sendable>(
+    private static func withChunkTimeout<T: Sendable>(
         seconds: TimeInterval,
         _ op: @Sendable @escaping () async throws -> T
     ) async throws -> T {

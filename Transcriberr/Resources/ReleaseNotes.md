@@ -6,6 +6,18 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.5.3
+
+- Claude and Gemini answer again as text engines. Claude no longer gets a setting it refuses, and Gemini titles are no longer spent thinking before a word is written.
+- Qwen3.5 9B downloads and installs: files in its subfolder used to fail every time.
+- A part that hangs or runs out of time in Super is retried, then skipped with a note, and the rest of the run finishes.
+- Dictation: "scratch that" from the Dictate pad never deletes text in another app, a password is never pasted as visible text after you leave its field, and prose is never typed into a password field.
+- Dictation keeps 50% and players' as said, and "Actually," at the start of a sentence no longer deletes the sentence before it.
+- Restoring an older output keeps it after a backup restore, merging two recordings keeps their tagged speakers apart, and renaming or deleting a folder no longer comes back after a restore.
+- A meeting that fails to start no longer deletes the previous meeting's audio.
+- Update waits while a call uses the Transcriberr Microphone, a cancelled quit no longer leaves the Update button stuck, and a second update check says one is already running.
+- A greeting such as "Delhi Office" no longer names a speaker "Office".
+
 ## 5.5.2
 
 - Live captions keep quiet speakers. Someone far from the mic used to lose whole sentences, and now their words come through while clicks and room noise stay out. This needs Keep sounds out of live captions, which is on by default.

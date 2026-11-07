@@ -461,7 +461,7 @@ nonisolated final class DiarizationRunner: @unchecked Sendable {
         let keys = Array(Set(segments.compactMap(\.speakerKey)))
         if keys.count == 2,
            let greetRx = try? NSRegularExpression(
-               pattern: #"(?i:привіт|вітаю|добрий день|здравствуй|привет|hi|hello|hey)[,!]?\s+([A-ZА-ЯІЇЄҐ][a-zа-яіїєґё'’]{1,30})"#
+               pattern: #"(?<![\p{L}\p{N}])(?i:привіт|вітаю|добрий день|здравствуй|привет|hi|hello|hey)[,!]?\s+([A-ZА-ЯІЇЄҐ][a-zа-яіїєґё'’]{1,30})"#
            ) {
             for seg in segments {
                 guard let key = seg.speakerKey else { continue }

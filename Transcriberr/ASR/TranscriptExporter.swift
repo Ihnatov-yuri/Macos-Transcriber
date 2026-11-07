@@ -138,7 +138,12 @@ enum TranscriptExporter {
             },
             uniquingKeysWith: { first, _ in first }
         )
-        guard !mapping.isEmpty else { return }
+        guard !mapping.isEmpty else {
+            // A re-run with no names must not leave the last run's names
+            // beside the new transcript.
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(stem).speakers.json"))
+            return
+        }
         let data = try JSONSerialization.data(withJSONObject: mapping, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: dir.appendingPathComponent("\(stem).speakers.json"))
     }

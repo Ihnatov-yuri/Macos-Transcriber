@@ -102,6 +102,9 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
             }
             let remote = URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file.path)")!
             let temp = target.appendingPathExtension("partial")
+            // Nested files (Qwen's speculator/) need their folder: without it
+            // createFile failed quietly and the open below threw every time.
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             fm.createFile(atPath: temp.path, contents: nil)
             let handle = try FileHandle(forWritingTo: temp)
             // Delegate-driven, CHUNKED. `URLSession.bytes` hands back an

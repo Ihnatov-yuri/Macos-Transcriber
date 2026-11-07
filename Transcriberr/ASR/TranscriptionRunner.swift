@@ -1587,6 +1587,12 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                         speakerHints: speakerHints
                     )
                 }
+            } catch is WhisperBackend.DecodeBudgetExceeded {
+                // Out of time on the retry after a wedge: one part stays
+                // empty, as on the first path above, not the whole run.
+                AppLog.error("runner", "Whisper ran out of time on the retry after a wedge; the part has no text")
+                RunGapLog.record(.outOfTime)
+                return ""
             } catch ASRError.chunkTimeout {
                 // Twice-wedged chunk: this audio reliably hangs the engine.
                 // One lost chunk must not kill a 30-chunk run — skip it,

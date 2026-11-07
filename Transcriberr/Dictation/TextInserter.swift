@@ -196,6 +196,10 @@ enum TextInserter {
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
             else { return false }
+            // Plain Backspace: a held modifier (the next passage's ⌥) would
+            // turn it into ⌥⌫ and delete whole words of the user's text.
+            down.flags = []
+            up.flags = []
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }

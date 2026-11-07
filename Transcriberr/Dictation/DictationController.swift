@@ -962,7 +962,7 @@ nonisolated final class DictationController: @unchecked Sendable {
             if settings.spokenCommands, passage.mode != .verbatim, DictationText.isScratchOnly(recognized),
                !cancelledSessions.contains(passage.session) {
                 if !final { deliveredSessions.insert(passage.session) }
-                await scratchLastInsertion(final: final)
+                await scratchLastInsertion(final: final, passage: passage)
                 return
             }
             var cleaned: String
@@ -1027,6 +1027,9 @@ nonisolated final class DictationController: @unchecked Sendable {
             case .appChanged:
                 finalMessage(secret ? "You switched apps — password not inserted"
                                     : "You switched apps — pastes when you return")
+            case .fieldChanged:
+                finalMessage(secret ? "You left the password field — password not inserted"
+                                    : "Password field — the text is in the Dictate pad")
             }
         } else if outcome == .copiedOnly {
             // Keep listening, but tell the user once.
@@ -1034,7 +1037,7 @@ nonisolated final class DictationController: @unchecked Sendable {
         }
     }
 
-    private enum DeliveryOutcome: Equatable { case pasted, paneAppended, copiedOnly, appChanged }
+    private enum DeliveryOutcome: Equatable { case pasted, paneAppended, copiedOnly, appChanged, fieldChanged }
 
     @MainActor
     private func deliver(_ text: String, passage: Passage) -> DeliveryOutcome {
@@ -1078,8 +1081,26 @@ nonisolated final class DictationController: @unchecked Sendable {
                 lastInsertion = nil
                 return .appChanged
             }
-            // Back in the target app: earlier held passages go first.
-            let held = takeHeld(for: expected)
+            // Same app, but the focus may have moved between a password
+            // field and a normal one since the session began. Only a read
+            // that reached the field (it has a role) decides.
+            let focus = DictationContext.capture(readText: false)
+            if focus.role != nil, focus.isSecure != secret {
+                if secret {
+                    // A password must not land as visible text: dropped.
+                    AppLog.warn("dictation", "left the password field before delivery — passage dropped")
+                } else {
+                    // Prose must not be typed into a password field: the
+                    // pad keeps it.
+                    AppLog.warn("dictation", "focus moved to a password field — passage kept in the pad")
+                    paneText = DictationText.join(existing: paneText, new: text)
+                }
+                lastInsertion = nil
+                return .fieldChanged
+            }
+            // Back in the target app: earlier held passages go first, never
+            // in front of a password (they would be pasted into its field).
+            let held = secret ? [] : takeHeld(for: expected)
             if !held.isEmpty {
                 text = (held.map(\.text) + [text]).reduce("") { DictationText.join(existing: $0, new: $1) }
             }
@@ -1123,7 +1144,15 @@ nonisolated final class DictationController: @unchecked Sendable {
 
     /// "Scratch that" as a whole passage: take back the previous one.
     @MainActor
-    private func scratchLastInsertion(final: Bool) async {
+    private func scratchLastInsertion(final: Bool, passage: Passage) async {
+        // Only a session that types into apps may take back what it typed
+        // there: a link-started or pad session must never send Backspace to
+        // another app (any app or web page can open the link).
+        if passage.target != .frontmostApp, lastInsertion?.target == .frontmostApp {
+            AppLog.warn("dictation", "scratch that from a pad session → the last passage went to an app, not removing")
+            if final { finalMessage("Nothing to scratch") }
+            return
+        }
         // The passage to take back may still be queued behind an earlier
         // ⌘V (or not yet read by the app): Backspace now deleted the text
         // BEFORE it, and the paste then landed anyway. Wait for it.

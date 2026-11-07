@@ -192,7 +192,9 @@ enum DictationText {
         /// Attach punctuation to the last word, replacing a recognizer-added
         /// terminator ("period." → ".", "comma," → ",").
         func attach(_ punct: String) {
-            while let last = out.last, last.isPunctuation, last != "”", last != "\"", last != ")" {
+            // Only a terminator the recognizer added: "50%" and "players'"
+            // keep their own symbols.
+            while let last = out.last, ".,;:!?…".contains(last) {
                 out.removeLast()
             }
             out += punct
@@ -319,7 +321,9 @@ enum DictationText {
                 guard tokens[i ..< i + n].map(bare) == cue else { continue }
                 // The cue must follow a clause break ("Monday, no") and the
                 // cue itself must end one ("no," / "no —") or be "I mean".
-                let prevBreak = endsClause(tokens[i - 1])
+                // A comma-like break only: after ". ? !" the cue starts a new
+                // sentence ("That's fine. Actually, let's wait.").
+                let prevBreak = tokens[i - 1].last.map { ",;:—–-".contains($0) } ?? false
                 let cueBreak = endsClause(tokens[i + n - 1]) || cue == ["i", "mean"] || cue == ["ik", "bedoel"] || cue == ["ich", "meine"]
                 guard prevBreak, cueBreak else { continue }
                 // Replacement span: words after the cue until a clause end.

@@ -464,6 +464,10 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     // MARK: - Capture graph
 
     private func setupCapture() async throws {
+        // Still the last meeting's file until the new one is named below: a
+        // start that failed before then deleted that meeting's audio in the
+        // cleanup (its tracks may not be compressed or rebuilt yet).
+        fileURL = nil
         // 0. Apple's echo filter, before the aggregate reads the mic's
         //    format (bringing it up can change that format). Skipped on
         //    headphones: no echo to remove, and it would still turn every

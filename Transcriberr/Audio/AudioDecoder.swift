@@ -151,6 +151,10 @@ nonisolated struct AudioDecoder: Sendable {
                 draining = false
             }
         }
+        if let readError = feed.readError {
+            // Said out loud: a short transcript must be traceable to this.
+            AppLog.warn("decoder", "read failed at frame \(f.framePosition) of \(f.length) in \(file.lastPathComponent), keeping what was decoded: \(readError.localizedDescription)")
+        }
         AppLog.info("decoder", "AVAudioFile fallback decoded \(out.count) samples from \(file.lastPathComponent)")
         return out
     }
@@ -336,6 +340,9 @@ nonisolated final class ConverterInput: @unchecked Sendable {
     private var fed = false
     /// The file ran out (or failed to read) while feeding.
     private(set) var reachedEOF = false
+    /// A read that failed before the end of the file: the decode stops
+    /// there, keeping what it has (a damaged file is salvaged, not lost).
+    private(set) var readError: Error?
 
     /// One buffer, then `whenDone` (`.noDataNow` for a stream that goes on,
     /// `.endOfStream` for the last one).
@@ -356,7 +363,10 @@ nonisolated final class ConverterInput: @unchecked Sendable {
                 if buffer.frameLength == 0 { reachedEOF = true; status.pointee = .endOfStream; return nil }
                 status.pointee = .haveData
                 return buffer
-            } catch { reachedEOF = true; status.pointee = .endOfStream; return nil }
+            } catch {
+                if file.framePosition < file.length { readError = error }
+                reachedEOF = true; status.pointee = .endOfStream; return nil
+            }
         }
         if fed { status.pointee = whenDone; return nil }
         fed = true

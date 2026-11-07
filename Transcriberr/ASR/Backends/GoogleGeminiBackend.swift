@@ -1,8 +1,7 @@
 import Foundation
 import AVFoundation
 
-/// Google Gemini API backend — the closest cloud equivalent to the Android
-/// Gemma 4 audio path: one model handles audio in + text out.
+/// Google Gemini API backend: one model handles audio in + text out.
 actor GoogleGeminiBackend: ASRBackend {
     nonisolated let id = "gemini"
     private(set) var isReady = false
@@ -46,8 +45,8 @@ actor GoogleGeminiBackend: ASRBackend {
         let pcmData = try wavData(samples: samples, sampleRate: 16_000)
         let b64 = pcmData.base64EncodedString()
 
-        // `languages` is a Set: `.first` named an arbitrary one of several
-        // hints, and speech in the others came back translated or garbled.
+        // `languages` is a Set: `.first` would name an arbitrary one of several
+        // hints, and speech in the others would come back translated or garbled.
         let names = languages.sorted()
         let action = translateTo == nil
             ? (names.count == 1
@@ -100,8 +99,8 @@ actor GoogleGeminiBackend: ASRBackend {
 
         // A 200 with no text part is a REFUSAL, not an empty chunk —
         // finishReason SAFETY or MAX_TOKENS returns exactly this. Swallowing
-        // it as "" made the runner record a chunk that produced no text and
-        // the run still report success, so the audio vanished silently.
+        // it as "" would make the runner record a chunk that produced no text
+        // and the run still report success, so the audio would vanish silently.
         // A silent chunk is an empty STOP, and stays a valid empty chunk.
         return try Self.parseTextResponse(data, allowEmpty: true)
     }
@@ -145,8 +144,8 @@ actor GoogleGeminiBackend: ASRBackend {
         let (data, resp) = try await CloudHTTP.session.data(for: req)
         try ensureOK(resp, data: data)
         // Never "" on a reply it could not read: PostProcessor's length guard
-        // caught the empty case, but a MAX_TOKENS reply cut mid-sentence
-        // passed it and was saved as a finished summary.
+        // catches the empty case, but a MAX_TOKENS reply cut mid-sentence
+        // passes it and would be saved as a finished summary.
         return try Self.parseTextResponse(data, allowEmpty: false)
     }
 
@@ -172,7 +171,7 @@ actor GoogleGeminiBackend: ASRBackend {
 
     /// The reply's visible text, or an error for anything but a finished
     /// one: SAFETY, RECITATION and MAX_TOKENS can all carry partial text,
-    /// which used to be returned as if it were complete. Thought parts are
+    /// which must not be returned as if it were complete. Thought parts are
     /// never part of the answer.
     nonisolated static func parseTextResponse(_ data: Data, allowEmpty: Bool) throws -> String {
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

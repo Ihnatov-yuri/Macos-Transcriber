@@ -69,12 +69,11 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
 
     /// Which chip runs Whisper's two halves.
     ///
-    /// Default `ane` again since v3.15.9: on 2026-10-01 two long Super runs
-    /// with the decoder on the GPU froze the Mac (GPU page faults, then
-    /// screen artifacts). `split` stays selectable (`whisper.compute`).
-    /// It was the default from v3.13.0. Why it was chosen: with both halves on
-    /// the Neural Engine (WhisperKit's default) a Super read used ~0.5 of 12 CPU cores and
-    /// left the GPU idle, and two tracks read "in parallel" queued for the
+    /// Default `ane`: two long Super runs with the decoder on the GPU froze
+    /// the Mac (GPU page faults, then screen artifacts). `split` stays
+    /// selectable (`whisper.compute`) because it is faster: with both halves on
+    /// the Neural Engine (WhisperKit's default) a Super read uses ~0.5 of 12 CPU cores and
+    /// leaves the GPU idle, and two tracks read "in parallel" queue for the
     /// one Neural Engine. Measured with `transcriberrcli whisperbench` on
     /// the uk-a slice's two 5-min tracks (M3 Pro):
     ///   ane 296 s · gpu 204 s · split 184 s · encgpu 313 s
@@ -165,12 +164,12 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     }
 
     /// The build in progress. Three chunks that time out together each ask
-    /// for a rebuild, and actor reentrancy let each start its own ~3 GB
-    /// WhisperKit; they now share one.
+    /// for a rebuild, and they share this one: actor reentrancy would let
+    /// each start its own ~3 GB WhisperKit.
     private var building: Task<Void, Error>?
     /// Bumped by release(). A build that finishes under an older one drops
-    /// its pipeline: it used to store it and set `isReady` after the
-    /// release, bringing the released engine back.
+    /// its pipeline: storing it and setting `isReady` after the release
+    /// would bring the released engine back.
     private var generation = 0
 
     private func rebuild() async throws {
@@ -208,8 +207,8 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             // On disk: load the folder, no network. By name, WhisperKit runs
             // its downloader on every load, which first asks Hugging Face
             // for the repo's file list even with every file cached; with
-            // Hugging Face unreachable that request timed out after a minute
-            // and the whole Super run failed (2026-11-04). The models only
+            // Hugging Face unreachable that request times out after a minute
+            // and the whole Super run fails. The models only
             // change with the app (each version pins them), so the folder
             // is all a load needs. The tokenizer is found in WhisperKit's
             // cache folder the same way.
@@ -243,8 +242,8 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     }
 
     /// Wedge recovery: build a fresh pipeline first, then swap it in. The
-    /// default release-then-load left `pipe` nil for the whole reload, and
-    /// every other chunk in flight failed with "not loaded", which killed
+    /// default release-then-load would leave `pipe` nil for the whole reload,
+    /// and every other chunk in flight would fail with "not loaded", killing
     /// the run. The hung call keeps the old pipeline until it returns.
     ///
     /// Only when one of this engine's own calls is stuck: in Super the
@@ -349,13 +348,12 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         let call = beginCall(callProgress)
         defer { endCall(call) }
         // Our own TranscribeTask with its own Progress, not `pipe.transcribe`.
-        // Chunks run three at a time on ONE WhisperKit (shared gate since
-        // v3.8.0), and WhisperKit is a plain class whose transcribe swaps a
-        // shared `progress` property at the end of every call: two calls
-        // finishing together released the same object twice — a SIGSEGV in
-        // swift_release_dealloc under runTranscribeTask, seen in a reference
-        // run on 2026-09-23. Everything else the task touches is read-only
-        // model state.
+        // Chunks run three at a time on ONE WhisperKit (shared gate), and
+        // WhisperKit is a plain class whose transcribe swaps a shared
+        // `progress` property at the end of every call: two calls finishing
+        // together would release the same object twice (a SIGSEGV in
+        // swift_release_dealloc under runTranscribeTask). Everything else
+        // the task touches is read-only model state.
         // What `transcribe` does first: models (and the tokenizer) load
         // lazily on the first call after a prewarm.
         if pipe.modelState != .loaded { try await pipe.loadModels() }
@@ -390,7 +388,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         // alive, and ends a decode that has run past its budget.
         // Chunks only: a whole-track reading (Ukrainian and other long-form
         // languages) legitimately runs for minutes and is watched by token
-        // progress alone. A short budget on it doubled the Ukrainian WER.
+        // progress alone. A short budget on it doubles the Ukrainian WER.
         let budget: TimeInterval = samples.count > 60 * 16_000 ? .infinity : Self.decodeBudget
         let callback: TranscriptionCallback = { _ in
             callProgress.touch()
@@ -406,16 +404,16 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             // A chunk that keeps failing WhisperKit's own quality checks is
             // decoded again at up to five higher temperatures, a minute and
             // more of CPU for text that is nearly always a hallucination. The
-            // runner took that for a wedge at 120 s, rebuilt the 3 GB pipeline
-            // next to the still-running decode, and lost the chunk (log of
-            // 2026-10-01: 5 recoveries in 15 minutes; the Mac froze). Parakeet's
+            // runner would take that for a wedge at 120 s, rebuild the 3 GB
+            // pipeline next to the still-running decode, and lose the chunk
+            // (measured: 5 recoveries in 15 minutes; the Mac froze). Parakeet's
             // reading of the chunk stands in the vote.
             AppLog.warn("whisper", String(
                 format: "gave up on a %.0fs chunk after %.0fs (decode budget)",
                 Double(samples.count) / 16_000, decodeSeconds))
-            // Thrown, never returned as "": an empty reading looked like
+            // Thrown, never returned as "": an empty reading looks like
             // silence, so a busy Mac (20 chunks at once in a bench, all past
-            // the budget) gave empty text and no error. Super keeps
+            // the budget) would give empty text and no error. Super keeps
             // Parakeet's reading of the chunk; a Whisper run retries it once
             // and then says how many parts have no text.
             throw DecodeBudgetExceeded(chunkSeconds: Double(samples.count) / 16_000, seconds: decodeSeconds)
@@ -530,7 +528,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         return (r.language, exp(Double(r.langProbs[r.language] ?? -.infinity)))
     }
 
-    // MARK: - Text generation (not supported — Gemma's job)
+    // MARK: - Text generation (not supported, the text model's job)
 
     func generateText(
         systemInstruction: String,
@@ -562,9 +560,9 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             let a = Int(from * 16_000)
             guard a < samples.count - win / 2 else { return nil }   // padding
             // Round the SAMPLE index up, not the seconds: rounding `to` to a
-            // whole second first measured up to 1 s past the line, so a
-            // phantom right before real speech was weighed with that speech
-            // and kept.
+            // whole second first would measure up to 1 s past the line, so a
+            // phantom right before real speech would be weighed with that
+            // speech and kept.
             var b = to.isFinite ? Int((to * 16_000).rounded(.up)) : samples.count
             if b - a < win { let mid = (a + b) / 2; b = mid + win / 2; lo = max(0, mid - win / 2) } else { lo = a }
             hi = min(samples.count, max(b, lo + win))
@@ -613,7 +611,7 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
     /// Whisper's auto-detect on Arabic speech often lands on Maltese (a
     /// Latin-script cousin) or an Arabic-script neighbour, and then writes
     /// Arabic in Latin letters or the wrong script. Seen on a Gulf Arabic
-    /// customer-service demo (2026-09-29): "u l-labtubat, u also minn STC".
+    /// customer-service demo: "u l-labtubat, u also minn STC".
     /// None of these is a language this app's users record, so when one wins
     /// and Arabic has a real share, Arabic it is.
     static func resolveAutoLanguage(top: String, probs: [String: Double]) -> String {

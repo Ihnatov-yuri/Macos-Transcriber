@@ -55,7 +55,7 @@ nonisolated final class UIPrefs: @unchecked Sendable {
     /// 2 = Samsung-style fine turns that keep every interjection separate.
     var turnCoalesceGapSeconds: Double { didSet { defaults.set(turnCoalesceGapSeconds, forKey: Key.turnGap) } }
     /// Super merge: sequential chunks WITH preceding-transcript context for
-    /// Gemma arbitration (max quality) instead of the 3-wide pipeline (speed).
+    /// the arbiter (max quality) instead of the 3-wide pipeline (speed).
     var superMaxQuality: Bool { didSet { defaults.set(superMaxQuality, forKey: Key.superMaxQuality) } }
     /// Live captions check for speech before the engine reads. On unless
     /// turned off; LiveTranscriber reads the key, so it applies mid-recording.
@@ -95,8 +95,8 @@ nonisolated final class UIPrefs: @unchecked Sendable {
         ensembleEngineB = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.ensembleEngineB) ?? "") ?? EnsembleBackend.defaultEngineB
 
         // Sanitize on EVERY launch: stored selections must be able to do
-        // their job (audio-capable for transcription/live). A saved Gemma
-        // audio choice (LiteRT, gone in v5.4) falls back to Parakeet here.
+        // their job (audio-capable for transcription/live). A saved choice of
+        // the retired Gemma audio engine falls back to Parakeet here.
         if !defaultBackend.supportsAudio { defaultBackend = .parakeet }
         if !textEngine.supportsTextGeneration { textEngine = .localText }
         if !liveEngine.supportsLive { liveEngine = .parakeet }

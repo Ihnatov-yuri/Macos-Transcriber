@@ -7,10 +7,10 @@ import Foundation
 ///
 /// `WhisperKit.detectLangauge` returns a probability for the winning
 /// language only: its `langProbs` holds one entry. Every decision that
-/// weighs a second language against it read 0 for that language, so with
-/// English + Arabic selected, a chunk Whisper heard as Nynorsk (`nn`) went
-/// to Arabic on the alphabetical tie-break — an English meeting was decoded
-/// as Arabic on 2026-10-01. Same steps as WhisperKit's own detection, with a
+/// weighs a second language against it would read 0 for that language, so
+/// with English + Arabic selected, a chunk Whisper heard as Nynorsk (`nn`)
+/// would go to Arabic on the alphabetical tie-break and an English meeting
+/// would be decoded as Arabic. Same steps as WhisperKit's own detection, with a
 /// sampler that keeps the softmax over every language token.
 nonisolated enum WhisperLanguageProbe {
     struct Result {

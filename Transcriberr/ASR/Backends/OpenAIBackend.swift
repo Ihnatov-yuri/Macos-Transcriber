@@ -41,12 +41,12 @@ actor OpenAIBackend: ASRBackend {
         guard let key = apiKey, !key.isEmpty else {
             throw ASRError.modelLoadFailed(reason: "OpenAI API key missing")
         }
-        // Same floor as the local engines: an empty chunk failed the WAV
+        // Same floor as the local engines: an empty chunk fails the WAV
         // buffer alloc and one under 0.1 s is an HTTP 400, so a tap-length
-        // dictation showed an error instead of nothing.
+        // dictation would show an error instead of nothing.
         guard samples.count >= 8_000 else { return "" }   // < 0.5 s @ 16 kHz
 
-        // Write the chunk to a temp WAV — same approach we use for Gemma.
+        // Write the chunk to a temp WAV for the multipart upload.
         let wav = try writeTempWav(samples: samples, sampleRate: 16_000)
         defer { try? FileManager.default.removeItem(at: wav) }
 
@@ -122,7 +122,7 @@ actor OpenAIBackend: ASRBackend {
     }
 
     /// The reply's text, or an error unless it finished: `length` is a
-    /// reply cut at max_tokens, which used to be saved as a whole output.
+    /// reply cut at max_tokens, which would otherwise be saved as a whole output.
     static func parseTextResponse(_ data: Data) throws -> String {
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let choice = (json?["choices"] as? [[String: Any]])?.first else {
@@ -157,9 +157,9 @@ actor OpenAIBackend: ASRBackend {
         }
     }
 
-    /// nil = let the API detect it. The old fallback sent the lowercased
-    /// name ("german"), which the endpoint rejects with HTTP 400, so every
-    /// dictation chunk in German, French, Spanish… failed.
+    /// nil = let the API detect it. Never the lowercased name ("german"):
+    /// the endpoint rejects it with HTTP 400, so every dictation chunk in
+    /// German, French, Spanish… would fail.
     private func iso639(_ name: String) -> String? {
         if let code = WhisperBackend.languageCode(from: [name]) { return code }
         let lower = name.lowercased()

@@ -70,7 +70,7 @@ actor AnthropicBackend: ASRBackend {
         }
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         // A reply cut at max_tokens is not a finished output (as for OpenAI
-        // and Gemini): it used to be saved as a whole summary.
+        // and Gemini): it would otherwise be saved as a whole summary.
         if json?["stop_reason"] as? String == "max_tokens" {
             throw ASRError.backendUnavailable(reason: "Claude's answer was cut off at its length limit.")
         }

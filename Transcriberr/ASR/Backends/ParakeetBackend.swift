@@ -5,15 +5,12 @@ import os
 /// Real speech-to-text backend: NVIDIA Parakeet TDT 0.6B v3 running on the
 /// Apple Neural Engine via FluidAudio's CoreML port.
 ///
-/// Why this exists: Gemma 4's audio tower (E2B/E4B via MLX) demonstrably
-/// hallucinates — on clean TTS audio the reference `gemma4-cli` produced
-/// invented text ("The dog runs, the dog jumps…"), and on real recordings it
-/// fabricated entire conversations. Parakeet is a *dedicated* ASR model:
+/// Parakeet is a *dedicated* ASR model:
 /// ~100× realtime on ANE, state-of-the-art English WER, 25 European
 /// languages (incl. Dutch + Ukrainian), automatic punctuation + capitals.
 ///
-/// Division of labor: Parakeet produces the transcript; Gemma handles all
-/// text work (summaries, cleanup, translation, rewrite, titles).
+/// Division of labor: Parakeet produces the transcript; the text engines
+/// handle all text work (summaries, cleanup, translation, rewrite, titles).
 ///
 /// Models (~1 GB) auto-download from HuggingFace on first `load()` and are
 /// cached in Application Support — `modelPath` is ignored.
@@ -49,8 +46,8 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// (actor reentrancy let each start its own).
     private var building: Task<Void, Error>?
     /// Bumped by release(). A build that finishes under an older one drops
-    /// its manager: it used to store it and set `isReady` after the
-    /// release, bringing the released engine back.
+    /// its manager: storing it and setting `isReady` after the release
+    /// would bring the released engine back.
     private var generation = 0
 
     private func rebuild() async throws {
@@ -118,9 +115,9 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     }
 
     /// Wedge recovery: build a fresh manager first, then swap it in. The
-    /// default release-then-load called `cleanup()` on the manager the other
-    /// in-flight chunks (and dictation, which shares this instance) were
-    /// still using, and left it nil for the reload. The old one is dropped,
+    /// default release-then-load would call `cleanup()` on the manager the
+    /// other in-flight chunks (and dictation, which shares this instance) are
+    /// still using, and leave it nil for the reload. The old one is dropped,
     /// not cleaned up; the hung call keeps it until it returns.
     ///
     /// Only when one of this engine's own calls is stuck: in Super the
@@ -188,7 +185,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
 
         // `previousContext` and `translateTo` are prompt-level concepts for
         // LLM backends — Parakeet transcribes verbatim (translation happens
-        // in post-processing via Gemma).
+        // in post-processing via the text engine).
         var state = try TdtDecoderState()
         let call = beginCall()
         defer { endCall(call) }
@@ -208,9 +205,8 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         // Diarization: unlike LLM backends, Parakeet can't be *prompted* to
         // label speakers — but it returns per-token timestamps, and the
         // runner hands us the diarizer's speaker regions as `speakerHints`
-        // (chunk-relative times). Intersect the two and emit the same
-        // "Speaker N: …" line format Gemma produced, so the runner's
-        // existing parsing/persistence path works unchanged — with
+        // (chunk-relative times). Intersect the two and emit the
+        // "Speaker N: …" line format the runner parses and persists, with
         // word-level turn boundaries instead of prompt guesses.
         if diarize, !speakerHints.isEmpty,
            let timings = result.tokenTimings, !timings.isEmpty {
@@ -305,8 +301,8 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         }
         // Marker-independent fallback: some FluidAudio paths return token
         // timings WITHOUT SentencePiece "▁" markers, collapsing the grouping
-        // into one giant pseudo-word — which zeroed the ensemble's agreement
-        // score and escalated every chunk to LLM arbitration. When that
+        // into one giant pseudo-word, which would zero the ensemble's agreement
+        // score and escalate every chunk to LLM arbitration. When that
         // happens, derive words from the (properly spaced) result text with
         // the chunk-level confidence.
         if words.count <= 1, result.text.split(separator: " ").count > 3 {
@@ -317,11 +313,8 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
                 ScoredWord(
                     surface: String(w),
                     norm: TranscriptHygiene.wordKey(w),
-                    // Capped below typical per-word confidences so an engine
-                    // with REAL word-level scores (Whisper) can win specific
-                    // rare terms without steamrolling the whole chunk.
-                    // Chunk-level confidence as-is: Parakeet calibrates it,
-                    // and the old 0.88 cap systematically handicapped
+                    // Chunk-level confidence as-is, not capped: Parakeet
+                    // calibrates it, and a cap (0.88) would handicap
                     // Parakeet in every ROVER vote against Whisper's
                     // calibrated word probabilities.
                     confidence: result.confidence
@@ -349,7 +342,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
             let isWordStart = t.token.hasPrefix("▁") || t.token.hasPrefix(" ")
             // Strip the word-start marker in BOTH spellings: some decoder
             // paths emit a literal leading space instead of "▁", and leaving
-            // it in the surface produced double spaces in the merged text.
+            // it in the surface would produce double spaces in the merged text.
             let piece = t.token
                 .replacingOccurrences(of: "▁", with: "")
                 .trimmingCharacters(in: .whitespaces)
@@ -369,7 +362,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
         return out
     }
 
-    // MARK: - Text generation (not supported — Gemma's job)
+    // MARK: - Text generation (not supported, the text model's job)
 
     func generateText(
         systemInstruction: String,

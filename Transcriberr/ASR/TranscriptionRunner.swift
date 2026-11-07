@@ -1,11 +1,11 @@
 import Foundation
 import os
 
-/// End-to-end transcription of a single audio file via Gemma 4 (or any other
-/// `ASRBackend`). Mirror of Android's `asr/TranscriptionRunner.kt`.
+/// End-to-end transcription of a single audio file via any `ASRBackend`.
+/// Mirror of Android's `asr/TranscriptionRunner.kt`.
 ///
 ///  1. Decode + VAD silence scan + VAD-aligned chunk slicing  (AudioDecoder)
-///  2. Optional sherpa diarization pre-pass for hybrid mode    (DiarizationRunner)
+///  2. Optional diarization pre-pass for hybrid mode          (DiarizationRunner)
 ///  3. Chunk loop:
 ///       - resolve speaker hints for this window
 ///       - backend.transcribeChunk(...)
@@ -77,10 +77,9 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             let task = Task { @MainActor in
                 // One run at a time, including a cancelled one still winding
                 // down: the job manager moves on the moment it cancels, and
-                // a Super run that has not yet noticed kept its Whisper calls
-                // (and its writes to the SHARED ensemble's timeline) going
-                // next to the new run — seen after a cancel + re-run on
-                // 2026-09-25.
+                // a Super run that has not yet noticed would keep its Whisper
+                // calls (and its writes to the SHARED ensemble's timeline)
+                // going next to the new run.
                 await Self.runSlot.acquire()
                 defer { Self.runSlot.release() }
                 do {
@@ -118,21 +117,19 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     }
 
     /// Echo-cancel the mic track against the system track and chunk both,
-    /// OFF the main actor. `nonisolated` is load-bearing: `runImpl` is
-    /// `@MainActor`, so this work used to run inline on the main thread —
-    /// an NLMS filter with 1024 taps plus two full-file silence scans over
-    /// an entire meeting, which is seconds of straight-line CPU. The app
-    /// froze solid from the moment Run was pressed until the first chunk
-    /// went out, and the "Cancelling echo…" stage never even got a chance to
-    /// draw. Same work, same result, nothing blocked.
+    /// OFF the main actor. `@concurrent` is load-bearing: `runImpl` is
+    /// `@MainActor`, and inline there this work (an NLMS filter with 1024
+    /// taps plus two full-file silence scans over an entire meeting, seconds
+    /// of straight-line CPU) would freeze the app solid from the moment Run
+    /// is pressed until the first chunk goes out, and the "Cancelling echo…"
+    /// stage would never get a chance to draw.
     ///
     /// `mic` is `inout` and comes back EMPTY: the raw track is dead once the
     /// canceller has read it, and releasing it here rather than when the
-    /// caller's scope ends takes a whole-meeting buffer off the peak. A
-    /// split-track run used to hold five full copies of the audio at once
-    /// (raw mic, cleaned mic, sys, both chunk sets — over 2 GB for a
-    /// two-hour meeting); each copy now dies as soon as its successor
-    /// exists, and the peak is three.
+    /// caller's scope ends takes a whole-meeting buffer off the peak. Each
+    /// full copy of the audio (raw mic, cleaned mic, sys, both chunk sets)
+    /// dies as soon as its successor exists, so a split-track run peaks at
+    /// three copies instead of five (five is over 2 GB for a two-hour meeting).
     ///
     /// Also where the call track has sound at all (`sysSound`, see
     /// `VoiceActivity.soundRanges`), for finalize to tell a short reply from
@@ -183,7 +180,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
 
     /// An auto-language run is pinned to the other-languages model (large-v3)
     /// before any audio is read, so a Ukrainian meeting recorded without a
-    /// language never reached Whisper UK. Reads the language of the loudest
+    /// language would never reach Whisper UK. Reads the language of the loudest
     /// 30 s windows with that model, which an auto run loads anyway, and pins
     /// the Ukrainian model when at least half of them are Ukrainian. Costs a
     /// second model load only then; on any failure the run keeps its model.
@@ -261,7 +258,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         // echo-by-timing in split-track meetings. Max quality path only.
         // Read ONCE per run: the whole-track reading below and the two-pass
         // arbitration (`ensembleTwoPass`) are one mode. Read again minutes
-        // later, a toggle mid-run split it: the reading paid for and then no
+        // later, a toggle mid-run would split it: the reading paid for and then no
         // arbitration, or arbitration without the reading.
         let superMaxQuality = params.backend == .ensemble && UserDefaults.standard.bool(forKey: "ui.superMaxQuality")
         let prepareTimeline = superMaxQuality
@@ -294,7 +291,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                         // canceller's scores of the subtracted one: there the
                         // echo around a short reply ("Yeah.") pulls its window
                         // under the bar and the reply is lost from the user's
-                        // lines (22 Oct call, 2026-10-27). Worth the 20-odd s.
+                        // lines. Worth the 20-odd s.
                         voice = try await VoiceTimeline.compute(mic: mic, sys: sysSamples, print: voiceprint) { f in
                             continuation.yield(.stage(text: "Finding your voice… \(Int(f * 100))%", fraction: 0.05 + 0.01 * f))
                         }
@@ -421,14 +418,14 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             try Task.checkCancellation()
         } else if let ens = backend as? EnsembleBackend {
             // The ensemble is shared across runs: without this, a run that
-            // skips the timeline (English, one track) read the PREVIOUS
+            // skips the timeline (English, one track) would read the PREVIOUS
             // recording's long-form Whisper words for its chunk windows.
             await ens.clearTimeline()
         }
 
         // The live draft of a Super run shows each mic chunk with the same
         // mic cleanup finalize applies (loops, stock words, echo, the speech
-        // timeline) — raw, a speaker call scrolled past "So. So. So." and
+        // timeline) — raw, a speaker call would scroll past "So. So. So." and
         // "I'm going." x14 for half an hour. Only what is SHOWN changes;
         // `allSegments` stays raw for finalize.
         var liveTimelines: [Int: [TimedWord]] = [:]
@@ -456,11 +453,11 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             switch params.backend {
             case .parakeet, .parakeetV2, .parakeetUK, .whisper: return 3
             case .ensemble:
-                // Always pipeline. Max quality no longer serializes chunks —
-                // measured: 98% of chunks agree and never needed context, so
-                // sequential mode paid 20 minutes for 5 arbitrations. Quality
-                // now comes from the SECOND pass: disputed chunks arbitrated
-                // with context from BOTH sides of the finished transcript.
+                // Always pipeline, max quality included. Measured: 98% of
+                // chunks agree and need no context, so serializing chunks
+                // costs 20 minutes for 5 arbitrations. Quality comes from the
+                // SECOND pass: disputed chunks arbitrated with context from
+                // BOTH sides of the finished transcript.
                 return 3
             default: return 1
             }
@@ -640,8 +637,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 while submitted < min(pipelineWidth, chunks.count) { submit(submitted); submitted += 1 }
                 // Consume the finished in-order prefix as results arrive, so
                 // text appears while pass 1 runs. Consuming only after the
-                // whole group showed nothing until the last chunk, and a
-                // chunk that threw threw away every finished one with it.
+                // whole group would show nothing until the last chunk, and a
+                // chunk that threw would throw away every finished one with it.
                 var nextToConsume = 0
                 var finished = 0
                 while let (idx, raw) = try await group.next() {
@@ -692,8 +689,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         AppLog.info("runner", "first pass done — \(allSegments.count) segments, \(lowConfidenceChunks.count) low-confidence chunks")
 
         // ---------- max-quality second pass: arbitrate disputed chunks ----------
-        // Agreement < 0.8 (was < 0.5 inline): moderate disagreements now get
-        // the expensive judgment too, because it's only spent where engines
+        // Agreement < 0.8: moderate disagreements get the expensive
+        // judgment too, because it's only spent where engines
         // actually fight — and the arbiter sees text BEFORE AND AFTER the
         // disputed chunk plus the user's vocabulary.
         var spellingFixes: [MeetingBrief.Fix] = []
@@ -723,10 +720,10 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 }
             }
             let rich = richBox.all()
-            // Gemma's rulings, by language (`ui.superGemmaRulings`: english
+            // The arbiter's rulings, by language (`ui.superGemmaRulings`: english
             // (default) | all | off). Measured twice on the reference slices:
             // in English they help a little (en-a 9.9 → 8.9% WER, 13.1 →
-            // 12.1% on the older build; en-b unchanged); in Ukrainian they do
+            // 12.1%; en-b unchanged); in Ukrainian they do
             // not (16.5 vs 16.7%, and uk-b 12.2 → 15.2% WORSE). A per-stretch
             // "A or B" redesign was tried and lost in both: on 40 stretches
             // the reference decides, Gemma chose right 21 times, the word
@@ -736,10 +733,10 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             let isEnglishRun = !params.languages.isEmpty && params.languages.allSatisfy { $0.lowercased() == "english" }
             let gemmaRulings = rulingsPolicy == "all" || (rulingsPolicy == "english" && isEnglishRun)
             // Worst disagreements first, bounded: cross-family engine pairs
-            // (Whisper+Gemma on Ukrainian) can dispute 70% of chunks — 22
-            // unbounded sequential Gemma calls froze a run for tens of
-            // minutes. Spend the expensive judgment where it matters most.
-            // Measured on the reference slices (2026-09-23): no rulings vs 10
+            // can dispute 70% of chunks, and 22 unbounded sequential arbiter
+            // calls would freeze a run for tens of minutes. Spend the
+            // expensive judgment where it matters most.
+            // Measured on the reference slices: no rulings vs 10
             // vs unbounded moved WER by ±1.5 points either way per slice, net
             // ~0 — the cap is not what limits quality, so it stays.
             let disputes = !gemmaRulings ? [] : rich.filter { $0.value.agreement < 0.8
@@ -763,8 +760,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                     fraction: 0.90 + 0.05 * Double(k) / Double(max(1, disputes.count))
                 ))
                 let ctx = neighborContext(around: chunk, in: allSegments)
-                // Bounded: an unwatched arbitration hung the entire disputes
-                // phase when Gemma wedged. On timeout, recover the engine and
+                // Bounded: an unwatched arbitration would hang the entire
+                // disputes phase if the arbiter wedged. On timeout, recover the engine and
                 // keep the confidence-voted text for this chunk.
                 let ruled: String
                 do {
@@ -775,7 +772,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                     }
                 } catch is CancellationError {
                     // Cancelled, not wedged: rebuilding a healthy engine here
-                    // only delayed the next queued job.
+                    // would only delay the next queued job.
                     throw CancellationError()
                 } catch {
                     AppLog.warn("runner", "arbitration wedged on chunk \(idx + 1) — recovering, keeping voted text")
@@ -1064,7 +1061,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             // segments are too long to time, but a mic chunk with none of
             // the user's voice in it is still not the user.
             // Any of the user's voice in the chunk keeps it: a chunk is up to
-            // ~30 s, and a 4 s "yes, Tuesday works" in it fell under the
+            // ~30 s, and a 4 s "yes, Tuesday works" in it would fall under the
             // coverage rule that is meant for timed pieces.
             segments = segments.filter { seg in
                 guard seg.speakerKey == "ME" else { return true }
@@ -1100,20 +1097,20 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
 
             // Split-track: a call-audio piece outside every diarizer region
             // (word-timed pieces often are) goes to the speaker NEAREST in
-            // time. It used to become "GUEST", a speaker of its own, in every
-            // meeting with two or more other voices.
+            // time. Otherwise it would become "GUEST", a speaker of its own,
+            // in every meeting with two or more other voices.
             //
             // One or two words far from any speech the diarizer heard are
             // dropped when the call track is silent there, or when they hold
             // no letter. Far alone is no proof: the diarizer drops speech
             // under a second, so a quick reply between two stretches of the
-            // user talking is always far, and 4.3.3 deleted real ones ("yes",
-            // "Yeah.", "Добре,"). Measured on a Ukrainian call (2026-10-18):
+            // user talking is always far, and distance alone would delete real
+            // ones ("yes", "Yeah.", "Добре,"). Measured on a Ukrainian call:
             // every far piece had a short burst under it; Whisper heard
             // "Угу" where Parakeet wrote "10", "100%", "0%" and ".", and
             // "Добре" where it wrote "Добре,". A backchannel misread comes
             // out as digits or punctuation, a reply as a word. Without
-            // `sysSound` (a dump from before 4.4.1), distance alone.
+            // `sysSound` (an older dump), distance alone.
             if splitTracks, !diarSegments.isEmpty {
                 var dropped: [String] = []
                 segments = segments.compactMap { seg in
@@ -1283,7 +1280,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             // User-tunable (Settings → Engines → Speaker turns): 30 s =
             // smooth blocks, 2 s = fine Samsung-style turns.
             let gap = UserDefaults.standard.double(forKey: "ui.turnCoalesceGapSeconds")
-            // Unlabeled segments stay as chunks: nil == nil merged every
+            // Unlabeled segments stay as chunks: nil == nil would merge every
             // chunk of a run whose diarization failed into one segment.
             if var last = out.last,
                last.speakerKey != nil,
@@ -1408,7 +1405,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
 
     /// Whether a refinement of chunk `chunkIndex` replaces `seg`. By origin
     /// when the segment knows its chunk: chunks overlap by a 1 s recap, and
-    /// the time-window rule removed the NEIGHBOUR's segments lying in it.
+    /// the time-window rule would remove the NEIGHBOUR's segments lying in it.
     /// Untagged segments fall back to that rule: fully inside the window,
     /// and same-track only (mic and sys chunks share one timeline).
     static func refinementRemoves(_ seg: RawSegment, chunkIndex: Int, chunk: AudioDecoder.Chunk,
@@ -1437,7 +1434,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             .joined(separator: " ")
         // Labelled and capped separately: one "preceding" block with the
         // following speech appended, cut from the front to 400 characters,
-        // told the arbiter that what came after had come before.
+        // would tell the arbiter that what came after had come before.
         var parts: [String] = []
         if !before.isEmpty { parts.append("Before this segment: …\(before.suffix(300))") }
         if !after.isEmpty { parts.append("After this segment: \(after.prefix(300))…") }
@@ -1450,12 +1447,12 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     /// 6.9 dB.
     nonisolated static let echoDominatedMicDB = 12.0
 
-    /// The name on the user's lines, as mic chunks get it at parse time.
-    /// A nil name would let the self-introduction pass name ME after a
-    /// quoted "I'm Joe", and a run starting with it render unnamed.
     /// The speaker key of a split-track meeting's microphone lines.
     nonisolated static let micSpeakerKey = "ME"
 
+    /// The name on the user's lines, as mic chunks get it at parse time.
+    /// A nil name would let the self-introduction pass name ME after a
+    /// quoted "I'm Joe", and a run starting with it render unnamed.
     nonisolated static func meName(_ myName: String?) -> String {
         let n = (myName ?? "").trimmingCharacters(in: .whitespaces)
         return n.isEmpty ? "Me" : n
@@ -1526,10 +1523,10 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         speakerHints: [SpeakerHint],
         continuation: AsyncThrowingStream<ASREvent, Error>.Continuation
     ) async throws -> String {
-        // The ensemble runs two engines + a Gemma merge per chunk — give it
+        // The ensemble runs two engines + a text-model merge per chunk — give it
         // more headroom than a single engine before declaring a wedge. A
         // healthy ensemble chunk finishes in well under a minute even with
-        // lock queueing; 300 s just meant five minutes of frozen UI.
+        // lock queueing; 300 s would mean five minutes of frozen UI.
         let timeout: TimeInterval = params.backend == .ensemble ? 120 : Self.chunkTimeoutSeconds
         do {
             return try await withChunkTimeout(seconds: timeout) {
@@ -1544,7 +1541,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             }
         } catch let gaveUp as WhisperBackend.DecodeBudgetExceeded {
             // Whisper ran out of time (a busy Mac). Once more, then the part
-            // stays empty and the run's note says so: it used to come back
+            // stays empty and the run's note says so, instead of coming back
             // as "" with no error at all.
             AppLog.warn("runner", "\(gaveUp.localizedDescription) Trying the part once more.")
             do {
@@ -1558,8 +1555,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 RunGapLog.record(.outOfTime)
                 return ""
             } catch ASRError.chunkTimeout {
-                // The retry hung instead: thrown from here it skipped the
-                // wedge ladder below and ended the whole run over one part.
+                // The retry hung instead: thrown from here it would skip the
+                // wedge ladder below and end the whole run over one part.
                 AppLog.error("runner", "chunk wedged on its retry — skipping it, recovering engine for the rest")
                 RunGapLog.record(.wedged)
                 try? await backend.recoverWedge(modelPath: params.modelDirectory)
@@ -1567,8 +1564,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             }
         } catch ASRError.chunkTimeout {
             // Surgical: rebuild only the wedged engine. A full ensemble
-            // release()+load() here yanked engines from under the OTHER
-            // in-flight pipeline chunks — the watchdog killed healthy work.
+            // release()+load() here would yank engines from under the OTHER
+            // in-flight pipeline chunks, and the watchdog would kill healthy work.
             continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
             // A failed rebuild must not end the run from here: the engine
             // keeps its old instance, and the retry below either works on it
@@ -1606,9 +1603,9 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     }
 
     /// Max-quality first pass with the same recover-retry-degrade ladder as
-    /// runChunkWithRetry. This path previously had a bare 300 s timeout and
-    /// NO recovery: one wedged native call tore down the whole task group —
-    /// every "error 3" (chunkTimeout) run death traced back to it.
+    /// runChunkWithRetry. With a bare timeout and no recovery, one wedged
+    /// native call would tear down the whole task group and end the run
+    /// with "error 3" (chunkTimeout).
     @MainActor
     private func richChunkWithRetry(
         ens: EnsembleBackend,
@@ -1651,7 +1648,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     }
 
     /// Run `op` with a wall-clock deadline: `ASRError.chunkTimeout` after
-    /// `seconds`, `CancellationError` when the job is cancelled. MLX
+    /// `seconds`, `CancellationError` when the job is cancelled. Native
     /// inference doesn't cooperate with Swift cancellation (it blocks its
     /// worker thread), so `Deadline.run` races detached tasks instead of a
     /// task group — a group would pin every chunk to the full timeout, and
@@ -1718,8 +1715,6 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         return out
     }
 
-    /// Token-level Dice ≥ 0.85 on normalized words — flags echoed/looped
-    /// lines that differ by a word or two.
     /// Remove sentences from `text` that fuzzily appear in `reference`
     /// (echo of the other side, transcribed twice from two tracks). The
     /// echoed copy is acoustically degraded, so the match is lenient.
@@ -1758,7 +1753,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     }
 
     /// Tolerant token match: echo is transcribed from degraded audio, so
-    /// "schedule" often comes back "scheduled" — exact equality missed it.
+    /// "schedule" often comes back "scheduled" — exact equality would miss it.
     static func fuzzyTokenEqual(_ a: String, _ b: String) -> Bool {
         if a == b { return true }
         let maxDist = a.count >= 8 ? 2 : (a.count >= 5 ? 1 : 0)
@@ -1842,11 +1837,13 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     /// `parseSegments` returns ONE segment per chunk covering the whole 28 s
     /// window, and an order-insensitive token overlap of 0.85 is easy to hit
     /// across two chunks of a repetitive stretch (a standup round-robin, a
-    /// run of "yeah… right… okay"). That dropped 28 seconds of real
-    /// transcript on a log warning. A genuine echo is short; a whole chunk
+    /// run of "yeah… right… okay"). Unbounded, that would drop 28 seconds of
+    /// real transcript on a log warning. A genuine echo is short; a whole chunk
     /// is not.
     static let nearDuplicateMaxTokens = 25
 
+    /// Token-level Dice ≥ 0.85 on normalized words: flags echoed or looped
+    /// lines that differ by a word or two.
     static func nearDuplicate(_ a: String, _ b: String) -> Bool {
         func toks(_ s: String) -> [String] {
             s.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }

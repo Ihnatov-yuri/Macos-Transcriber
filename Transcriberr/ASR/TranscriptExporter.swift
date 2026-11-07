@@ -37,7 +37,7 @@ enum TranscriptExporter {
         var cue = 0
         for seg in segments {
             // A blank line ends an SRT cue: text carrying one (an LLM chunk
-            // with paragraphs) cut its own cue short.
+            // with paragraphs) would cut its own cue short.
             let text = seg.text.split(whereSeparator: \.isNewline)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
@@ -149,8 +149,8 @@ enum TranscriptExporter {
     }
 
     static func srtTime(_ s: Double) -> String {
-        // Round once in whole milliseconds: truncating the fraction put 2.3 s
-        // at 00:00:02,299 (binary 0.2999…), and Int() traps on NaN/inf.
+        // Round once in whole milliseconds: truncating the fraction would put
+        // 2.3 s at 00:00:02,299 (binary 0.2999…), and Int() traps on NaN/inf.
         let totalMs = s.isFinite ? Int((max(0, s) * 1000).rounded()) : 0
         let h = totalMs / 3_600_000
         let m = (totalMs % 3_600_000) / 60_000

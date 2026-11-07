@@ -43,8 +43,8 @@ nonisolated enum PersonBriefBuilder {
         var text: String
     }
 
-    /// "Write in the language of the transcript" alone did not hold: a
-    /// Ukrainian meeting came back entirely in English, the language of the
+    /// "Write in the language of the transcript" alone does not hold: a
+    /// Ukrainian meeting can come back entirely in English, the language of the
     /// prompt. The rule names the language when the text makes it clear.
     static func systemPrompt(name: String, language: String? = nil) -> String {
         let languageRule = language.map { "Write in \($0), the language of the transcript, even though these instructions are in English." }
@@ -97,7 +97,7 @@ nonisolated enum PersonBriefBuilder {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The key before 5.x keyed on the name too. Read as fresh still, so
+    /// The older key, which kept the name in. Read as fresh still, so
     /// briefs cached under it are not all read again; a rename re-reads
     /// them once, and they are saved under `key` from then on.
     static func legacyKey(transcript: String, name: String) -> String {
@@ -285,7 +285,7 @@ nonisolated enum PersonBriefBuilder {
     /// A commitment as a to-do: "Lana will share the video" reads "Share
     /// the video". One that names the person anywhere else ("Send an
     /// email to Lana") is a task someone else took on for them, which the
-    /// model misread as theirs (Gemma 4, 2026-10-24); it is dropped.
+    /// model can misread as theirs; it is dropped.
     static func task(_ text: String, name: String?) -> String? {
         guard let first = name?.split(separator: " ").first.map(String.init), !first.isEmpty else { return text }
         var t = text
@@ -300,7 +300,7 @@ nonisolated enum PersonBriefBuilder {
         return t.count >= 2 ? t : nil
     }
 
-    /// What Gemma 4 left on real answers (2026-10-23): the speaker's name
+    /// What the model leaves on real answers: the speaker's name
     /// copied in front ("Lana: I will…") and times it could not shape
     /// ("[0:0:0:7] Meeting intro").
     private static func clean(_ s: String) -> String? {

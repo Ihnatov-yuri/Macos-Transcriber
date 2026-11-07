@@ -30,7 +30,7 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
     init() {}
 
     // Main actor: `progress`, `isDownloading` and `activeTasks` are read by
-    // SwiftUI and were being mutated from the download task's pool thread — a
+    // SwiftUI; mutating them from the download task's pool thread would be a
     // dictionary data race. The bytes still arrive on URLSession's queue.
     @MainActor
     @discardableResult
@@ -38,15 +38,15 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
         // A second press while one is running would truncate the shared
         // `.partial` underneath the first writer. A cancelled one still
         // winding down is waited out: its cleanup deletes that `.partial`
-        // and clears `isDownloading`, and on a quick restart both landed on
-        // the new download.
+        // and clears `isDownloading`, and on a quick restart both would land
+        // on the new download.
         while let running = activeTasks[entry.id] {
             guard running.isCancelled else { return try await running.value }
             _ = await running.result
         }
         // Run inside a registered Task so cancel(id:) actually stops the byte
-        // loop (before this, CANCEL left the loop running and a second press
-        // could interleave two writers into one .partial file).
+        // loop (otherwise CANCEL would leave the loop running and a second
+        // press could interleave two writers into one .partial file).
         //
         // The task unregisters itself, as its last step: cancel() leaves it
         // registered so a restart waits for its cleanup (see download), and
@@ -62,8 +62,8 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
                 AppLog.info("models", "\(entry.id) installed")
                 return dir
             } catch {
-                // Every failure used to leave the Settings → Models row
-                // showing a frozen "Downloading…" bar forever.
+                // Every failure updates the status: otherwise the Settings →
+                // Models row would show a frozen "Downloading…" bar forever.
                 let cancelled = error is CancellationError || (error as NSError).code == NSURLErrorCancelled
                 progress[entry.id] = ProgressInfo(
                     bytesDownloaded: 0, totalBytes: entry.sizeBytes,
@@ -103,13 +103,13 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
             let remote = URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(file.path)")!
             let temp = target.appendingPathExtension("partial")
             // Nested files (Qwen's speculator/) need their folder: without it
-            // createFile failed quietly and the open below threw every time.
+            // createFile fails quietly and the open below throws every time.
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             fm.createFile(atPath: temp.path, contents: nil)
             let handle = try FileHandle(forWritingTo: temp)
             // Delegate-driven, CHUNKED. `URLSession.bytes` hands back an
             // AsyncSequence of individual UInt8 values: on a 5 GB file that
-            // is ~5 billion async-iteration steps, which made the download
+            // is ~5 billion async-iteration steps, which makes the download
             // CPU-bound rather than network-bound.
             let reported = ByteCounter()
             attemptCounter += 1
@@ -265,8 +265,8 @@ nonisolated private final class StreamingDownload: NSObject, URLSessionDataDeleg
     private var expected: Int64 = 0
     /// Set by the cancellation handler. On a task that is already cancelled
     /// the handler runs BEFORE the operation, when there is no data task yet
-    /// to cancel — without this the download started anyway and ran to the
-    /// end for a result nobody would keep.
+    /// to cancel — without this the download would start anyway and run to
+    /// the end for a result nobody would keep.
     private var cancelled = false
 
     init(handle: FileHandle, maxBytes: Int64, onProgress: @escaping @Sendable (Int64, Int64) -> Void) {

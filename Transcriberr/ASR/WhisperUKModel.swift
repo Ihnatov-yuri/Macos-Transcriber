@@ -25,7 +25,7 @@ nonisolated enum WhisperUKModel {
             folderName: "whisper-large-v3-turbo-uk")
     }()
 
-    /// Once a day while the app runs, when the user allowed update checks.
+    /// Once a week while the app runs, when the user allowed update checks.
     static func startUpdateLoop(allowed: @escaping @Sendable () async -> Bool) {
         release.startUpdateLoop(lastCheckKey: "whisperUK.lastUpdateCheck", allowed: allowed)
     }

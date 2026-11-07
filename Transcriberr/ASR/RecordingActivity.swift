@@ -3,10 +3,10 @@ import Foundation
 /// Holds background Super runs while a recording is in progress.
 ///
 /// Why: Super's Whisper decoder lands on the CPU (CoreML runs it through
-/// BNNS even with the "ane" placement): sampled on 2026-10-12 at ~3.4 cores
-/// for the whole pass, 26 s chunks taking 31-35 s. Meetings are back to
-/// back, so the previous meeting's Super pass (20+ minutes) ran through the
-/// next meeting: the fans, the call app and live captions all paid for it.
+/// BNNS even with the "ane" placement): measured at ~3.4 cores for the
+/// whole pass, 26 s chunks taking 31-35 s. Meetings are back to back, so
+/// the previous meeting's Super pass (20+ minutes) would run through the
+/// next meeting: the fans, the call app and live captions would all pay for it.
 /// Super is a background quality pass; nothing is lost by running it after
 /// the recording ends.
 ///

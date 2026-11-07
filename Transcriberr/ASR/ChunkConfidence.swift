@@ -1,13 +1,11 @@
 import Foundation
 
-/// Heuristic per-chunk quality signal. Gemma 4 doesn't expose token-level
-/// confidence yet (mlx-swift-lm hasn't surfaced log-probs through MLXLLM),
-/// so we look at the *output text* for the failure shapes we've actually
-/// seen in the wild:
+/// Heuristic per-chunk quality signal, read from the *output text* alone so
+/// it works for any engine. It looks for the failure shapes seen in the wild:
 ///   - Output is very short relative to the audio window's duration
 ///   - Output ends mid-sentence with no terminal punctuation
 ///   - Output collapses into a repetitive loop ("the the the the ...")
-///   - Output contains common Gemma hallucination patterns
+///   - Output contains common LLM hallucination patterns (apologies, refusals)
 ///
 /// Each signal contributes to a 0..1 score; everything ≥ `lowThreshold` is
 /// flagged for the second pass in `TranscriptionRunner`.
@@ -68,7 +66,6 @@ struct ChunkConfidence: Sendable {
             reasons.append("no-terminal-punct")
         }
 
-        // Clamp.
         score = min(1.0, score)
         return ChunkConfidence(score: score, reasons: reasons)
     }

@@ -14,8 +14,8 @@ import FluidAudio
 /// Models auto-download from `huggingface.co/FluidInference/speaker-diarization-coreml`
 /// the first time `prepareModels()` runs.
 ///
-/// Since 5.0, NVIDIA's Nemotron 3 Diarization (via FluidAudio's
-/// `Nemotron3Diarizer`) runs first. Benched 2026-10-25: AMI test DER 13.5%
+/// NVIDIA's Nemotron 3 Diarization (via FluidAudio's `Nemotron3Diarizer`)
+/// runs first. Measured: AMI test DER 13.5%
 /// against 24.0% for the offline pipeline (collar 0), speaker confusion 0.8%
 /// against 3.0%; on the 381-clip set of real calls it ties (95.2% vs 95.5%)
 /// and splits people less. It holds at most 8 voices, so the offline pipeline
@@ -235,7 +235,7 @@ nonisolated final class DiarizationRunner: @unchecked Sendable {
     /// merges first (the quieter into the louder, by seconds spoken), its
     /// clips pooled, until no pair passes. Also the first round's
     /// similarities, for the log. Labels without clips are left alone.
-    /// Benched 2026-10-25: en-b's split label scored 0.77 from one clip;
+    /// Measured: en-b's split label scored 0.77 from one clip;
     /// different people in AMI and the 33 call tracks at most 0.58.
     static func sameVoiceMerges(_ clips: [String: [[Float]]], seconds: [String: Double],
                                 threshold: Float = VoiceSuggestions.sameVoice) -> (into: [String: String], sims: String) {
@@ -304,9 +304,9 @@ nonisolated final class DiarizationRunner: @unchecked Sendable {
     static let scrapShare = 0.03
 
     /// Folds scrap clusters into their neighbours. VBx leaves a cluster of
-    /// a few seconds in most meetings (measured 2026-10-16 on three: 4.1,
-    /// 4.5 and 5.4 s, while every real voice spoke 24 s or more), and each
-    /// became a speaker of its own with three or four words. A cluster under
+    /// a few seconds in most meetings (measured on three: 4.1, 4.5 and 5.4 s,
+    /// while every real voice spoke 24 s or more), and each would become a
+    /// speaker of its own with three or four words. A cluster under
     /// `scrapSeconds` AND under `scrapShare` of all speech gives each of its
     /// regions to the speaker of the nearest region of a real cluster.
     ///
@@ -487,8 +487,8 @@ nonisolated final class DiarizationRunner: @unchecked Sendable {
 
     /// FluidAudio yields ids like "speaker_1" (streaming) or "S1" (offline)
     /// — normalize both to the SPEAKER_NN format the Android app (and our
-    /// sidecar JSON) use. Splitting on "_" alone left "S1" as is, so the
-    /// runner's keys and the backends' "Speaker N" labels never matched.
+    /// sidecar JSON) use. Splitting on "_" alone would leave "S1" as is, so
+    /// the runner's keys and the backends' "Speaker N" labels would never match.
     private func normalize(_ id: String) -> String {
         let digits = id.reversed().prefix(while: { $0.isASCII && $0.isNumber })
         if !digits.isEmpty, let num = Int(String(digits.reversed())) {

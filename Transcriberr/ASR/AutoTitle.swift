@@ -1,11 +1,10 @@
 import Foundation
 
-/// Generated recording titles. The first version read only the first 20
-/// lines — the greetings — so a meeting came out as "Happy Friday Work
-/// Updates" or "Meeting Kickoff And Alignment Discussion", and an hour of
-/// coaching was named after the radiator covers mentioned in minute one.
-/// The model now reads slices from across the whole recording and is told
-/// to name the subject, not the fact that people met.
+/// Generated recording titles. The model reads slices from across the whole
+/// recording and is told to name the subject, not the fact that people met.
+/// Reading only the first 20 lines (the greetings) gives titles like "Happy
+/// Friday Work Updates" or "Meeting Kickoff And Alignment Discussion", and
+/// names an hour of coaching after the radiator covers mentioned in minute one.
 enum AutoTitle {
 
     /// One read, sized like the brief's sections (see

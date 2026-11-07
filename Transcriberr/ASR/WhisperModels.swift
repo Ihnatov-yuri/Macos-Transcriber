@@ -7,9 +7,9 @@ import WhisperKit
 /// English runs (`whisper.model.english`, default large-v3 turbo
 /// compressed), one for Ukrainian runs (`whisper.model.ukrainian`, default
 /// Whisper UK) and one for every other language (`whisper.model`, default
-/// large-v3). The 2026-10-16 sweep of the reference set found every smaller
+/// large-v3). A sweep of the reference set found every smaller
 /// model ties or beats large-v3 inside Super in English at 2-4x the speed,
-/// and loses 5-15 points in Ukrainian; the 2026-10-28 run of the Ukrainian
+/// and loses 5-15 points in Ukrainian; a run of the Ukrainian
 /// meetings put Super with Whisper UK at 14.8% WER against 17.4% with
 /// large-v3, at a fifth of the time.
 ///
@@ -35,7 +35,7 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
     static let ukrainianDefaultID = WhisperUKModel.id
     static let ukrainianSettingsKey = "whisper.model.ukrainian"
 
-    /// Sizes from the repo listing, 2026-10-15.
+    /// Sizes from the repo listing.
     static let all: [WhisperModel] = [
         WhisperModel(id: "openai_whisper-large-v3", name: "large-v3", sizeBytes: 3_090_000_000,
                      note: "Most accurate. Every measurement in the app was made with it."),
@@ -99,8 +99,8 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
         return (m.englishOnly && !english) || (m.ukrainianOnly && !ukrainian) ? model(defaultID) : m
     }
 
-    /// One-time move to the two settings (v4.4.0). Before, one model served
-    /// every language; a smaller pick was made for speed, which the sweep
+    /// One-time move from the single setting that served every language to
+    /// the per-language ones. A smaller pick was made for speed, which the sweep
     /// shows is free in English and costly elsewhere. So a non-default pick
     /// becomes the English model and other languages go back to large-v3.
     /// Writing the English key marks the move done.
@@ -117,9 +117,9 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
     }
 
     /// The model a run uses, fixed when it starts. A pick in Settings or in a
-    /// recording's engine menu during a run used to make the next load
+    /// recording's engine menu during a run would otherwise make the next load
     /// (a wedge recovery, the next chunk's check) rebuild Whisper with the
-    /// new model, so one transcript came from two models. Jobs run one at a
+    /// new model, so one transcript would come from two models. Jobs run one at a
     /// time; the pin is released when the run ends.
     private static let pinLock = NSLock()
     nonisolated(unsafe) private static var pinnedID: String?
@@ -185,7 +185,7 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
 }
 
 /// Downloads and deletes Whisper models from the Models tab. Loading a model
-/// that is not on disk still downloads it, as before; this is for fetching
+/// that is not on disk also downloads it; this is for fetching
 /// one ahead of time and for freeing the space.
 @MainActor
 @Observable

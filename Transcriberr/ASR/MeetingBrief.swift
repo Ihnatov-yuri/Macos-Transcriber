@@ -2,12 +2,12 @@ import Foundation
 import CryptoKit
 import AppKit
 
-/// What one whole-transcript read tells Gemma about a recording.
+/// What one whole-transcript read tells the text model about a recording.
 ///
 /// Gemma READS long input well (a 40k-char Ukrainian meeting in one call,
 /// under a minute) and WRITES long output badly — which is why rewrites run
-/// in 2.6k-char windows. Those windows, and the Super arbitration, used to
-/// know nothing about the meeting they belonged to: not who was speaking,
+/// in 2.6k-char windows. Without the brief, those windows and the Super
+/// arbitration know nothing about the meeting they belong to: not who was speaking,
 /// not the topic, not that "Мьюз" had been settled as "Muse" half an hour
 /// earlier. The brief is that knowledge, produced once and handed to every
 /// later call: small output, rich input.
@@ -44,9 +44,9 @@ nonisolated enum MeetingBriefBuilder {
 
     // MARK: - Build
 
-    /// Tokens of transcript per read. Measured with Gemma E4B on LiteRT (the
-    /// engine until v5.4) on a 72-minute Ukrainian meeting (17k tokens); not
-    /// yet re-measured on MLX / uzu, which read 14k-token prompts cleanly:
+    /// Tokens of transcript per read. Measured with Gemma E4B on an earlier
+    /// runtime, on a 72-minute Ukrainian meeting (17k tokens); not yet
+    /// re-measured on MLX / uzu, which read 14k-token prompts cleanly:
     ///   - one 17k read: 109 s, answer in the wrong language, a "FIX: чу"
     ///     loop to the token limit;
     ///   - 6k reads: wedged the native call 5 runs out of 6;
@@ -110,7 +110,7 @@ nonisolated enum MeetingBriefBuilder {
     """
 
     static func userMessage(section: String, vocabulary: String) -> String {
-        // The vocabulary is NOT shown to the model: given the list, it copied
+        // The vocabulary is NOT shown to the model: given the list, it copies
         // the first entries back as this recording's "terms". It still
         // attests replacements in the guards.
         "TRANSCRIPT:\n" + section
@@ -297,7 +297,7 @@ nonisolated enum MeetingBriefBuilder {
             guard capitalized || hits <= 6 else { reject(f, "common word (\(hits)×)"); continue }
             // No chains, either way round: a replacement that another fix
             // would rewrite again, or a fix of what another fix just wrote
-            // ("Мьюз → Muse" then "Muse → Mews" turned every Мьюз into Mews).
+            // ("Мьюз → Muse" then "Muse → Mews" would turn every Мьюз into Mews).
             guard !out.contains(where: {
                 $0.from.lowercased() == f.to.lowercased() || $0.to.lowercased() == f.from.lowercased()
             }) else { reject(f, "chain"); continue }

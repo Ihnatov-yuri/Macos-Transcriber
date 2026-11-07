@@ -97,7 +97,7 @@ nonisolated final class DictationSettings: @unchecked Sendable {
         /// Deterministic only: vocabulary, destutter, spoken commands,
         /// self-corrections. Sub-second.
         case clean
-        /// Clean, then a Gemma pass that formats for the app and the text
+        /// Clean, then a text-model pass that formats for the app and the text
         /// around the cursor (tone, continuity, lists). Adds 2–4 s.
         case smart
 
@@ -205,7 +205,7 @@ nonisolated final class DictationSettings: @unchecked Sendable {
     var languages: Set<String> { didSet { defaults.set(Array(languages), forKey: Key.languages) } }
     /// The languages Settings and the menu bar menu offer, after Auto-detect.
     static let languageOptions = ["English", "Dutch", "Ukrainian", "German", "French", "Spanish", "Italian", "Portuguese", "Polish", "Arabic"]
-    /// Run the utterance through the text engine (Gemma) before inserting.
+    /// Run the utterance through the text engine before inserting.
     /// Off by default: it costs seconds and can rewrite.
     var polish: Bool { didSet { defaults.set(polish, forKey: Key.polish) } }
     var polishPrompt: String { didSet { defaults.set(polishPrompt, forKey: Key.polishPrompt) } }
@@ -332,7 +332,8 @@ nonisolated final class DictationSettings: @unchecked Sendable {
         playSounds = (defaults.object(forKey: Key.playSounds) as? Bool) ?? true
 
         // Sanitize: the stored engine must be able to transcribe a single
-        // utterance quickly (rules out the dual-engine merge and Gemma audio).
+        // utterance quickly (rules out the dual-engine merge and the
+        // text-only engines).
         if !engine.supportsLive { engine = .parakeet }
     }
 }

@@ -122,10 +122,10 @@ final class HotkeyMonitor {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             AppLog.warn("dictation", "hotkey event tap was disabled by the system — re-enabled")
             // And resync: the release almost certainly happened while we were
-            // deaf. Without this, `isDown` stayed true forever, so the next
-            // press was filtered out as "already down" and the hotkey looked
-            // dead for a whole press/release cycle — with any hold session in
-            // flight left hanging until the watchdog.
+            // deaf. Without this, `isDown` would stay true forever, so the next
+            // press would be filtered out as "already down" and the hotkey
+            // would look dead for a whole press/release cycle, with any hold
+            // session in flight left hanging until the watchdog.
             resyncModifierState()
         case .flagsChanged:
             let code = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
@@ -136,7 +136,7 @@ final class HotkeyMonitor {
         case .keyDown:
             // Our own ⌘V / Backspace (TextInserter) is not the user making a
             // combo: a paste landing while the key is held for the NEXT
-            // passage used to cancel that session.
+            // passage would cancel that session.
             guard !TextInserter.isSynthetic(event) else { return }
             if isDown {
                 trace("keyDown while held → combo")
@@ -200,13 +200,13 @@ final class HotkeyMonitor {
     /// `keyCode`.
     ///
     /// The device-DEPENDENT bits are what makes a left/right pair separable.
-    /// Testing only the shared flag (`.maskCommand` and friends) meant the
-    /// twin masked the release: with the hotkey on Right ⌘, holding R⌘ to
-    /// talk and then pressing L⌘ before letting R⌘ go left the shared flag
-    /// set, so the release read as "still down", the edge filter swallowed
-    /// it, and no `.released` ever arrived — hold mode then ran to the
-    /// 180-second watchdog and inserted three minutes of speech, with
-    /// `isDown` stuck true so the next press was swallowed too.
+    /// Testing only the shared flag (`.maskCommand` and friends) lets the
+    /// twin mask the release: with the hotkey on Right ⌘, holding R⌘ to
+    /// talk and then pressing L⌘ before letting R⌘ go leaves the shared flag
+    /// set, so the release reads as "still down", the edge filter swallows
+    /// it, and no `.released` ever arrives. Hold mode then runs to the
+    /// 180-second watchdog and inserts three minutes of speech, with
+    /// `isDown` stuck true so the next press is swallowed too.
     ///
     /// `(thisKey, itsTwin, sharedFlag)` bit masks, in the raw representation
     /// shared by `NSEvent.modifierFlags` and `CGEventFlags`.

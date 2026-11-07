@@ -43,12 +43,12 @@ enum TextInserter {
     private static var pendingRestore: Task<Void, Never>?
     /// The user's own clipboard, held across back-to-back insertions.
     ///
-    /// Cancelling the pending restore and snapshotting again captured the
-    /// PREVIOUS DICTATION — at that moment the pasteboard is still holding
+    /// Cancelling the pending restore and snapshotting again would capture
+    /// the PREVIOUS DICTATION: at that moment the pasteboard still holds
     /// what we just pasted, not what the user had copied. Two insertions
     /// less than 0.8 s apart (exactly what a toggle-mode pause flush
-    /// produces) therefore "restored" dictation #1 over the user's clipboard
-    /// and lost it for good. Carry the original snapshot forward instead.
+    /// produces) would then "restore" dictation #1 over the user's clipboard
+    /// and lose it for good. Carry the original snapshot forward instead.
     private static var pendingSnapshot: Snapshot?
 
     private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
@@ -68,11 +68,11 @@ enum TextInserter {
     private static var deliveryChain: Task<Void, Never>?
 
     /// Two passages delivered inside one paste window (a toggle-mode pause
-    /// flush right behind the previous passage) put passage #2 on the
-    /// pasteboard before the target app had read it for the first ⌘V, so
-    /// #2 landed twice and #1 never. A delivery inside the window now
-    /// waits its turn on the main actor — a Task sleep, never a blocking
-    /// one — and reports the outcome the paste will have: without
+    /// flush right behind the previous passage) would put passage #2 on the
+    /// pasteboard before the target app has read it for the first ⌘V, so
+    /// #2 would land twice and #1 never. A delivery inside the window
+    /// waits its turn on the main actor (a Task sleep, never a blocking
+    /// one) and reports the outcome the paste will have: without
     /// Accessibility trust it would only have been copied anyway.
     static func insert(_ text: String, restoreClipboard: Bool, secret: Bool = false) -> Outcome {
         guard isPasteInFlight else {
@@ -82,8 +82,8 @@ enum TextInserter {
         queuedDeliveries += 1
         let previous = deliveryChain
         // The caller checked the front app NOW; the ⌘V goes out up to a
-        // paste window later. A ⌘-Tab in between sent the passage into
-        // whatever came forward (a terminal, someone else's chat).
+        // paste window later. A ⌘-Tab in between would send the passage
+        // into whatever came forward (a terminal, someone else's chat).
         let targetApp = NSWorkspace.shared.frontmostApplication?.processIdentifier
         deliveryChain = Task { @MainActor in
             await previous?.value

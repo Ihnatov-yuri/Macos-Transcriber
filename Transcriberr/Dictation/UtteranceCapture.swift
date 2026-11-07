@@ -11,8 +11,8 @@ import Observation
 /// kept warm: the moment the voice-processing unit exists in the process,
 /// coreaudiod ducks every other app's output by 15 dB (measured:
 /// `_DuckClientVolumeScalar … to 0.177828`), and only disabling it lifts the
-/// duck — `engine.stop()` alone does not. Keeping it prewarmed made the Mac
-/// quieter for as long as the app was running.
+/// duck — `engine.stop()` alone does not. Keeping it prewarmed would make the
+/// Mac quieter for as long as the app runs.
 ///
 /// Also tracks voice activity so toggle mode can flush a passage at every
 /// pause. No actor isolation on the type (see `WavRecorder`): explicitly
@@ -129,8 +129,8 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         // that device's PLAYBACK too — and it stays there as long as the
         // input is open, which for a prewarm means the whole session. The
         // user hears their soundbar go wrong and has no way to connect it to
-        // an app they only left running. Same mistake as keeping the
-        // voice-processing unit warm (v3.2.1), in a different costume.
+        // an app they only left running. Same reason the voice-processing
+        // unit is never kept warm, in a different costume.
         guard Self.captureDisturbsBluetooth() == false else {
             AppLog.info("dictation", "prewarm skipped — opening capture would drop a Bluetooth link to hands-free")
             return
@@ -215,22 +215,22 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         guard isRunning else {
             // Idle — typically another app (a call) switching the mic's
             // sample rate. The prewarmed engine keeps the old format, and
-            // every later press failed with "Failed to create tap due to
-            // format mismatch" until the app was restarted (seen: 44.1 kHz
+            // every later press would fail with "Failed to create tap due to
+            // format mismatch" until the app is restarted (seen: 44.1 kHz
             // after a meeting app took the mic). Rebuild on the next start.
             engineStale = true
             AppLog.info("dictation", "audio configuration changed while idle — engine will be rebuilt on next start")
             return
         }
         AppLog.warn("dictation", "audio configuration changed mid-session — rebuilding tap and restarting")
-        // Restarting alone was not enough. The tap and the converter were
+        // Restarting alone is not enough. The tap and the converter are
         // both built from the PREVIOUS native format; after a device switch
         // (headphones plugged in, mic changed, the voice-processing graph
-        // rebuilding itself) the restart either threw on the format mismatch
-        // — leaving the HUD saying LISTENING while nothing was captured, and
-        // the whole utterance lost to "Nothing heard" — or resampled at the
-        // wrong ratio and produced garbage. Re-read the format and rebuild
-        // both before starting.
+        // rebuilding itself) a bare restart either throws on the format
+        // mismatch (leaving the HUD saying LISTENING while nothing is
+        // captured, and the whole utterance lost to "Nothing heard") or
+        // resamples at the wrong ratio and produces garbage. Re-read the
+        // format and rebuild both before starting.
         let input = engine.inputNode
         var nativeFormat: AVAudioFormat?
         do {
@@ -327,13 +327,13 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
             try? ExceptionTrap.run { self.engine.stop() }
             setVoiceProcessing(true, input: input)
         }
-        // Every throw below used to leave the voice-processing unit alive.
-        // `stop()` is the only other place that takes it down and it
-        // early-returns on `guard isRunning` — which is set at the very end
-        // of this function — so a failed start (device yanked, input held by
-        // another app, unreadable format) left coreaudiod ducking every
-        // other app by 15 dB for the rest of the app's life, with the
-        // controller only showing a message. That is the v3.2.1 landmine.
+        // Without this defer every throw below would leave the
+        // voice-processing unit alive. `stop()` is the only other place that
+        // takes it down and it early-returns on `guard isRunning` — which is
+        // set at the very end of this function — so a failed start (device
+        // yanked, input held by another app, unreadable format) would leave
+        // coreaudiod ducking every other app by 15 dB for the rest of the
+        // app's life, with the controller only showing a message.
         var startedCleanly = false
         defer {
             if !startedCleanly {
@@ -410,7 +410,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         tick?.cancel()
         tick = nil
         // The hold watchdog of the next session reads this before its own
-        // start resets it: a 180 s leftover ended that session at once.
+        // start resets it: a 180 s leftover would end that session at once.
         elapsedSeconds = 0
         let wasRunning = engine.isRunning
         try? ExceptionTrap.run {
@@ -461,7 +461,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         try? ExceptionTrap.run { self.engine.stop() }
         engine = AVAudioEngine()
         // The flag describes the OLD input node. A fresh engine's node has no
-        // voice-processing unit, so leaving it true made the `guard` in
+        // voice-processing unit, so leaving it true would make the `guard` in
         // `setVoiceProcessing` swallow every later enable — "MIC · FILTERED"
         // silently off for the rest of the session, with nothing in the log.
         voiceProcessingActive = false

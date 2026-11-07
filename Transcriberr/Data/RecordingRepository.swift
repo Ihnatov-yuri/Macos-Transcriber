@@ -319,6 +319,12 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             try? updateAudioPath(finalURL, for: merged)
         }
         await postProcessTracker.markIdle(merged.id)
+        // The row was in the Library during the compression and can have
+        // been deleted there: segments inserted into a deleted model crash.
+        guard merged.modelContext != nil, !merged.isDeleted else {
+            throw NSError(domain: "Merge", code: -3, userInfo: [NSLocalizedDescriptionKey:
+                "The merged recording was deleted before its transcript was copied."])
+        }
 
         // Remap b's SPEAKER_NN keys past a's highest index.
         var maxIdx = -1
@@ -335,8 +341,20 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
                 bMaxIdx = max(bMaxIdx, n)
             }
         }
+        // Tagged keys are numbered from 1 in every recording: b's TAGGED_1
+        // is a different person from a's and gets a fresh key.
+        let aKeys = Set(segsA.compactMap(\.speaker))
+        var takenKeys = aKeys.union(segsB.compactMap(\.speaker))
+        var taggedMap: [String: String] = [:]
         func remap(_ key: String?) -> String? {
             guard let key else { return nil }
+            if key.hasPrefix(Self.taggedKeyPrefix), aKeys.contains(key) {
+                if let mapped = taggedMap[key] { return mapped }
+                let fresh = Self.newTaggedKey(taken: takenKeys)
+                takenKeys.insert(fresh)
+                taggedMap[key] = fresh
+                return fresh
+            }
             if key == "ME" { return key }               // same user in both
             if key.hasPrefix("SPEAKER_"), let n = Int(key.dropFirst("SPEAKER_".count)) {
                 return String(format: "SPEAKER_%02d", n + maxIdx + 1)
@@ -1030,7 +1048,12 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         let current = recording.outputs.first { $0.presetId == version.presetId }
         guard current?.markdown != version.markdown else { return }
         let doc = OutputDoc(presetId: version.presetId, title: current?.title ?? version.title,
-                            markdown: version.markdown, createdAtMillis: version.createdAtMillis)
+                            markdown: version.markdown,
+                            // Now, not the version's date: restore-backups keeps
+                            // the newest output per preset, and the old date
+                            // brought back the output this restore replaced.
+                            // The history keeps the original date (same text).
+                            createdAtMillis: Int64(Date().timeIntervalSince1970 * 1000))
         try replaceOutput(doc, for: recording)
     }
 
@@ -1510,12 +1533,17 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         }
         folder.name = trimmed
         try context.save()
+        // Each backup names its folder: restore-backups would bring the old name back.
+        folder.recordings.forEach(BackupService.backupRecording)
     }
 
     /// Recordings survive (nullify delete rule clears their `folder`).
     func deleteFolder(_ folder: Folder) throws {
+        let recordings = folder.recordings
         context.delete(folder)
         try context.save()
+        // Rewritten without the folder, or restore-backups recreates it.
+        recordings.forEach(BackupService.backupRecording)
     }
 
     /// nil = remove from its folder.

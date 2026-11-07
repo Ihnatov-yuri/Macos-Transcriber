@@ -37,6 +37,16 @@ env:
   GIT_CONFIG_VALUE_0: "*"
 
 jobs:
+  # Seconds on Linux: every test, test class and source file the docs quote
+  # must still exist (docs/feature-coverage.md once listed deleted ones).
+  doc-refs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docs point at code that exists
+        run: python3 scripts/check-doc-refs.py
+
   build-and-test:
     runs-on: macos-26
     timeout-minutes: 90

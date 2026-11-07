@@ -3,11 +3,10 @@ import Foundation
 /// Tracks which recordings currently have background audio post-processing
 /// (echo-cancel mix rebuild, AAC compression) in flight, so a reader that
 /// needs a recording's files to be stable — namely `RecordingRepository.merge`
-/// — can wait for that work to quiesce instead of racing it. Deferring
-/// post-processing off `RecordModel.endRecording`'s critical path (so Stop
-/// doesn't block on it) reopened a window that used to be closed by
-/// compression always finishing before a recording was even saved/visible;
-/// this closes it back up without reintroducing the block.
+/// — can wait for that work to quiesce instead of racing it. Post-processing
+/// runs off `RecordModel.endRecording`'s critical path (so Stop doesn't
+/// block on it), so a recording can be saved and visible while its files are
+/// still being rewritten; this makes readers wait without blocking Stop.
 ///
 /// Two states per recording:
 /// - **pending**: post-processing is owed but hasn't started — set from Stop

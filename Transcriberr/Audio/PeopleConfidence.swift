@@ -85,7 +85,7 @@ enum PeopleConfidence {
 
         // Told apart the way PeopleMatch tells them apart: their own clips
         // scored against each voice. Centroid against centroid read 0.54 for
-        // two different people (Lana, Iryna, 2026-10-23) whose clips scored
+        // two different people (Lana, Iryna) whose clips scored
         // 0.30-0.39 against the other and 0.71 against their own: averages
         // smooth voices together, so that measure raised false alarms.
         let own = person.print.embeddings

@@ -25,7 +25,7 @@ import CoreAudio
 ///
 /// The unit must only exist while recording: while it exists, coreaudiod
 /// turns every other app down (-4 dB at the mildest setting, -15 dB by
-/// default) — the v3.2.1 lesson. `stop()` destroys it.
+/// default). `stop()` destroys it.
 nonisolated final class VoiceProcessedMic: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let lock = NSLock()
@@ -88,7 +88,7 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
 
     /// Bring the unit up on the chosen microphone (~1 s). False when macOS
     /// refuses it; the unit is then already gone and the caller records the
-    /// raw mic as before. `voiceProcessing: false` (a `keepsMicOnHeadphones`
+    /// raw mic. `voiceProcessing: false` (a `keepsMicOnHeadphones`
     /// unit starting on headphones) runs the same engine on the raw mic.
     func start(inputUID: String?, voiceProcessing: Bool = true) -> Bool {
         let t0 = Date()
@@ -307,10 +307,10 @@ nonisolated final class VoiceProcessedMic: @unchecked Sendable {
     ///
     /// A switch to headphones (AirPods connected mid-call) lets the unit go
     /// instead: there is no echo left to remove, and a live unit on the mic
-    /// is what silenced the Teams mic in v4.6-5.0.6 (macOS could not rebuild
-    /// Teams' Voice Isolation chain around it). It used to restart here on
-    /// whatever the new route was, so the filter stayed on for the rest of
-    /// the call although it never starts on headphones.
+    /// silences the Teams mic (macOS cannot rebuild Teams' Voice Isolation
+    /// chain around it). Restarting here on whatever the new route is would
+    /// keep the filter on for the rest of the call, although it never starts
+    /// on headphones.
     private func restartAfterConfigurationChange() {
         controlLock.lock(); defer { controlLock.unlock() }
         guard !released else { return }

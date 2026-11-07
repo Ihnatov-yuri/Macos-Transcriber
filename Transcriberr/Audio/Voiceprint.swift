@@ -280,11 +280,11 @@ actor VoiceEmbedder {
         wp.update(repeating: 0, count: slots * modelSamples)
         mp.update(repeating: 0, count: slots * maskFrames)
         let part = modelSamples / slots
-        // Every third carries audio. An empty third left at zero changed
+        // Every third carries audio. An empty third left at zero changes
         // the others' embeddings: a lone window beside two silent thirds
-        // scored -0.01-0.31 against its true embedding (benchmark,
-        // 2026-10-24), so a batch of 3n+1 or 3n+2 clips gave one or two
-        // garbage embeddings. The spare thirds repeat the batch's own clips
+        // scored -0.01-0.31 against its true embedding (benchmark), so a
+        // batch of 3n+1 or 3n+2 clips would give one or two garbage
+        // embeddings. The spare thirds repeat the batch's own clips
         // and their outputs are dropped.
         let voiced = clips.filter { !$0.isEmpty }
         for k in 0..<slots where !voiced.isEmpty {
@@ -473,7 +473,7 @@ nonisolated enum ClusterVoice {
     /// 0.32; two clusters both near the threshold are one voice split in
     /// two or a voice like the user's, and neither is named.
     static let margin: Float = 0.10
-    /// The user's cluster on 3 s clips (2026-10-24): the user 0.53 at the
+    /// The user's cluster on 3 s clips: the user 0.53 at the
     /// least, every other voice at most 0.36. The 1.5 s target-speaker gate
     /// keeps VoiceActivity's 0.40.
     static let userOnThreshold: Float = 0.45
@@ -578,7 +578,7 @@ nonisolated enum VoiceActivity {
     static let enrollWindow = 3.0
     /// Similarity at which a window is the user, and below which an open
     /// stretch closes again (hysteresis: a word over the far side dips but
-    /// does not end the turn). Measured 2026-10-15 with a print from one
+    /// does not end the turn). Measured with a print from one
     /// meeting scored on three others (English and Ukrainian, headphones and
     /// speakers, nine other voices): the user's speech median 0.49-0.70,
     /// every other voice at most 0.32, echo residue on the mic about 0.
@@ -679,7 +679,7 @@ nonisolated enum VoiceActivity {
 
     /// The floor for enrollment audio, which is meant to be speech. A fluent
     /// reading or a trimmed clip has almost no pauses, so its 20th
-    /// percentile IS speech and `speechFloor` (three times that) sat above
+    /// percentile IS speech and `speechFloor` (three times that) sits above
     /// every window: "Not enough speech" for 25 s of clean speech. Capped at
     /// half the median level; with real pauses the usual floor is lower and
     /// wins. Only for enrollment: on a meeting track the same cap would let a

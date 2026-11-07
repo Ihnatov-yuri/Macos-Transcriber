@@ -4,12 +4,12 @@ import Accelerate
 /// Offline echo gate for the playback mix, used when `EchoCanceller` finds
 /// an echo path its linear filter cannot follow.
 ///
-/// Measured on a real call (2026-10-02, Bluetooth speaker + USB webcam mic):
-/// the speaker→mic path ran ~124 ms and drifted by ~7 ms over 13 minutes,
-/// the NLMS stage removed 5-7 dB, and the canceller rightly gave up. The mix
-/// then fell back to the live gate, which let 100% of the echo through: it
-/// opens on any mic level above 0.02 RMS, and a loud speaker's echo alone
-/// clears that. Every word of the far side played twice, 124 ms apart.
+/// Measured on a real call (Bluetooth speaker + USB webcam mic): the
+/// speaker→mic path ran ~124 ms and drifted by ~7 ms over 13 minutes, the
+/// NLMS stage removed 5-7 dB, and the canceller rightly gave up. The live
+/// gate lets 100% of that echo through: it opens on any mic level above
+/// 0.02 RMS, and a loud speaker's echo alone clears that. Every word of the
+/// far side plays twice, 124 ms apart.
 ///
 /// The far side's voice is already pristine in the system track, so while
 /// only they talk the mic adds nothing but echo and can be muted outright.
@@ -48,7 +48,7 @@ nonisolated enum EchoGate {
     /// quiet ends of words are not chopped off.
     static let holdFrames = 5
     /// Gain while closed (-30 dB), not zero: echo ends up ~40 dB under the
-    /// far side either way, and the mic's room tone no longer switches off
+    /// far side either way, and the mic's room tone does not switch off
     /// and on with every far-side phrase.
     static let closedGain: Float = 0.03
 

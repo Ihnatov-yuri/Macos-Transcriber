@@ -21,16 +21,16 @@ nonisolated enum WaveformLoader {
         }
     }
 
-    /// Streams the decode instead of holding it: the whole file used to be
-    /// collected into one array (plus a Data copy per sample buffer) just to
-    /// keep 200 numbers — ~230 MB for an hour-long meeting, per recording
-    /// opened. Now each decoded buffer is folded into fine-grained block
+    /// Streams the decode instead of holding it: collecting the whole file
+    /// into one array (plus a Data copy per sample buffer) just to keep 200
+    /// numbers costs ~230 MB for an hour-long meeting, per recording
+    /// opened. Each decoded buffer is folded into fine-grained block
     /// peaks as it arrives (block size from the asset's duration, ~16 per
     /// output bucket) and the blocks are bucketed at the end, so memory is
     /// bounded by the bucket count, not the recording length. The duration
     /// only sizes the blocks — the final bucketing uses the real count, so
     /// an estimate that is off never drops or pads audio. (No duration at
-    /// all falls back to one-sample blocks: the old memory, still correct.)
+    /// all falls back to one-sample blocks: whole-file memory, still correct.)
     private static func runExtract(file: URL, buckets: Int) async throws -> [Float] {
         guard buckets > 0 else { return [] }
         let asset = AVURLAsset(url: file)

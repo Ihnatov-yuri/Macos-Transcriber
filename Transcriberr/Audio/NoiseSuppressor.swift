@@ -3,11 +3,11 @@ import Foundation
 /// Offline cleanup for IMPORTED files (live recordings are cleaned by the
 /// voice-processing unit at capture time).
 ///
-/// v1 used an offline AVAudioEngine render with Apple's voice-processing AU
-/// — it failed engine.start() on every invocation (40 failures in the field
-/// log) and silently returned the input. Replaced with deterministic DSP
-/// that cannot fail: a one-pole 80 Hz high-pass (kills rumble/hum the ASR
-/// mistakes for speech onset) + peak normalization.
+/// Deterministic DSP that cannot fail: a one-pole 80 Hz high-pass (kills
+/// rumble/hum the ASR mistakes for speech onset) + peak normalization. An
+/// offline AVAudioEngine render with Apple's voice-processing AU fails
+/// engine.start() on every invocation (40 failures in the field log) and
+/// silently returns the input.
 nonisolated enum NoiseSuppressor {
     static func process(samples: [Float], sampleRate: Double) -> [Float] {
         guard !samples.isEmpty else { return samples }

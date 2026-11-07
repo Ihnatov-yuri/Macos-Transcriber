@@ -9,9 +9,9 @@ import Synchronization
 /// to the call app (Teams, Meet, Zoom) through our own virtual input device.
 ///
 /// Why: voice processing on the built-in mic next to a call app's own
-/// processing broke the call — coreaudiod could not rebuild Teams' Voice
-/// Isolation chain around our unit, and Teams' mic fell to room noise for
-/// the rest of the call (v4.6-5.0.6). With this on, only Transcriberr opens
+/// processing breaks the call: coreaudiod cannot rebuild Teams' Voice
+/// Isolation chain around our unit, and Teams' mic falls to room noise for
+/// the rest of the call. With this on, only Transcriberr opens
 /// the real mic; the call takes the cleaned mic from the device, and the
 /// meeting recording takes it from the same unit. See
 /// docs/virtual-microphone.md.
@@ -29,7 +29,7 @@ import Synchronization
 /// records during such a call borrows that unit; a meeting with no call on
 /// the device records the way it would with this off. Starting the unit
 /// for a recording alone would put voice processing on the mic a call app
-/// may still be using directly, the v4.6-5.0.6 failure.
+/// may still be using directly, the failure described above.
 nonisolated final class VirtualMicrophone: @unchecked Sendable {
     static let shared = VirtualMicrophone()
 
@@ -251,7 +251,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         // which binds to the real mic behind the Transcriberr Microphone
         // when the user made that the default (the device must never feed
         // itself). Naming the default device explicitly instead failed on a
-        // USB webcam mic with voice processing (-10851, 2026-10-27) and fell
+        // USB webcam mic with voice processing (-10851) and fell
         // back to the default anyway.
         let chosen = RecorderSettings.inputDeviceUIDNow
         let mic = AudioInputDevices.effective(uid: chosen)

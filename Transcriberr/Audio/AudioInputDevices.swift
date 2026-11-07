@@ -6,8 +6,8 @@ import Synchronization
 /// Enumerate and resolve microphones, so capture doesn't have to mean
 /// "whatever macOS currently calls the default input".
 ///
-/// The app had no say in this before: `AVAudioEngine.inputNode` and
-/// `MeetingRecorder`'s aggregate both took the system default. That is fine
+/// Left alone, `AVAudioEngine.inputNode` and `MeetingRecorder`'s aggregate
+/// both take the system default. That is fine
 /// until the default is a Bluetooth headset or soundbar — opening its
 /// microphone drops the link from A2DP to the hands-free profile, and the
 /// device's OUTPUT collapses to mono at 16 kHz along with it, for everything
@@ -302,7 +302,7 @@ nonisolated enum AudioInputDevices {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
         // CoreAudio hands back a +1 CFString (Create rule): take ownership so
-        // it is released — reading it into a plain CFString leaked one string
+        // it is released — reading it into a plain CFString leaks one string
         // per device per enumeration.
         var value: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)

@@ -24,7 +24,7 @@ nonisolated struct UnknownVoiceStore {
         var date: Date
         /// The user spoke in the same recording.
         var withMe: Bool
-        /// The voice model the centroid is in; nil before 5.0 (the built-in).
+        /// The voice model the centroid is in; nil on older entries (the built-in).
         var model: String? = nil
         var modelId: String { model ?? VoiceModel.standard.rawValue }
         var key: String { Person.Hearing.key(recordingId, speaker) }
@@ -89,7 +89,7 @@ nonisolated enum VoiceSuggestions {
     /// Stricter than matching a saved person (0.40 on clip medians):
     /// centroids are smoother, and a wrong merge suggests a person who
     /// does not exist.
-    /// On 3 s clips (2026-10-24): two recordings of one person at least
+    /// On 3 s clips: two recordings of one person at least
     /// 0.60, two different people up to 0.57 (Lana and Iryna; Jenny and
     /// Gabrielle). 0.55 put each pair in one group.
     static var sameVoice: Float { VoiceModel.current.scale.sameVoice }
@@ -180,7 +180,7 @@ nonisolated enum VoiceSuggestions {
 }
 
 /// Whether a new sample is the same person as a saved voice, before it is
-/// added. Recalibrated 2026-10-24 on 381 clips of 23 people from the
+/// added. Calibrated on 381 clips of 23 people from the
 /// user's meetings, with the embedder's empty slots filled: a recording's
 /// sample scored at least 0.58 against the rest of its own person's voice
 /// (one weak Lana meeting aside), and at most 0.47 against anyone else's.

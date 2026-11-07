@@ -6,7 +6,7 @@ import Foundation
 /// whatever is picked here: it scores 1.5 s windows every half second, and
 /// that is the built-in model's job.
 ///
-/// Measured 2026-10-24 on 381 clips of 23 people from the user's meetings
+/// Measured on 381 clips of 23 people from the user's meetings
 /// (scripts/speaker-eval, report in ~/Documents/Transcriberr-eval): on 3 s
 /// clips the built-in WeSpeaker ResNet34 tells two people apart with 6.4%
 /// clip error, SimAM-ResNet100 (VoxBlink2, VoxCeleb fine-tune) with 3.1%,
@@ -68,7 +68,7 @@ nonisolated struct VoiceScale: Equatable, Sendable {
     /// Unknown voices that are one person (centroid to centroid).
     var sameVoice: Float
 
-    /// WeSpeaker ResNet34 on 3 s clips (2026-10-24): the right person at
+    /// WeSpeaker ResNet34 on 3 s clips: the right person at
     /// least 0.52, anyone else at most 0.47, Lana against Iryna 0.41; a
     /// recording's sample at least 0.58 against its own person.
     static let standard = VoiceScale(on: 0.50, off: 0.40, margin: 0.15, gateMin: 0.55, gateMargin: 0.15, sameVoice: 0.62)
@@ -180,7 +180,7 @@ actor SimAMEmbedder {
     private var model: MLModel?
     /// One caller at a time, as in VoiceEmbedder: `embed` suspends while
     /// the batch runs, and a second caller would drive the same model
-    /// from a second thread (the inference gate's hold is shared).
+    /// from a second thread.
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 

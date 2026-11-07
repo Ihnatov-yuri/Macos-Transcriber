@@ -10,7 +10,7 @@ import Synchronization
 /// All I/O happens on a private serial queue so AVAudioFile writes stay
 /// in-order: the tap path's state lives in `io` and is only touched there.
 /// Only `level` / `elapsedMs` / `state` are mutated on MainActor.
-/// `@MainActor` removed for the same reason as `AppContainer` —
+/// Not `@MainActor`, for the same reason as `AppContainer`:
 /// `_SwiftData_SwiftUI` blows up on actor-isolated @Observable types
 /// in macOS 26.5. Mutations happen on MainActor in practice (Tasks hop
 /// into MainActor before writing), but the class declaration must stay
@@ -42,7 +42,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
     private(set) var peakHistory: [Float] = Array(repeating: 0, count: 64)
 
     nonisolated static let sampleRate: Double = 16_000
-    /// Live-caption feed granularity. One second (was 5 until v3.15.10): the
+    /// Live-caption feed granularity. One second: the
     /// live worker finds phrase ends in the audio itself and needs it fresh.
     nonisolated static let chunkSeconds: Double = 1
 
@@ -84,8 +84,8 @@ nonisolated final class WavRecorder: @unchecked Sendable {
     private var pauseBeganAt: Date?
     /// The elapsed-time ticker. Held so resume() can restart it: the loop
     /// exits the moment state leaves `.recording` (pause), and without a
-    /// restart the on-screen timer — and the duration saved from it —
-    /// froze at the pause point for the rest of the session.
+    /// restart the on-screen timer (and the duration saved from it) would
+    /// freeze at the pause point for the rest of the session.
     private var tickTask: Task<Void, Never>?
 
     /// Live-caption feed: one stream per subscriber (see `LiveChunkFeed`).
@@ -95,7 +95,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
 
     /// Live captions consume these one-second chunks in real time; if the
     /// consumer falls behind (a stalled main thread), an unbounded stream
-    /// grew for the whole session and the captions fell further and further
+    /// grows for the whole session and the captions fall further and further
     /// behind the audio. Dropping the oldest backlog keeps captions near the
     /// live edge — the transcript of record comes from the file, not from
     /// this feed. The live worker only appends on arrival, so 40 s of slack
@@ -106,7 +106,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
     // MARK: - Public API
 
     /// Claimed and released on the cooperative pool (`start()` is
-    /// `@concurrent`) and read on main by `isCapturing`: a plain Bool raced.
+    /// `@concurrent`) and read on main by `isCapturing`: a plain Bool would race.
     private let starting = Mutex(false)
 
     /// A capture is starting or has a file open. Launch-time crash repair
@@ -119,9 +119,9 @@ nonisolated final class WavRecorder: @unchecked Sendable {
     /// field SwiftUI observes (`state`, `level`, `peakHistory`) and every
     /// field the main-actor ticker reads (`sessionStart`,
     /// `pausedAccumulatedMs`) is written through a MainActor hop. Writing
-    /// them straight from the pool, as this used to, raced the meter and
-    /// ticker tasks that write the same fields on the main actor.
-    /// `@concurrent` keeps it there: a plain nonisolated async function now
+    /// them straight from the pool races the meter and ticker tasks that
+    /// write the same fields on the main actor.
+    /// `@concurrent` keeps it there: a plain nonisolated async function
     /// runs on its caller's actor, which for the Record button is main.
     @concurrent
     func start() async throws {
@@ -143,10 +143,9 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         //    IMPORTANT: only call `requestAccess` when the status is genuinely
         //    undetermined. Calling it spins up the AVCapture subsystem whose
         //    async continuation can hang on macOS even when permission was
-        //    already granted — which left the record button "stuck" (start()
-        //    never returned, so uiState stayed .idle). When already authorized
-        //    we skip straight to the engine setup, exactly like the original
-        //    working path.
+        //    already granted, which leaves the record button "stuck" (start()
+        //    never returns, so uiState stays .idle). When already authorized
+        //    we skip straight to the engine setup.
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             break
@@ -187,7 +186,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         //    on first access of `engine.inputNode`. Calling `prepare()` (or
         //    `start()`) before that access trips the assertion
         //      "required condition is false: inputNode != nullptr || outputNode != nullptr"
-        //    which is the NSException that was killing recording. So we grab
+        //    an NSException that kills recording. So we grab
         //    `inputNode` FIRST, install the tap, and only then prepare/start.
 
         // Some macOS versions throw on `engine.inputNode` itself when no
@@ -218,15 +217,15 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         //
         // While the unit exists, coreaudiod ducks every other app's output
         // (15 dB by default). It is disabled again in `stop()` — leaving it
-        // alive between recordings kept the whole Mac quiet — and capped at
+        // alive between recordings keeps the whole Mac quiet — and capped at
         // the mildest ducking level macOS offers (-4 dB) while recording.
-        // Every `throw` below this point used to leave the voice-processing
-        // unit alive on the input node — and `stop()` is the only other place
-        // that disables it, which a failed start never reaches. That left
-        // every other app on the Mac ducked by 15 dB for the rest of the
-        // session, with no way back short of quitting: the exact v3.2.1
-        // landmine, reachable through any start failure (device busy, mic
-        // unplugged between resolve and start, bad format).
+        // Without the defer below, every `throw` after this point would leave
+        // the voice-processing unit alive on the input node, and `stop()`
+        // (the only other place that disables it) is never reached by a
+        // failed start. Every other app on the Mac would stay ducked by 15 dB
+        // for the rest of the session, with no way back short of quitting,
+        // after any start failure (device busy, mic unplugged between
+        // resolve and start, bad format).
         var startedCleanly = false
         defer {
             if !startedCleanly { releaseVoiceProcessing() }
@@ -412,10 +411,10 @@ nonisolated final class WavRecorder: @unchecked Sendable {
     }
 
     /// The engine stops itself when the route changes (headphones plugged in,
-    /// AirPods connecting, a new default input). Unhandled, the screen kept
-    /// saying RECORDING with a running clock while the file received nothing —
-    /// found out at Stop. Same rebuild as `UtteranceCapture`: the tap and the
-    /// converter were built from the previous native format.
+    /// AirPods connecting, a new default input). Unhandled, the screen would
+    /// keep saying RECORDING with a running clock while the file receives
+    /// nothing, found out only at Stop. Same rebuild as `UtteranceCapture`:
+    /// the tap and the converter were built from the previous native format.
     @MainActor
     private func handleConfigurationChange() {
         let wasPaused: Bool
@@ -528,11 +527,11 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             case .recording(let u), .paused(let u):
                 return u
             case .failed:
-                // A failed RESUME (mic unplugged while paused) left the UI still
-                // showing RECORDING, and Stop then returned here before the
-                // engine stop, the tap removal, the file close and the voice
-                // processing release — so the mic stayed open, the duck stayed
-                // on, and everything already recorded was silently thrown away.
+                // A failed RESUME (mic unplugged while paused) leaves the UI
+                // still showing RECORDING. Returning here before the engine
+                // stop, the tap removal, the file close and the voice
+                // processing release would leave the mic open and the duck
+                // on, and silently throw away everything already recorded.
                 guard let open = openFileURL else { return nil }
                 AppLog.warn("recorder", "stopping after a failed state — salvaging \(open.lastPathComponent)")
                 return open
@@ -660,7 +659,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         guard let converter = io.converter, let audioFile = io.audioFile else { return }
         // A route change swaps the converter for one at the new rate, but
         // tap buffers from the old route can still be queued behind it on
-        // ioQueue: fed to the new converter they came out at the wrong
+        // ioQueue: fed to the new converter they come out at the wrong
         // speed and pitch. Those few milliseconds are dropped instead.
         let rate = converter.inputFormat.sampleRate
         if !io.pendingInputs.isEmpty {

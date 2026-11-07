@@ -557,7 +557,7 @@ struct PeopleOverview: View {
     }
 
     /// One fetch of every named line, on a background context of the same
-    /// store (it stalled the window with a large library), then the rows on
+    /// store (on the main context it stalls the window with a large library), then the rows on
     /// the main actor from plain values. A newer reload replaces one running.
     private func reload() {
         reloading?.cancel()

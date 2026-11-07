@@ -38,8 +38,8 @@ struct AppShell: View {
 
     @State private var askUpdateConsent = false
     @State private var askTextModel = false
-    /// Asked once: summaries, titles, briefs and Super's rulings need a text
-    /// model, and v5.4 removed the LiteRT one without downloading another.
+    /// Asked once, when no text model is installed: summaries, titles,
+    /// briefs and Super's rulings need one.
     @AppStorage("textModel.prompted") private var textModelPrompted = false
 
     var body: some View {

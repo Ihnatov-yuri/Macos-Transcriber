@@ -250,7 +250,7 @@ struct SpeakerRenameSheet: View {
         }
         scores = Dictionary(all, uniquingKeysWith: { max($0, $1) })
         // From the deduplicated scores: a saved person under the user's own
-        // name appeared twice, two buttons with one ForEach id.
+        // name would appear twice, two buttons with one ForEach id.
         soundsLike = scores
         .filter { $0.value >= PeopleMatch.offThreshold }
         .sorted { $0.value > $1.value }
@@ -484,7 +484,7 @@ struct SplitRecordingSheet: View {
                     // delete-confirmation alert for an action they
                     // thought they'd called off.
                     // .disabled, not hit-testing only: an accessibility
-                    // press went straight past .allowsHitTesting.
+                    // press goes straight past .allowsHitTesting.
                     .disabled(isWorking)
                     .opacity(isWorking ? 0.4 : 1)
                     Spacer()
@@ -590,8 +590,8 @@ struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
     /// A subview never gets more than the container's width: a chip with a
-    /// long folder or speaker name used to be placed at its unconstrained size
-    /// and ran out of a narrow column.
+    /// long folder or speaker name would otherwise be placed at its
+    /// unconstrained size and run out of a narrow column.
     private func size(of sv: LayoutSubview, within width: CGFloat) -> CGSize {
         let ideal = sv.sizeThatFits(.unspecified)
         guard width.isFinite, ideal.width > width else { return ideal }

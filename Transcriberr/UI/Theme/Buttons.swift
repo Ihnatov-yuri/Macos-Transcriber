@@ -44,8 +44,8 @@ struct LitButtonChrome<Label: View>: View {
             // already a self-contained Capsule (fill/stroke/clear), so it
             // never overflows the label's bounds — and a clip here would cut
             // off .litLift's drop shadow, which is deliberately drawn outside
-            // its own inner clip (see Materials.swift). Confirmed by review:
-            // this used to silently flatten every primary/accent button.
+            // its own inner clip (see Materials.swift), which would silently
+            // flatten every primary/accent button.
             .opacity(hovering ? 0.92 : 1)
             .onHover { hovering = $0 }
     }

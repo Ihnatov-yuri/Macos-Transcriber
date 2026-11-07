@@ -84,8 +84,7 @@ struct MetricTile: View {
                     .font(AppFont.text(11)).foregroundStyle(AppColor.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // What the number is, always on the tile (it used to show only
-            // when there was no trend, or on hover).
+            // What the number is, always on the tile.
             Text(metric.explanation)
                 .font(AppFont.text(10)).foregroundStyle(AppColor.ink3)
                 .fixedSize(horizontal: false, vertical: true)

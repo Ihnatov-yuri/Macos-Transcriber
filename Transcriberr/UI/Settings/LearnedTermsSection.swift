@@ -20,8 +20,8 @@ struct LearnedTermsSection: View {
                      : "Nothing new — every recurring name is already in your vocabulary.")
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             } else {
-                // Chips that wrap: one line used to hold one name, forty
-                // names took a screen and a half.
+                // Chips that wrap: with one name per line, forty names
+                // would take a screen and a half.
                 FlowLayout(spacing: 6) {
                     ForEach(showAll ? terms : Array(terms.prefix(Self.folded))) { term in
                         WordChip(term.spelling,

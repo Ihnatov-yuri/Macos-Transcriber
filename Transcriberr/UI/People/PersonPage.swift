@@ -748,7 +748,7 @@ struct PersonPage: View {
     // MARK: Loading
 
     /// Read on a background context of the same store, the way the You page
-    /// measures: a person heard in many meetings stalled the window while
+    /// measures: a person heard in many meetings would stall the window while
     /// their lines were fetched and measured. Only plain values cross back,
     /// and a reload superseded meanwhile (the task is cancelled) is dropped.
     private func reload() async {

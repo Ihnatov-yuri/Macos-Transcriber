@@ -167,8 +167,7 @@ enum AppMetric {
 
 extension Text {
     /// General-purpose small label — eyebrows, metadata, chip text,
-    /// sidebar rows, section indexes. Same call shape as the old
-    /// `monoLabel`, just Archivo and normal case: Lit Field has no
+    /// sidebar rows, section indexes. Archivo in normal case: Lit Field has no
     /// uppercase or letter-spacing styling anywhere.
     func uiLabel(_ size: CGFloat = 11, color: Color = AppColor.ink) -> some View {
         self

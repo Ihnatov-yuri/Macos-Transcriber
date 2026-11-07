@@ -26,12 +26,12 @@ struct LibraryView: View {
     @State private var selectedTagID: UUID?
     /// The debounced query, and the recordings whose TRANSCRIPT matches it.
     ///
-    /// `filtered` used to walk `rec.segments` for every recording on every
-    /// body evaluation — faulting the entire segment relationship of the
+    /// Walking `rec.segments` for every recording on every body evaluation
+    /// in `filtered` would fault the entire segment relationship of the
     /// entire library. Body re-runs on every keystroke AND on every `@Query`
     /// invalidation, which during a transcription run is once per chunk, so
     /// typing in FIND froze per character and got worse while a job streamed.
-    /// One `Segment` predicate fetch per settled query replaces all of it.
+    /// One `Segment` predicate fetch per settled query avoids all of it.
     @State private var appliedQuery = ""
     @State private var transcriptMatches: Set<UUID> = []
 
@@ -77,7 +77,7 @@ struct LibraryView: View {
         }
         .task(id: query) {
             let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            // Clearing applies at once: waiting here showed the old filtered
+            // Clearing applies at once: waiting here would show the stale filtered
             // list for a moment, with every folder count looking wrong.
             guard !q.isEmpty else {
                 appliedQuery = ""
@@ -462,7 +462,7 @@ struct LibraryView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                // ~208 pt wide: with a folder and two tags each label used to
+                // ~208 pt wide: with a folder and two tags each label would
                 // wrap word by word. One line; the tail truncates.
                 .lineLimit(1)
             }
@@ -591,8 +591,8 @@ struct LibraryView: View {
         }
 
         // Picking a file that already sits in Recordings (one "Reveal in
-        // Finder" away) used to add a SECOND row on the very same audio —
-        // and both rows then overwrote each other's .txt/.srt/.json sidecars
+        // Finder" away) would add a SECOND row on the very same audio —
+        // and both rows would then overwrite each other's .txt/.srt/.json sidecars
         // through TranscriptExporter. Select the row that already owns the
         // file instead of cloning it.
         if src.path == dest.path, let existing = all.first(where: { $0.audioPath == dest.path }) {
@@ -603,9 +603,9 @@ struct LibraryView: View {
         do {
             if src.path != dest.path {
                 // Copying a long recording is hundreds of megabytes; this
-                // method is MainActor-isolated (it's a View method), so the
-                // copy ran on the main thread and froze the window until it
-                // finished.
+                // method is MainActor-isolated (it's a View method), so a
+                // copy here would run on the main thread and freeze the window
+                // until it finished.
                 try await Task.detached(priority: .userInitiated) { [dest] in
                     try FileManager.default.copyItem(at: src, to: dest)
                 }.value

@@ -4,8 +4,8 @@ import Observation
 /// Someone's measured meetings, newest first, from the library.
 nonisolated enum SpeechHistory {
     /// Fewer words than this between everyone, and it is not a meeting: a
-    /// microphone test, a stray few seconds. Counted, they dragged every
-    /// "lately" down (four 7-18 s tests on 27 Oct).
+    /// microphone test, a stray few seconds. Counted, they drag every
+    /// "lately" down (measured: four 7-18 s tests).
     static let minimumMeetingWords = 80
 
     /// Who a line is by, for measuring: the split-track microphone's lines
@@ -37,7 +37,7 @@ nonisolated enum SpeechHistory {
         // Every meeting: measuring is text work over the lines (75 meetings,
         // about 15,000 lines, a fraction of a second). Each language and
         // each goal needs its own latest meetings, and a cap of the newest
-        // 30 hid Ukrainian (one of six meetings in it).
+        // 30 would hide Ukrainian (one of six meetings in it).
         for m in list {
             guard let rec = try? repository.get(id: m.id), !rec.isDeleted else { continue }
             let all = rec.segments.compactMap { s -> SpeechLine? in

@@ -808,7 +808,7 @@ struct SnippetsSettingsTab: View {
             }
             Section("Your snippets") {
                 // By the snippet's own identity, not its index: after a
-                // Delete, the field still focused edited the NEXT snippet.
+                // Delete, the field still focused would edit the NEXT snippet.
                 ForEach(container.snippetStore.snippets, id: \.uid) { snippet in
                     snippetRow(snippet.uid)
                 }
@@ -900,8 +900,8 @@ struct APIKeysSettingsTab: View {
                     HStack {
                         TapButton {
                             // Never let an empty field wipe a stored key. A
-                            // key copied with a trailing newline or space was
-                            // stored as-is and every request then failed auth.
+                            // key copied with a trailing newline or space would
+                            // be stored as-is and every request would fail auth.
                             guard let v = inputs[provider.rawValue]?
                                     .trimmingCharacters(in: .whitespacesAndNewlines),
                                   !v.isEmpty else { return }

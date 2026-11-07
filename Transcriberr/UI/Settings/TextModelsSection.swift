@@ -132,7 +132,7 @@ extension ModelEntry {
 
 /// All three models side by side, one measure at a time: three bars on one
 /// scale, the best value in each marked. Comparing across separate cards
-/// meant remembering bar lengths from one card to the next.
+/// would mean remembering bar lengths from one card to the next.
 private struct ModelComparison: View {
     let ramGB: Int
 

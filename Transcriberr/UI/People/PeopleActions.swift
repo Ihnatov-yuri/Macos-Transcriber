@@ -34,8 +34,8 @@ enum PeopleActions {
 
 /// Finds saved people in every recording that has speakers: names the
 /// clear matches and collects the near misses each person's page asks
-/// about. Recordings made before 5.0.0 were never matched with a track
-/// record, so without this their pages start empty. App-wide and
+/// about. Recordings from before track records existed were never matched,
+/// so without this their pages start empty. App-wide and
 /// cancellable; a recording being transcribed is skipped.
 @MainActor
 @Observable
@@ -243,8 +243,8 @@ enum VoiceImprover {
             }
         }
 
-        // Kept as they are: readings, and what was learned before 5.0 when
-        // there is nothing fresh to replace it with.
+        // Kept as they are: readings, and the earlier samples (no recording
+        // behind them) when there is nothing fresh to replace them with.
         var kept: [Item] = []
         var start = 0
         let freshIDs = Set(fresh.compactMap(\.recordingId))

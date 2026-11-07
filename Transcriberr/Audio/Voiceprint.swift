@@ -93,7 +93,7 @@ nonisolated enum VoiceprintStore {
         var dir = directory
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try? dir.setResourceValues(values)
+        AppLog.attempt("voiceprint", "keeping the voice print out of Time Machine") { try dir.setResourceValues(values) }
         try JSONEncoder().encode(print).write(to: printURL, options: .atomic)
         // Raw 16 kHz mono Float32: ~2 MB for 30 s, no codec in the way of a re-embed.
         try audio.withUnsafeBufferPointer { Data(buffer: $0) }.write(to: audioURL, options: .atomic)

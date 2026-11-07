@@ -55,6 +55,17 @@ nonisolated enum AppLog {
         write(level: "ERR ", category: category, message: m)
     }
 
+    /// `try?` that leaves a WARN line: for a failure the caller carries on
+    /// after, but that must be findable when a file goes missing later.
+    @discardableResult
+    static func attempt<T>(_ category: String, _ what: @autoclosure () -> String,
+                           _ body: () throws -> T) -> T? {
+        do { return try body() } catch {
+            warn(category, "\(what()) failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     // MARK: - File I/O
 
     private static let maxFileBytes = 5 * 1024 * 1024

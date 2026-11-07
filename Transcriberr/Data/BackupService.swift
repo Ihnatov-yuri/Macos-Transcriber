@@ -171,7 +171,7 @@ nonisolated enum BackupService {
                 let dir = url.deletingLastPathComponent()
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true,
                                        attributes: [.posixPermissions: 0o700])
-                try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+                AppLog.attempt("backup", "making the backup folder owner-only") { try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
                 let data = try encoder.encode(value)

@@ -313,7 +313,7 @@ struct CoachStore {
     func save(_ state: State) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(state).write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        AppLog.attempt("goals", "making \(url.lastPathComponent) owner-only") { try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
     }
 
     func reset() { try? FileManager.default.removeItem(at: url) }

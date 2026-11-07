@@ -277,7 +277,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             if let url = self.fileURL, !io.meIntervals.isEmpty,
                let data = try? JSONEncoder().encode(io.meIntervals) {
                 let sidecar = url.deletingPathExtension().appendingPathExtension("me.json")
-                try? data.write(to: sidecar)
+                AppLog.attempt("meeting", "writing \(sidecar.lastPathComponent)") { try data.write(to: sidecar) }
                 AppLog.info("meeting", "me-timeline: \(io.meIntervals.count) intervals → \(sidecar.lastPathComponent)")
                 io.meIntervals.removeAll()   // written once, even if finish runs twice
             }

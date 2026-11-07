@@ -277,7 +277,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             meAll += iv.filter { $0.count == 2 }.map { [$0[0] + offsetSeconds, $0[1] + offsetSeconds] }
         }
         if !meAll.isEmpty, let data = try? JSONEncoder().encode(meAll) {
-            try? data.write(to: sidecarPath(url.path, "me.json"))
+            AppLog.attempt("repo", "writing the merged me.json") { try data.write(to: sidecarPath(url.path, "me.json")) }
         }
 
         // Save with the WAV path FIRST — compressing before the row exists
@@ -316,7 +316,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         await postProcessTracker.markBusy(merged.id)
         let finalURL = await AudioCompressor.compressRecordingFiles(mainURL: url, includeSidecars: true)
         if finalURL != url {
-            try? updateAudioPath(finalURL, for: merged)
+            AppLog.attempt("repo", "pointing the merge at its compressed audio") { try updateAudioPath(finalURL, for: merged) }
         }
         await postProcessTracker.markIdle(merged.id)
         // The row was in the Library during the compression and can have
@@ -415,7 +415,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         if let merged {
             // The id before the delete: a deleted, saved model is not read.
             let id = merged.id
-            try? delete(merged)
+            AppLog.attempt("repo", "deleting the rolled-back merge") { try delete(merged) }
             BackupService.removeBackups(for: id)
         }
         for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
@@ -556,10 +556,10 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
                 }
             }
             if !meA.isEmpty, let data = try? JSONEncoder().encode(meA) {
-                try? data.write(to: sidecarPath(urlA.path, "me.json"))
+                AppLog.attempt("repo", "writing the first part's me.json") { try data.write(to: sidecarPath(urlA.path, "me.json")) }
             }
             if !meB.isEmpty, let data = try? JSONEncoder().encode(meB) {
-                try? data.write(to: sidecarPath(urlB.path, "me.json"))
+                AppLog.attempt("repo", "writing the second part's me.json") { try data.write(to: sidecarPath(urlB.path, "me.json")) }
             }
         }
 
@@ -615,8 +615,8 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             async let ca = AudioCompressor.compressRecordingFiles(mainURL: urlA, includeSidecars: true)
             async let cb = AudioCompressor.compressRecordingFiles(mainURL: urlB, includeSidecars: true)
             let (finalA, finalB) = await (ca, cb)
-            if finalA != urlA { try? updateAudioPath(finalA, for: first) }
-            if finalB != urlB { try? updateAudioPath(finalB, for: second) }
+            if finalA != urlA { AppLog.attempt("repo", "pointing the first part at its compressed audio") { try updateAudioPath(finalA, for: first) } }
+            if finalB != urlB { AppLog.attempt("repo", "pointing the second part at its compressed audio") { try updateAudioPath(finalB, for: second) } }
 
             guard recording.modelContext != nil, !recording.isDeleted else {
                 throw NSError(domain: "Split", code: -3, userInfo: [
@@ -711,8 +711,8 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             let firstID = first.id, secondID = second.id
             await postProcessTracker.markIdle(firstID)
             await postProcessTracker.markIdle(secondID)
-            try? delete(first)
-            try? delete(second)
+            AppLog.attempt("repo", "deleting the rolled-back first part") { try delete(first) }
+            AppLog.attempt("repo", "deleting the rolled-back second part") { try delete(second) }
             // Both halves were saved, so both have backup files; without
             // this `restore-backups` would bring them back as empty rows over
             // deleted audio (merge's rollback does the same).
@@ -1190,7 +1190,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         for rec in all where rec.segments.isEmpty {
             guard let newest = rec.versions.max(by: { $0.createdAtMillis < $1.createdAtMillis })
             else { continue }
-            if (try? restoreVersion(newest, to: rec)) != nil {
+            if AppLog.attempt("repo", "healing '\(rec.title)' from its newest version", { try restoreVersion(newest, to: rec) }) != nil {
                 healed += 1
                 AppLog.info("repo", "healed empty transcript for '\(rec.title)' from \(newest.engineId) version (\(newest.segmentCount) segments)")
             }

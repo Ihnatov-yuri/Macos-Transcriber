@@ -377,9 +377,9 @@ nonisolated struct PeopleStore {
         var excluded = dir
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try? excluded.setResourceValues(values)
+        AppLog.attempt("people", "keeping voices out of Time Machine") { try excluded.setResourceValues(values) }
         try JSONEncoder().encode(File(people: people)).write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        AppLog.attempt("people", "making \(url.lastPathComponent) owner-only") { try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
         NotificationCenter.default.post(name: Self.didChange, object: nil)
     }
 
@@ -1113,7 +1113,7 @@ enum PeopleNamer {
         guard !keys.isEmpty else {
             // Nothing to match this time: what an earlier run logged for
             // this recording points at speakers that may not exist now.
-            try? store.log([:], in: recording.id)
+            AppLog.attempt("people", "clearing the match log") { try store.log([:], in: recording.id) }
             unknown.record([], for: recording.id)
             return 0
         }

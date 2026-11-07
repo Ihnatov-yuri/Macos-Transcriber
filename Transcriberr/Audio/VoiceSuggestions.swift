@@ -51,9 +51,9 @@ nonisolated struct UnknownVoiceStore {
         var excluded = dir
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try? excluded.setResourceValues(values)
+        AppLog.attempt("people", "keeping voice suggestions out of Time Machine") { try excluded.setResourceValues(values) }
         try JSONEncoder().encode(f).write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        AppLog.attempt("people", "making \(url.lastPathComponent) owner-only") { try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
     }
 
     /// Replaces what is known about one recording's unnamed speakers.
@@ -61,20 +61,20 @@ nonisolated struct UnknownVoiceStore {
         var f = load()
         f.entries.removeAll { $0.recordingId == recording }
         f.entries += entries
-        try? save(f)
+        AppLog.attempt("people", "saving voice suggestions") { try save(f) }
     }
 
     /// Speakers that now have a name (saved, named or dismissed) drop out.
     func remove(keys: Set<String>) {
         var f = load()
         f.entries.removeAll { keys.contains($0.key) }
-        try? save(f)
+        AppLog.attempt("people", "saving voice suggestions") { try save(f) }
     }
 
     func dismiss(keys: Set<String>) {
         var f = load()
         f.dismissed = Array(Set(f.dismissed).union(keys))
-        try? save(f)
+        AppLog.attempt("people", "saving voice suggestions") { try save(f) }
     }
 
     func deleteAll() { try? FileManager.default.removeItem(at: url) }

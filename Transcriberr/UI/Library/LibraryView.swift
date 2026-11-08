@@ -548,18 +548,40 @@ struct LibraryView: View {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.allowedContentTypes = [
             .audio, .wav, .mp3, .mpeg4Audio,
             UTType("public.aiff-audio") ?? .audio,
             UTType("org.xiph.flac") ?? .audio,
+            // Video: only the sound is imported, as .m4a.
+            .movie, .mpeg4Movie, .quickTimeMovie,
         ]
         panel.prompt = "Import"
-        guard panel.runModal() == .OK, let src = panel.url else { return }
-        Task { await performImport(src: src) }
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        let picked = panel.urls
+        // One at a time: each import reads the folder to pick a free name.
+        Task { for src in picked { await performImport(src: src) } }
+    }
+
+    /// A movie file's sound written to `dest` as AAC in `.m4a`. Also used
+    /// for an `.mp4` that holds only sound, since `.mp4` counts as a movie.
+    private static func extractAudio(_ src: URL, to dest: URL) async throws {
+        let asset = AVURLAsset(url: src)
+        guard try await !asset.loadTracks(withMediaType: .audio).isEmpty else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [
+                NSLocalizedDescriptionKey: "\(src.lastPathComponent) has no sound to transcribe.",
+            ])
+        }
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw CocoaError(.fileReadUnsupportedScheme, userInfo: [
+                NSLocalizedDescriptionKey: "The sound of \(src.lastPathComponent) cannot be extracted.",
+            ])
+        }
+        try await export.export(to: dest, as: .m4a)
     }
 
     private func performImport(src: URL) async {
+        let isVideo = UTType(filenameExtension: src.pathExtension)?.conforms(to: .movie) == true
         let dir = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Transcriberr/Recordings", isDirectory: true)
@@ -575,10 +597,11 @@ struct LibraryView: View {
         // call.wav next to call.m4a would have the two rows overwrite each
         // other's transcript files and, on compression, audio. Compared
         // case-insensitively because the default APFS volume is.
-        var dest = dir.appendingPathComponent(src.lastPathComponent)
+        var dest = dir.appendingPathComponent(
+            isVideo ? src.deletingPathExtension().appendingPathExtension("m4a").lastPathComponent : src.lastPathComponent)
         if src.path != dest.path {
             let base = src.deletingPathExtension().lastPathComponent
-            let ext = src.pathExtension
+            let ext = isVideo ? "m4a" : src.pathExtension
             let takenBases = Set(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
                 .map { ($0 as NSString).deletingPathExtension.lowercased() })
             var name = base
@@ -601,7 +624,9 @@ struct LibraryView: View {
         }
 
         do {
-            if src.path != dest.path {
+            if isVideo {
+                try await Self.extractAudio(src, to: dest)
+            } else if src.path != dest.path {
                 // Copying a long recording is hundreds of megabytes; this
                 // method is MainActor-isolated (it's a View method), so a
                 // copy here would run on the main thread and freeze the window

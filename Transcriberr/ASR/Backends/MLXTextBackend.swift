@@ -54,10 +54,25 @@ actor MLXTextBackend: ASRBackend, LocalTextBackend {
         Memory.clearCache()
     }
 
+    /// Reloads only when a generation is running or queued: a wedge in a
+    /// speech engine must not reload an idle multi-GB text model. Overlapping
+    /// calls (several pipelined chunks timing out together) share one reload.
     func recoverWedge(modelPath: URL?) async throws {
-        await release()
-        try await load(modelPath: modelPath)
+        if let reloading { return try await reloading.value }
+        guard await queue.isBusy else {
+            try await load(modelPath: modelPath)
+            return
+        }
+        let task = Task {
+            await self.release()
+            try await self.load(modelPath: modelPath)
+        }
+        reloading = task
+        defer { reloading = nil }
+        try await task.value
     }
+
+    private var reloading: Task<Void, Error>?
 
     func transcribeChunk(
         samples: [Float],

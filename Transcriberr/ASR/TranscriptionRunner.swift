@@ -350,6 +350,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                     exact: params.expectedSpeakersExact
                 )
                 AppLog.info("runner", "diar pre-pass produced \(diarSegments.count) regions")
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 AppLog.error("runner", "diar pre-pass failed (continuing without hints): \(error.localizedDescription)")
                 diarSegments = []
@@ -385,6 +387,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         continuation.yield(.stage(text: "Loading model…", fraction: 0.14))
         if WhisperModel.needsLanguageProbe(params.languages), usesWhisper(params.backend) {
             await repinIfUkrainian(tracks: [samples] + (cleanedMic.map { [$0] } ?? []))
+            try Task.checkCancellation()
         }
         let backend = factory.backend(for: params.backend)
         await (backend as? EnsembleBackend)?.setRunLanguages(params.languages)

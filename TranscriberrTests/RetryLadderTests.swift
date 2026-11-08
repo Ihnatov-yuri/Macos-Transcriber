@@ -115,4 +115,16 @@ final class RetryLadderTests: XCTestCase {
             XCTAssertEqual((error as? URLError)?.code, .cannotDecodeContentData)
         }
     }
+
+    // Super, both engines failed on a chunk: cancellation and an exhausted
+    // decode budget go back to the ladder; anything else retries in place.
+    @MainActor
+    func testBothEnginesFailingHandsCancelAndBudgetToTheLadder() {
+        struct Other: Error {}
+        XCTAssertTrue(EnsembleBackend.ladderError(CancellationError(), Other()) is CancellationError)
+        XCTAssertTrue(EnsembleBackend.ladderError(Other(), CancellationError()) is CancellationError)
+        XCTAssertEqual(EnsembleBackend.ladderError(Self.budget, Other()) as? WhisperBackend.DecodeBudgetExceeded, Self.budget)
+        XCTAssertEqual(EnsembleBackend.ladderError(Other(), Self.budget) as? WhisperBackend.DecodeBudgetExceeded, Self.budget)
+        XCTAssertNil(EnsembleBackend.ladderError(Other(), Other()))
+    }
 }

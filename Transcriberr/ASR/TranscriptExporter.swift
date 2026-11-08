@@ -148,6 +148,57 @@ enum TranscriptExporter {
         try data.write(to: dir.appendingPathComponent("\(stem).speakers.json"))
     }
 
+    /// WebVTT: the SRT cues with a `WEBVTT` header, `.` before the
+    /// milliseconds and the speaker as a voice span (`<v Anna>`), which
+    /// players show as a label.
+    static func vttText(segments: [Segment], style: (String) -> String = { $0 }) -> String {
+        var out = "WEBVTT\n\n"
+        for seg in segments {
+            let text = style(seg.text).split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+                // "-->" would end the cue timing line early in a parser.
+                .replacingOccurrences(of: "-->", with: "→")
+            guard !text.isEmpty else { continue }
+            let name = (seg.speakerName ?? seg.speaker ?? "")
+                .replacingOccurrences(of: ">", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            let body = name.isEmpty ? text : "<v \(name)>\(text)"
+            out += "\(vttTime(seg.startSeconds)) --> \(vttTime(max(seg.endSeconds, seg.startSeconds)))\n\(body)\n\n"
+        }
+        return out
+    }
+
+    static func vttTime(_ s: Double) -> String {
+        srtTime(s).replacingOccurrences(of: ",", with: ".")
+    }
+
+    /// The transcript as a Markdown document: title, date and length, then
+    /// one paragraph per line with its time and speaker.
+    static func markdownText(title: String, date: Date, durationSeconds: Double,
+                             segments: [Segment], style: (String) -> String = { $0 }) -> String {
+        let df = DateFormatter()
+        df.dateStyle = .long
+        df.timeStyle = .short
+        var out = "# \(title)\n\n_\(df.string(from: date)) · \(clock(durationSeconds))_\n\n"
+        for seg in segments {
+            let text = style(seg.text).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let name = seg.speakerName ?? seg.speaker ?? ""
+            let who = name.isEmpty ? "" : " **\(name):**"
+            out += "`\(clock(seg.startSeconds))`\(who) \(text)\n\n"
+        }
+        return out
+    }
+
+    /// "4:05" or "1:02:09".
+    static func clock(_ s: Double) -> String {
+        let t = s.isFinite ? Int(max(0, s)) : 0
+        let h = t / 3600, m = (t % 3600) / 60, sec = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
+    }
+
     static func srtTime(_ s: Double) -> String {
         // Round once in whole milliseconds: truncating the fraction would put
         // 2.3 s at 00:00:02,299 (binary 0.2999…), and Int() traps on NaN/inf.

@@ -46,4 +46,28 @@ final class TranscriptExporterTests: XCTestCase {
                        "1\n00:00:00,000 --> 00:00:01,000\nOne\n\n"
                        + "2\n00:00:03,000 --> 00:00:04,000\nTwo\n\n")
     }
+
+    func testVttHasHeaderDotMillisAndVoiceSpans() {
+        let segs = [
+            Segment(startSeconds: 1.5, endSeconds: 3, text: "Hello --> there", speaker: "SPEAKER_00", speakerName: "Yuri"),
+            Segment(startSeconds: 3, endSeconds: 4, text: "  "),
+            Segment(startSeconds: 4, endSeconds: 5, text: "Hi"),
+        ]
+        XCTAssertEqual(TranscriptExporter.vttText(segments: segs),
+                       "WEBVTT\n\n00:00:01.500 --> 00:00:03.000\n<v Yuri>Hello → there\n\n"
+                       + "00:00:04.000 --> 00:00:05.000\nHi\n\n")
+    }
+
+    func testMarkdownListsLinesWithTimeAndSpeaker() {
+        let segs = [
+            Segment(startSeconds: 65, endSeconds: 70, text: "Hello", speaker: "SPEAKER_00", speakerName: "Yuri"),
+            Segment(startSeconds: 3725, endSeconds: 3730, text: "Bye"),
+        ]
+        let md = TranscriptExporter.markdownText(title: "Standup", date: Date(timeIntervalSince1970: 0),
+                                                 durationSeconds: 3730, segments: segs)
+        XCTAssertTrue(md.hasPrefix("# Standup\n\n_"))
+        XCTAssertTrue(md.contains(" · 1:02:10_\n\n"))
+        XCTAssertTrue(md.contains("`1:05` **Yuri:** Hello\n\n"))
+        XCTAssertTrue(md.hasSuffix("`1:02:05` Bye\n\n"))
+    }
 }

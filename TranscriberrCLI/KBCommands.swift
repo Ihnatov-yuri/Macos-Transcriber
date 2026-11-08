@@ -70,6 +70,8 @@ private func fail(_ message: String) -> Int32 {
 
 func cmdKB(_ raw: [String]) -> Int32 {
     let parsed = KBArgs(raw)
+    // `--help` parses as a flag, never as a positional.
+    if parsed.flags.contains("help") { kbUsage(); return 0 }
     guard let sub = parsed.positionals.first else { kbUsage(); return 64 }
     let rest = Array(parsed.positionals.dropFirst())
     // Before opening the store: help must work with no database present.
@@ -77,6 +79,11 @@ func cmdKB(_ raw: [String]) -> Int32 {
     // A missing argument is a usage error, also with no store present (and
     // it is not a read of anything).
     if ["search", "get", "outputs"].contains(sub), rest.isEmpty { kbUsage(); return 64 }
+    // An unknown subcommand is a usage error too: no access check, no
+    // "assistant last read" stamp, no store opened.
+    guard ["list", "search", "get", "outputs", "folders", "tags", "stats"].contains(sub) else {
+        kbUsage(); return 64
+    }
     guard AssistantAccess.isAllowed else {
         FileHandle.standardError.write(Data((AssistantAccess.refusal + "\n").utf8))
         return 77   // EX_NOPERM

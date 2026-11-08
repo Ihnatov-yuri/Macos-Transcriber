@@ -604,13 +604,19 @@ nonisolated final class DictationController: @unchecked Sendable {
     func begin(target: Target) {
         guard canBegin else { return }
         lastError = nil
+        // `isCapturing` covers a recorder that is still starting (seconds of
+        // voice-processing setup), when its state has not turned yet: a
+        // second engine on the same input device must not open then.
+        if recorder.isCapturing {
+            showMessage("Stop the recording first"); return
+        }
         if case .recording = recorder.state {
             showMessage("Stop the recording first"); return
         }
         if case .paused = recorder.state {
             showMessage("Stop the recording first"); return
         }
-        if meetingRecorder.isRunning {
+        if meetingRecorder.isCapturing {
             showMessage("Stop the meeting recording first"); return
         }
         messageTask?.cancel()

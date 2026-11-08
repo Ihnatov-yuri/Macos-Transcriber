@@ -92,4 +92,19 @@ final class AudioPlayerControllerTests: XCTestCase {
         let peaks = await task.value
         XCTAssertTrue(peaks.isEmpty)
     }
+
+    // Speed cycles through the fixed steps, wraps, and is remembered.
+    func testRateCyclesWrapsAndPersists() {
+        let p = AudioPlayerController()
+        p.setRate(1)
+        var seen: [Float] = []
+        for _ in AudioPlayerController.rates { p.cycleRate(); seen.append(p.rate) }
+        XCTAssertEqual(seen, [1.25, 1.5, 1.75, 2, 0.75, 1])
+        p.setRate(1.5)
+        XCTAssertEqual(AudioPlayerController().rate, 1.5)
+        p.setRate(1)
+        XCTAssertEqual(PlayerBar.rateLabel(1), "1×")
+        XCTAssertEqual(PlayerBar.rateLabel(1.25), "1.25×")
+        XCTAssertEqual(PlayerBar.rateLabel(0.75), "0.75×")
+    }
 }

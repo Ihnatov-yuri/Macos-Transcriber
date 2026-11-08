@@ -1681,6 +1681,15 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
 
         var out: [RawSegment] = []
         let totalChars = text.count
+        // Text before the first label (a model continuing the previous
+        // chunk's sentence) is kept, without a speaker.
+        if let first = ranges.first, first.range.lowerBound > text.startIndex {
+            let lead = String(text[..<first.range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !lead.isEmpty {
+                let endFrac = Double(text.distance(from: text.startIndex, to: first.range.lowerBound)) / Double(totalChars)
+                out.append(RawSegment(startSeconds: chunkStart, endSeconds: chunkStart + endFrac * duration, text: lead))
+            }
+        }
         for i in 0 ..< ranges.count {
             let segStart = ranges[i].range.upperBound
             let segEnd = i + 1 < ranges.count ? ranges[i + 1].range.lowerBound : text.endIndex

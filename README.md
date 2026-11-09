@@ -66,13 +66,13 @@ Super is the mode I use for anything that matters. Both engines transcribe every
 
 ## Transcripts, versions and presets
 
-Each speaker line has its timestamp, its speaker and a colour, and clicking a line plays the audio from there. A row above the transcript shows everyone in the recording with how much of it they talked; unnamed speakers can be named one by one, and a name you give carries into every saved version. The header switches between clean reading text, with the ums and stutters taken out, and exactly what was said.
+Each speaker line has its timestamp, its speaker and a colour, and clicking a line plays the audio from there, at any speed from 0.75× to 2×, with 15-second skips. A row above the transcript shows everyone in the recording with how much of it they talked; unnamed speakers can be named one by one, and a name you give carries into every saved version. The header switches between clean reading text, with the ums and stutters taken out, and exactly what was said.
 
 ![A transcript with speakers, the people row and the playback bar; the text of the meeting is blurred](docs/images/transcript.jpg)
 
 Every engine run is kept as a version, so two engines can be compared side by side and any version restored. Summary, Minutes, Clean, Translate & polish and Context-aware rewrite are presets: prompts you can edit, duplicate, reorder or add to, each with a history of earlier prompts and outputs. A deterministic pass removes stutters, phrase echoes and hesitation fillers before Gemma sees the text. In an early test it took 371 fillers out of one meeting before the model saw a word of it. Your vocabulary (names, products, the spellings you care about, global or per language) is fed into the speech engines and every preset, and Transcriberr harvests recurring names from your library and offers them as additions.
 
-Recordings live in folders and tags, audio is stored as AAC, and sidecar files (`.txt`, `.srt`, `.json`, `.speakers.json`) round-trip with the Android app. Share › Export to a folder writes everything about one recording, every version and output included, with a checksummed manifest.
+Recordings live in folders and tags, audio is stored as AAC, and sidecar files (`.txt`, `.srt`, `.json`, `.speakers.json`) round-trip with the Android app. Share also writes WebVTT subtitles, with each speaker as a voice label, and the transcript as Markdown. Import takes several files at once, and from a video file it keeps the sound. Share › Export to a folder writes everything about one recording, every version and output included, with a checksummed manifest.
 
 ## Dictation
 

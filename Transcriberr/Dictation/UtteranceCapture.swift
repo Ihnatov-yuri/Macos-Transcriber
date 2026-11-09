@@ -250,7 +250,14 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         }
         converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
         converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
-        ioQueue.sync { io.converter = converter }
+        // The old converter's filter tail goes out first, and old-route
+        // buffers never reach the new converter: at the wrong rate they come
+        // out at the wrong speed and pitch (see WavRecorder's route change).
+        ioQueue.sync {
+            flushConverterTail()
+            io.pendingInputs.removeAll()
+            io.converter = converter
+        }
         do {
             try ExceptionTrap.run {
                 input.removeTap(onBus: 0)
@@ -497,6 +504,9 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
             Task { @MainActor [weak self] in self?.markAudioArrived() }
         }
         guard let converter = io.converter else { return }
+        // A tap buffer from before a route change, still queued here.
+        let rate = converter.inputFormat.sampleRate
+        guard abs(input.format.sampleRate - rate) < 0.5 else { return }
         io.pendingInputs.append(input)
         let ratio = targetFormat.sampleRate / input.format.sampleRate
         while true {

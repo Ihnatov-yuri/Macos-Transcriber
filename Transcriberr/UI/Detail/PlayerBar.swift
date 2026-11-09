@@ -29,6 +29,8 @@ struct PlayerBar: View {
                 .contentShape(Rectangle())
             }
 
+            skipButton(-15)
+            skipButton(15)
 
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -51,6 +53,16 @@ struct PlayerBar: View {
             Text("\(timeStamp(container.audioPlayer.currentTime)) / \(timeStamp(container.audioPlayer.duration))")
                 .uiLabel(10, color: AppColor.ink2)
                 .monospacedDigit()
+
+            TapButton {
+                container.audioPlayer.cycleRate()
+            } label: {
+                Text(Self.rateLabel(container.audioPlayer.rate))
+                    .uiLabel(10, color: container.audioPlayer.rate == 1 ? AppColor.ink2 : AppColor.accent)
+                    .monospacedDigit()
+                    .frame(minWidth: 34, minHeight: 28)
+            }
+            .help("Playback speed")
         }
         .padding(.horizontal, AppMetric.sheetPadding)
         .padding(.vertical, 10)
@@ -99,6 +111,25 @@ struct PlayerBar: View {
             }
             .frame(maxWidth: width, alignment: .leading)
         }
+    }
+
+    /// Back or forward by `seconds`.
+    private func skipButton(_ seconds: Double) -> some View {
+        TapButton {
+            container.audioPlayer.skip(seconds)
+        } label: {
+            Text(seconds < 0 ? "−\(Int(-seconds))" : "+\(Int(seconds))")
+                .uiLabel(10, color: AppColor.ink2)
+                .monospacedDigit()
+                .frame(minWidth: 26, minHeight: 28)
+        }
+        .help(seconds < 0 ? "Back \(Int(-seconds)) seconds" : "Forward \(Int(seconds)) seconds")
+    }
+
+    /// "1×", "1.25×", "0.75×".
+    nonisolated static func rateLabel(_ rate: Float) -> String {
+        let s = String(format: "%g", Double(rate))
+        return "\(s)×"
     }
 
     /// Small solid triangle for the play state.

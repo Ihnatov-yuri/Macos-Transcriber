@@ -27,7 +27,7 @@ The e2e script prints one line per check (`PASS`, `FAIL` or `SKIP`, with a reaso
 | 9 | Background refinement with Super after a meeting's draft | `ASR/JobManager.swift`, `ASR/TranscriptionRunner.swift` | `PipelineLogicTests.swift`: `testSuperWaitsForTheRecordingToEnd`, `testNotRecordingDoesNotWait`; `RepositoryTests.swift`: `testPendingTaskKeepsBackgroundRefinementFlag`, `testRefinementSpliceIsSameTrackOnly` | UNIT | unit + manual |
 | 10 | Crash recovery of recordings (WAV header repair, orphan import) | `Audio/WavRepair.swift` | `WavRepairTests.swift` (all) | UNIT | unit |
 | 11 | Recordings and sidecar tracks stored as AAC | `Audio/AudioCompressor.swift` | `AudioCompressorTests.swift` (all) | UNIT | unit |
-| 12 | Import an audio file (Library open panel) and decode any format | `UI/Library/LibraryView.swift` (`NSOpenPanel`), `Audio/AudioDecoder.swift` | `RunGapTests.swift`: `testSixteenKilohertzMonoFlacDecodes`, `testUndecodableFileNamesBothReadersReasons` | UNIT | unit + CI-e2e (`decode` of AIFF, WAV 16k, WAV 44.1k, M4A and FLAC: the duration must match `afinfo`; a non-audio file exits 1) + manual (panel) |
+| 12 | Import audio files, several at once, or the sound of a video file as `.m4a` (Library open panel), and decode any format | `UI/Library/LibraryView.swift` (`NSOpenPanel`), `Audio/AudioDecoder.swift` | `RunGapTests.swift`: `testSixteenKilohertzMonoFlacDecodes`, `testUndecodableFileNamesBothReadersReasons` | UNIT | unit + CI-e2e (`decode` of AIFF, WAV 16k, WAV 44.1k, M4A and FLAC: the duration must match `afinfo`; a non-audio file exits 1) + manual (panel) |
 | 13 | Offline noise suppression | `Audio/NoiseSuppressor.swift` | `CoreLogicTests.swift`: `testNoiseSuppressorSafeOnSilenceAndFinite` | UNIT | unit + CI-e2e (`noisesup`) |
 | 14 | Microphone picker (Settings, menu bar) | `Audio/AudioInputDevices.swift`, `UI/Dictation/DictationMenu.swift` (`MicrophonePicker`) | none | NOT-AUTOMATABLE: needs real input devices | manual |
 
@@ -73,7 +73,7 @@ The e2e script prints one line per check (`PASS`, `FAIL` or `SKIP`, with a reaso
 
 | # | Feature | Where in code | Unit tests | Coverage | How verified |
 |---|---|---|---|---|---|
-| 43 | Transcript view: click a line to play from it, one line highlighted | `UI/Detail/DetailView.swift`, `UI/Detail/PlayerBar.swift`, `Audio/AudioPlayerController.swift`, `Audio/WaveformLoader.swift` | `AudioPlayerControllerTests.swift` (all) | UNIT | unit + manual |
+| 43 | Transcript view: click a line to play from it, one line highlighted; playback speed (0.75× to 2×, remembered) and skip 15 s | `UI/Detail/DetailView.swift`, `UI/Detail/PlayerBar.swift`, `Audio/AudioPlayerController.swift`, `Audio/WaveformLoader.swift` | `AudioPlayerControllerTests.swift` (all, including `testRateCyclesWrapsAndPersists`) | UNIT | unit + manual |
 | 44 | Clean reading text or exactly what was said | `ASR/TextDestutter.swift`, `ASR/TranscriptHygiene.swift` (`TranscriptStyle`) | `CoreLogicTests.swift`: `testStutterRunsCollapse`, `testPhraseEchoCollapses`, `testDeliberateRepeatsSurvive`; `TranscriptHygieneTests.swift`: `testCleanStyleDropsHesitationsKeepsTicWords`; `PipelineLogicTests.swift`: `testDestutter*` | UNIT | unit |
 | 45 | Edit a line, mark a transcript checked, corrections kept as a benchmark | `Data/RecordingRepository.swift`, `ASR/Benchmark.swift`, `UI/Settings/BenchmarkSection.swift` | `RepositoryTests.swift`: `testCorrectSegmentSavesAndSkipsNoOps`; `BenchmarkTests.swift` (all) | UNIT | unit + CI-e2e (`bench`: an empty set, a checked line at exactly 20.0% WER, and `bench score parakeet-v3` at 40% WER or less) |
 | 46 | Versions: every run kept, compare, restore | `Data/RecordingRepository.swift` (`snapshotVersion`), `UI/Detail/DetailView.swift` | `RepositoryTests.swift`: `testSnapshotDedupsAndRestores`, `testSnapshotDoesNotDedupAcrossRecordings`, `testRestoreKeepsHandEditsAsAVersion` | UNIT | unit + manual |
@@ -92,7 +92,7 @@ The e2e script prints one line per check (`PASS`, `FAIL` or `SKIP`, with a reaso
 | 59 | Split a recording at a time | `UI/Detail/DetailSheets.swift` (`SplitRecordingSheet`), `Data/RecordingRepository.swift` | `RepositoryTests.swift`: `testSplit*` | UNIT | unit |
 | 60 | Delete a recording or a version, after a confirmation | `Data/RecordingRepository.swift`, `UI/Detail/DetailView.swift` | `FolderTagTests.swift`: `testDeleteRecordingLeavesSharedOrganizersIntact`; `OutputHistoryTests.swift`: `testDeletingTheRecordingDeletesItsHistory`; `RepositoryTests.swift`: `testDeletingRecordingDropsItsPendingTask` | UNIT | unit + manual (the dialog) |
 | 61 | Sidecars `.txt`, `.srt`, `.json`, `.speakers.json` (Android round trip), Re-export sidecars | `ASR/TranscriptExporter.swift` | `TranscriptExporterTests.swift` (all); `FeatureCoverageTests.swift`: `testTxtAndSpeakerSidecarsNextToTheAudio` (new) | UNIT | unit |
-| 62 | Share › .txt / .srt / .json / audio, share the transcript as text | `UI/Detail/DetailView.swift` (share menu) | none | NOT-AUTOMATABLE: system share sheet | manual |
+| 62 | Share › .txt / .srt / .json / .vtt / Markdown / audio, share the transcript as text | `UI/Detail/DetailView.swift` (share menu), `ASR/TranscriptExporter.swift` (`vttText`, `markdownText`) | `TranscriptExporterTests.swift`: `testVttHasHeaderDotMillisAndVoiceSpans`, `testMarkdownListsLinesWithTimeAndSpeaker` (the documents); the share sheet itself is NOT-AUTOMATABLE | UNIT | unit + manual (share sheet) |
 | 63 | Export to a folder, with or without audio, with a checksummed manifest | `Data/RecordingFolderExporter.swift` | `OutputHistoryTests.swift`: `testExportWritesEverythingWithAManifest`, `testSafeFileNames` | UNIT | unit + manual |
 | 64 | Transcript backups in ~/Documents/Transcriberr Backups, `restore-backups` | `Data/BackupService.swift`, `TranscriberrCLI/BackupCommands.swift` | `RepositoryTests.swift`: `testBackupShadowsRecordingVersionAndOutput`, `testBackupSurvivesRecordingDelete`, `testLiveAppendDoesNotBackupPerChunk` | UNIT | unit + CI-e2e (`restore-backups --dry-run` with no backups) + manual (a real restore) |
 | 65 | Older stores open after an update | `Data/Schema.swift` | `StoreMigrationTests.swift` (all) | UNIT | unit |
@@ -155,11 +155,11 @@ The e2e script prints one line per check (`PASS`, `FAIL` or `SKIP`, with a reaso
 ### Counts
 
 - Features: 100.
-- Coverage UNIT: 71. 9 of them (rows 23, 25, 27, 50, 54, 61, 82, 87 and 96) get their first unit test, or a new one, in `FeatureCoverageTests.swift`.
+- Coverage UNIT: 72. 9 of them (rows 23, 25, 27, 50, 54, 61, 82, 87 and 96) get their first unit test, or a new one, in `FeatureCoverageTests.swift`.
 - Covered by `scripts/ci-e2e.sh`: 32 rows. A push runs 24 of them. Rows 18, 20 and 21 (Whisper, the language probe and Super) need `whisper` from *Run workflow*, and rows 23, 27, 49, 52 and 98 need `gemma`.
 - CLI-only, so no unit test is possible and CI-e2e covers them: 3 (rows 83, 85 and 91).
 - Coverage NONE (automatable but not tested yet): 3 (rows 28, 67 and 84).
-- NOT-AUTOMATABLE: 23. Of these, 11 rest on the manual checklist alone: rows 14, 62, 71, 75, 76, 77, 78, 80, 90, 95 and 100. The other 12 also have unit or CI-e2e checks on the part that can run headless.
+- NOT-AUTOMATABLE: 22. Of these, 10 rest on the manual checklist alone: rows 14, 71, 75, 76, 77, 78, 80, 90, 95 and 100. The other 12 also have unit or CI-e2e checks on the part that can run headless.
 
 ## What CI-e2e does not prove
 

@@ -350,6 +350,8 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                     exact: params.expectedSpeakersExact
                 )
                 AppLog.info("runner", "diar pre-pass produced \(diarSegments.count) regions")
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 AppLog.error("runner", "diar pre-pass failed (continuing without hints): \(error.localizedDescription)")
                 diarSegments = []
@@ -385,6 +387,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         continuation.yield(.stage(text: "Loading model…", fraction: 0.14))
         if WhisperModel.needsLanguageProbe(params.languages), usesWhisper(params.backend) {
             await repinIfUkrainian(tracks: [samples] + (cleanedMic.map { [$0] } ?? []))
+            try Task.checkCancellation()
         }
         let backend = factory.backend(for: params.backend)
         await (backend as? EnsembleBackend)?.setRunLanguages(params.languages)
@@ -1678,6 +1681,15 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
 
         var out: [RawSegment] = []
         let totalChars = text.count
+        // Text before the first label (a model continuing the previous
+        // chunk's sentence) is kept, without a speaker.
+        if let first = ranges.first, first.range.lowerBound > text.startIndex {
+            let lead = String(text[..<first.range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !lead.isEmpty {
+                let endFrac = Double(text.distance(from: text.startIndex, to: first.range.lowerBound)) / Double(totalChars)
+                out.append(RawSegment(startSeconds: chunkStart, endSeconds: chunkStart + endFrac * duration, text: lead))
+            }
+        }
         for i in 0 ..< ranges.count {
             let segStart = ranges[i].range.upperBound
             let segEnd = i + 1 < ranges.count ? ranges[i + 1].range.lowerBound : text.endIndex

@@ -16,6 +16,32 @@ nonisolated final class AudioPlayerController: @unchecked Sendable {
     private(set) var duration: Double = 0
     private(set) var isPlaying: Bool = false
 
+    /// Playback speed, kept across recordings and launches.
+    private(set) var rate: Float = AudioPlayerController.storedRate
+    static let rates: [Float] = [1, 1.25, 1.5, 1.75, 2, 0.75]
+    private static let rateKey = "player.rate"
+    private static var storedRate: Float {
+        let r = UserDefaults.standard.float(forKey: rateKey)
+        return rates.contains(r) ? r : 1
+    }
+
+    /// The next speed in `rates`, applied at once while playing.
+    func cycleRate() {
+        let i = Self.rates.firstIndex(of: rate) ?? 0
+        setRate(Self.rates[(i + 1) % Self.rates.count])
+    }
+
+    func setRate(_ r: Float) {
+        rate = r
+        UserDefaults.standard.set(r, forKey: Self.rateKey)
+        // `play()` starts at `defaultRate`; a playing item changes now.
+        player?.defaultRate = r
+        if isPlaying { player?.rate = r }
+    }
+
+    /// Moves the playhead by `seconds` (negative goes back).
+    func skip(_ seconds: Double) { seek(to: currentTime + seconds) }
+
     /// Lazy-build peak amplitude buckets for the waveform scrubber (200 buckets).
     private(set) var waveform: [Float] = []
     /// The in-flight peak extraction, cancelled when another file loads.
@@ -37,7 +63,10 @@ nonisolated final class AudioPlayerController: @unchecked Sendable {
         currentTime = 0
         duration = 0
         let item = AVPlayerItem(url: url)
+        // Speech above 1x: keep the pitch, no chipmunk voices.
+        item.audioTimePitchAlgorithm = .timeDomain
         let p = AVPlayer(playerItem: item)
+        p.defaultRate = rate
         // Reaching the end must flip the button back to "play" — AVPlayer
         // stops silently, and a stale isPlaying made the next tap a no-op
         // pause instead of a replay.
@@ -106,6 +135,7 @@ nonisolated final class AudioPlayerController: @unchecked Sendable {
             currentTime = 0
         }
         player.play()
+        player.rate = rate
         isPlaying = true
     }
     func pause() { player?.pause(); isPlaying = false }

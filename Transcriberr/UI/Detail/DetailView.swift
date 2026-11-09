@@ -490,6 +490,38 @@ struct DetailView: View {
         presentSharePicker(items: [body])
     }
 
+    /// WebVTT or Markdown, written on demand (not sidecars: the Android app
+    /// reads only .txt/.srt/.json) to a temporary folder and shared.
+    private enum ExtraFormat { case vtt, markdown }
+
+    private func shareExtra(_ format: ExtraFormat) {
+        let segments = recording.segments.sorted { $0.startSeconds < $1.startSeconds }
+        let style = transcriptStyle
+        let stem = URL(fileURLWithPath: recording.audioPath).deletingPathExtension().lastPathComponent
+        let (body, ext): (String, String) = {
+            switch format {
+            case .vtt:
+                return (TranscriptExporter.vttText(segments: segments, style: style.apply), "vtt")
+            case .markdown:
+                let date = Date(timeIntervalSince1970: Double(recording.createdAtMillis) / 1000)
+                return (TranscriptExporter.markdownText(
+                    title: recording.title, date: date, durationSeconds: recording.durationSeconds,
+                    segments: segments, style: style.apply), "md")
+            }
+        }()
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Transcriberr Share/\(UUID().uuidString)", isDirectory: true)
+        let url = dir.appendingPathComponent("\(stem).\(ext)")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            presentSharePicker(items: [url])
+        } catch {
+            AppLog.warn("share", "could not write \(ext): \(error.localizedDescription)")
+            shareTranscript()
+        }
+    }
+
     /// Sidecar kinds for the Share ↗ menu.
     private enum SidecarKind { case txt, srt, json, audio }
 
@@ -565,6 +597,8 @@ struct DetailView: View {
                 Button("Share .txt") { shareSidecar(.txt) }.disabled(!hasTranscript)
                 Button("Share .srt") { shareSidecar(.srt) }.disabled(!hasTranscript)
                 Button("Share .json") { shareSidecar(.json) }.disabled(!hasTranscript)
+                Button("Share .vtt (WebVTT)") { shareExtra(.vtt) }.disabled(!hasTranscript)
+                Button("Share as Markdown") { shareExtra(.markdown) }.disabled(!hasTranscript)
                 Divider()
                 Button("Share audio file") { shareSidecar(.audio) }
                 Divider()

@@ -566,6 +566,9 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
             var b = to.isFinite ? Int((to * 16_000).rounded(.up)) : samples.count
             if b - a < win { let mid = (a + b) / 2; b = mid + win / 2; lo = max(0, mid - win / 2) } else { lo = a }
             hi = min(samples.count, max(b, lo + win))
+            // A line in the chunk's last 0.2 s: the window slides back from
+            // the end, so a real word there is measured, not read as silence.
+            if hi - lo < win, samples.count >= win { lo = max(0, hi - win) }
         }
         guard hi - lo >= win else { return 0 }
         return rawPeak(samples, lo, hi, win)

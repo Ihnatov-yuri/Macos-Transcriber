@@ -1051,6 +1051,10 @@ func main() async -> Int32 {
 /// Parakeet UK release on this Mac and on Hugging Face. `update` fetches a
 /// newer release and switches to it at once, unless the app is running.
 func cmdUKModel(_ sub: String) async -> Int32 {
+    guard sub == "status" || sub == "update" else {
+        FileHandle.standardError.write(Data("usage: transcriberrcli uk-model [status|update]\n".utf8))
+        return 64
+    }
     let installed = ParakeetUKModel.manifest(at: ParakeetUKModel.modelDirectory)
     print("installed: \(ParakeetUKModel.isInstalled() ? ParakeetUKModel.versionName() : "none")"
           + " @ \(installed.map { String($0.revision.prefix(8)) } ?? "no manifest (4.7.0 install)")")

@@ -184,6 +184,16 @@ actor EnsembleBackend: ASRBackend {
         if let subEngineError { throw subEngineError }
     }
 
+    /// The error a chunk both engines failed on goes back to the retry
+    /// ladder with, or nil when the generic path should try once more.
+    /// Cancellation wins over whatever the engines threw.
+    nonisolated static func ladderError(_ a: Error, _ b: Error) -> Error? {
+        if Task.isCancelled || a is CancellationError || b is CancellationError { return CancellationError() }
+        if a is WhisperBackend.DecodeBudgetExceeded { return a }
+        if b is WhisperBackend.DecodeBudgetExceeded { return b }
+        return nil
+    }
+
     /// The engine a chunk that wedged the pair twice is read by alone.
     private var soloEngine: ASRBackend? { engineA }
 
@@ -233,7 +243,12 @@ actor EnsembleBackend: ASRBackend {
             // budget would get a second 100 s decode and Parakeet's work redone.
             if case .success(let a) = ra { return a.text }
             if case .success(let b) = rb { return b.text }
-            // Both failed: the generic text path below tries once more.
+            // Both failed. Cancelled, or out of decode time: the runner's
+            // retry ladder decides, since re-running both here would ignore
+            // the cancel or push the call past the chunk deadline. Any other
+            // error: the generic text path below tries once more.
+            if case .failure(let ea) = ra, case .failure(let eb) = rb,
+               let e = Self.ladderError(ea, eb) { throw e }
         }
 
         // GENERIC PATH — at least one sub-engine has no word confidences.
@@ -597,6 +612,8 @@ actor EnsembleBackend: ASRBackend {
             switch (ra, rb) {
             case (.success(let a), .failure): return RichChunk(text: a.text, agreement: 1, textA: a.text, textB: "")
             case (.failure, .success(let b)): return RichChunk(text: b.text, agreement: 1, textA: "", textB: b.text)
+            case (.failure(let ea), .failure(let eb)):   // see transcribeChunk
+                if let e = Self.ladderError(ea, eb) { throw e }
             default: break
             }
             if case .success(let a) = ra, case .success(let b) = rb {

@@ -158,6 +158,14 @@ final class TranscriptHygieneTests: XCTestCase {
         XCTAssertGreaterThan(WhisperBackend.peakWindowRMS(samples, from: 5, to: 5) ?? 0, 0.4)
     }
 
+    func testPeakWindowRMSMeasuresALineAtTheVeryEnd() {
+        // A real word starting 0.15 s before the end of the chunk: the window
+        // must slide back from the end, not report 0 (silence) and drop it.
+        var samples = [Float](repeating: 0, count: 10 * 16_000)
+        for i in (19 * 16_000 / 2)..<(10 * 16_000) { samples[i] = 0.5 }
+        XCTAssertGreaterThan(WhisperBackend.peakWindowRMS(samples, from: 9.85, to: 10) ?? 0, 0.4)
+    }
+
     func testPeakWindowRMSStopsAtTheLineEnd() {
         // A phantom "Дякую." timed 4.0-4.4 s over silence, real speech from
         // 4.5 s. Rounding the end up to a whole second measured to 5.0 s and

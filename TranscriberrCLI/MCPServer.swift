@@ -43,7 +43,10 @@ final class MCPServer {
     /// reconnected by hand. When the file on disk changes, the server
     /// re-executes itself in place: same process, same stdin/stdout, so the
     /// client's connection survives, and the unread requests are handed over.
-    private static let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+    /// The running binary itself: argv[0] is only a bare name when a client
+    /// starts the server through PATH, and would resolve against the cwd.
+    private static let executable = (Bundle.main.executableURL
+        ?? URL(fileURLWithPath: CommandLine.arguments[0])).resolvingSymlinksInPath()
     private static func stamp() -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: executable.path))?[.modificationDate] as? Date
     }
@@ -57,6 +60,9 @@ final class MCPServer {
         return now != then && Date().timeIntervalSince(now) > 3
     }
 
+    /// Set when exec failed once: retrying it on every read would leak and log each time.
+    private var reexecFailed = false
+
     private func reexec(handingOver pending: Data) {
         setenv(Self.replayKey, pending.base64EncodedString(), 1)
         FileHandle.standardError.write("transcriberr mcp: binary updated, restarting in place\n".data(using: .utf8)!)
@@ -65,6 +71,7 @@ final class MCPServer {
         execv(path, &argv)
         // Only reached when exec failed: carry on with the old code.
         unsetenv(Self.replayKey)
+        reexecFailed = true
         FileHandle.standardError.write("transcriberr mcp: restart failed (\(errno)), keeping the running version\n".data(using: .utf8)!)
     }
 
@@ -104,7 +111,7 @@ final class MCPServer {
                 discarding = true
                 continue
             }
-            if isStale { reexec(handingOver: buffer) }
+            if !reexecFailed, isStale { reexec(handingOver: buffer) }
             while let nl = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer.subdata(in: buffer.startIndex..<nl)
                 buffer.removeSubrange(buffer.startIndex...nl)

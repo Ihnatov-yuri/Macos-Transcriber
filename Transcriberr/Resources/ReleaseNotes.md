@@ -6,6 +6,19 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.6.0
+
+- The player has a playback speed, from 0.75x to 2x, kept across launches, and skips 15 seconds back or forward.
+- Import several files at once, and video files. Only a video's sound is kept, saved as .m4a.
+- Share writes WebVTT subtitles with each speaker marked, and the transcript as Markdown.
+- Cancel now stops a run during the speaker pass and the language check, and in Super it takes effect at once.
+- Text before the first speaker label in a part is kept. It used to be lost when a model carried on the previous sentence.
+- A real word in the last fifth of a second of a part is no longer read as silence.
+- Dictation no longer opens the microphone a second time while a recording is still starting. It asks you to stop the recording first.
+- Changing the microphone or headset during dictation no longer shifts the speed and pitch of what was captured.
+- A hang in a speech engine no longer reloads an idle text model, and several parts timing out together share one reload.
+- The command line tool gives correct exit codes for --help and unknown commands, and the assistant connection restarts cleanly after an update.
+
 ## 5.5.3
 
 - Claude and Gemini answer again as text engines. Claude no longer gets a setting it refuses, and Gemini titles are no longer spent thinking before a word is written.

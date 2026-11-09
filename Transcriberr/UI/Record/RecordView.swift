@@ -369,7 +369,8 @@ private struct RecordMeter: View {
                         .uiLabel(9, color: AppColor.ink3)
                     if let app = model.micMutedIn {
                         Text("Muted in \(app) · mic left out")
-                            .uiLabel(9, color: AppColor.accentOnLight)
+                            .uiLabel(13, color: AppColor.accentOnLight)
+                            .padding(.top, 4)
                     }
                 }
             }

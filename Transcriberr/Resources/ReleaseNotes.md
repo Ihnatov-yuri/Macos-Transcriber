@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.7.1
+
+- Changing a meeting's Microphone choice now re-runs it with the engine that made its transcript, so a Super transcript stays Super.
+- The "Muted in" line on the Record screen is larger and easier to read.
+- In a browser, only Google Meet's own microphone button counts as your mute. A video player's Mute button on another page no longer does.
+
 ## 5.7.0
 
 - When you are muted in Teams, Zoom or Google Meet, your mic stays out of the live captions and playback, so people talking around you stay out of the transcript. Turn it off in Settings with Follow mute in Teams, Zoom and Google Meet.

@@ -53,8 +53,19 @@ final class DetailModel {
             if final != main { try? container.repository.updateAudioPath(final, for: recording) }
             await tracker.markIdle(id)
             isApplyingMic = false
+            backend = Self.engineForRerun(transcribedWith: recording.transcribedWithBackend, panel: backend)
             run()
         }
+    }
+
+    /// A mic change redoes the transcript the meeting already has, so it uses
+    /// the engine that made it. The panel can't say: a meeting's background
+    /// Super run never touches the panel, which stays on the default engine.
+    static func engineForRerun(transcribedWith: String?, panel: BackendFactory.Kind) -> BackendFactory.Kind {
+        guard let made = transcribedWith.flatMap(BackendFactory.Kind.init(rawValue:)), made.supportsAudio else {
+            return panel
+        }
+        return made
     }
 
     init(container: AppContainer, recording: Recording) {

@@ -25,6 +25,27 @@ final class MicMuteTests: XCTestCase {
         XCTAssertNil(MeetingMuteMonitor.parseLabel("Turn on camera (⌘ + E)"))
     }
 
+    func testABrowserVideoPlayerIsNotTheMicrophone() {
+        XCTAssertNil(MeetingMuteMonitor.parseLabel("Unmute (m)", meetOnly: true))
+        XCTAssertNil(MeetingMuteMonitor.parseLabel("Mute", meetOnly: true))
+        XCTAssertEqual(MeetingMuteMonitor.parseLabel("Turn on microphone (⌘ + D)", meetOnly: true), true)
+        XCTAssertEqual(MeetingMuteMonitor.parseLabel("Turn off microphone", meetOnly: true), false)
+    }
+
+    func testOnlyAWholeWordMatchesTheWindow() {
+        XCTAssertTrue(MeetingMuteMonitor.windowMatches("Meet - abc-defg-hij - Google Chrome", wanted: "Meet"))
+        XCTAssertTrue(MeetingMuteMonitor.windowMatches("Google Meet", wanted: "Meet"))
+        XCTAssertFalse(MeetingMuteMonitor.windowMatches("Meeting notes - Google Docs", wanted: "Meet"))
+    }
+
+    func testAMicChangeKeepsTheEngineThatMadeTheTranscript() {
+        XCTAssertEqual(DetailModel.engineForRerun(transcribedWith: "ensemble", panel: .parakeet), .ensemble)
+        XCTAssertEqual(DetailModel.engineForRerun(transcribedWith: "parakeet-v3", panel: .ensemble), .parakeet)
+        // Never transcribed, or by the retired Gemma audio engine: the panel decides.
+        XCTAssertEqual(DetailModel.engineForRerun(transcribedWith: nil, panel: .whisper), .whisper)
+        XCTAssertEqual(DetailModel.engineForRerun(transcribedWith: "gemma4-litert", panel: .parakeet), .parakeet)
+    }
+
     func testRoomVoicesAndShortAsidesAreLeftOut() {
         // No voice at all, then a 1 s aside mid-mute.
         XCTAssertEqual(MicMute.keptRanges(muted: [10...60], voice: [], sound: [10...60]), [])

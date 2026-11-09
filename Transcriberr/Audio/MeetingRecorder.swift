@@ -71,6 +71,13 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         /// speaker gets the user's name.
         var meIntervals: [[Double]] = []
         var meOpenAt: Double? = nil
+        /// The meeting app is muted (see `MeetingMuteMonitor`): the mic
+        /// leaves the live mix and captions. The `.mic` track keeps it, and
+        /// these stretches go to <recording>.mute.json, so what becomes of
+        /// them can still be decided after the meeting (see `MicMute`).
+        var micMuted = false
+        var muteIntervals: [[Double]] = []
+        var muteOpenAt: Double? = nil
         /// Echo duck: while the system tap is loud and the mic is NOT
         /// dominant, the mic is mostly hearing the speakers — its
         /// contribution to the mix (and the mic track) is attenuated.
@@ -87,6 +94,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     @ObservationIgnored private let io = IOState()
 
     private(set) var level: Float = 0
+    /// The meeting app that has the user muted right now, if any.
+    private(set) var mutedIn: String?
+    @ObservationIgnored private let muteMonitor = MeetingMuteMonitor()
     private(set) var elapsedMs: Int64 = 0
     /// Rolling per-callback peak history, same shape as WavRecorder's so the
     /// Record-screen waveform can render either source.
@@ -172,6 +182,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
                 watchDevices()
                 isRunning = true
                 isStarting = false
+                startFollowingMute()
                 // A device lost while starting was ignored (not running yet).
                 handleDeviceChange()
             }
@@ -255,6 +266,8 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     private func finishCapture() -> Int64 {
         captureLock.lock()
         defer { captureLock.unlock() }
+        muteMonitor.stop()
+        Task { @MainActor in self.mutedIn = nil }
         removeDeviceListeners()
         teardownCoreAudio()
         // Drain any in-flight IO callback, then flush the converter tail.
@@ -281,6 +294,16 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
                 AppLog.info("meeting", "me-timeline: \(io.meIntervals.count) intervals → \(sidecar.lastPathComponent)")
                 io.meIntervals.removeAll()   // written once, even if finish runs twice
             }
+            if let open = io.muteOpenAt {
+                io.muteIntervals.append([open, Double(io.framesSeen) / io.nativeRate])
+                io.muteOpenAt = nil
+            }
+            if let url = self.fileURL, !io.muteIntervals.isEmpty {
+                MicMute.save(MicMuteLog(mode: .follow, muted: io.muteIntervals), forMain: url)
+                AppLog.info("meeting", "muted in the meeting app: \(io.muteIntervals.count) stretches")
+                io.muteIntervals.removeAll()
+            }
+            io.micMuted = false
             io.audioFile = nil
             io.converter = nil
         }
@@ -599,6 +622,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             io.chunkBuffer.removeAll(keepingCapacity: true)
             io.chunkTotal16k = 0
             io.meIntervals.removeAll(keepingCapacity: true)
+            io.muteIntervals.removeAll(keepingCapacity: true)
+            io.muteOpenAt = nil
+            io.micMuted = false
             io.meOpenAt = nil
             io.micGain = 1
             io.voiceMic?.setTargetRate(nativeRate)
@@ -729,6 +755,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         // Me-timeline sees RAW energies — the duck must not blind it.
         updateMeTimeline(micRMS: micRMS, tapRMS: tapRMS,
                          t: Double(io.framesSeen) / io.nativeRate)
+        updateMuteLog(t: Double(io.framesSeen) / io.nativeRate)
 
         // Duck the mic while the far side is talking and the mic is just
         // hearing the speakers. Fully open when the user speaks or the far
@@ -743,7 +770,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         // With the echo filter delivering there is no echo left to gate, and
         // the gate would only cut the user's quieter words over the far side
         // out of the live mix (and the live captions read from it).
-        io.micGain = filtered ? 1 : Self.gateStep(micRMS: micRMS, tapRMS: tapRMS, currentGain: io.micGain)
+        io.micGain = io.micMuted ? 0 : filtered ? 1 : Self.gateStep(micRMS: micRMS, tapRMS: tapRMS, currentGain: io.micGain)
         // The ungated mic goes to the .mic.wav track — the offline echo
         // canceller needs unmodified ground truth (it subtracts the echo
         // mathematically). The gate shapes only the playback mix. With the
@@ -822,6 +849,26 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
 
     /// Open/close "me" intervals from per-callback energy. Mic wins when it
     /// clearly dominates the tap; short blips (<0.3 s) are dropped.
+    private func updateMuteLog(t: Double) {
+        if io.micMuted {
+            if io.muteOpenAt == nil { io.muteOpenAt = t }
+        } else if let open = io.muteOpenAt {
+            io.muteIntervals.append([open, t])
+            io.muteOpenAt = nil
+        }
+    }
+
+    @MainActor
+    private func startFollowingMute() {
+        guard MeetingMuteMonitor.isEnabled else { return }
+        muteMonitor.start { [weak self] reading in
+            guard let self else { return }
+            let muted = reading?.muted ?? false
+            self.ioQueue.async { self.io.micMuted = muted }
+            Task { @MainActor in self.mutedIn = muted ? reading?.app : nil }
+        }
+    }
+
     private func updateMeTimeline(micRMS: Float, tapRMS: Float, t: Double) {
         let micActive = micRMS > 0.004 && micRMS > tapRMS * 1.5
         if micActive {

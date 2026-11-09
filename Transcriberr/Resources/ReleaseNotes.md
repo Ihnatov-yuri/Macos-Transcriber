@@ -6,6 +6,13 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.7.0
+
+- When you are muted in Teams, Zoom or Google Meet, your mic stays out of the live captions and playback, so people talking around you stay out of the transcript. Turn it off in Settings with Follow mute in Teams, Zoom and Google Meet.
+- If you talk for a couple of seconds while muted, the saved transcript puts your speech back from where it started. Your voice print decides that it is you.
+- Any meeting with a separate mic track, old ones too, has More, Microphone: everything from your mic, leave out when you were muted, only your voice, or nothing. Your original mic audio is kept, so any choice can be changed back.
+- Google Meet is followed only while its tab is the one showing in its window.
+
 ## 5.6.0
 
 - The player has a playback speed, from 0.75x to 2x, kept across launches, and skips 15 seconds back or forward.

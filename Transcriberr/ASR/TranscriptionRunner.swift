@@ -271,6 +271,10 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 async let sysTask = decoder.decodeAll(file: sysURL)
                 var rawMic = try await micTask
                 let sysSamples = try await sysTask
+                // What the user chose for this meeting's mic (see MicMute):
+                // the track on disk stays as recorded.
+                continuation.yield(.stage(text: "Checking your microphone…", fraction: 0.03))
+                let micSuffix = try await MicMute.apply(to: &rawMic, main: params.file, print: voiceprint)
                 // Offline AEC: subtract the far side's echo from the mic
                 // using the sys track as reference — the echo never reaches
                 // an engine, and the user's speech survives crosstalk.
@@ -279,7 +283,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 let prepared = try await Self.cancelEchoAndChunk(
                     mic: &rawMic, sys: sysSamples, decoder: decoder,
                     keepCleanedMic: micNeeded || voiceprint != nil, voiceprint: voiceprint,
-                    scoreCacheKey: micURL.path)
+                    scoreCacheKey: micURL.path + (micSuffix ?? ""))
                 cleanedMic = prepared.cleanedMic
                 micHadEcho = prepared.micHadEcho
                 sysSound = prepared.sysSound

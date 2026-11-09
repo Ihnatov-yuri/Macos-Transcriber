@@ -164,6 +164,7 @@ final class RecordModel {
 
     var elapsedMs: Int64 { activeMeeting ? container.meetingRecorder.elapsedMs : container.recorder.elapsedMs }
     var level: Float { activeMeeting ? container.meetingRecorder.level : container.recorder.level }
+    var micMutedIn: String? { activeMeeting ? container.meetingRecorder.mutedIn : nil }
 
     func toggleRecord() async {
         switch uiState {

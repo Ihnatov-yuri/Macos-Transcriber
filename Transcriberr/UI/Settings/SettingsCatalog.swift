@@ -68,7 +68,7 @@ enum SettingID: String, CaseIterable, Sendable {
     // A · Audio input
     case microphone, noiseSuppression, echoFilter, virtualMicrophone, preprocessImports, voiceprint, people
     // B · Engines
-    case myName, defaultEngine, liveEngine, liveSpeechCheck, whisperModels, engineLanguages
+    case myName, defaultEngine, liveEngine, liveSpeechCheck, followMeetingMute, whisperModels, engineLanguages
     case mergeEngines, superMaxQuality, meetingSuperFollowUp, calendarContext, recordingBrief, textModelRulings
     case turnGranularity, textEngine
     // C · Models
@@ -96,7 +96,7 @@ enum SettingID: String, CaseIterable, Sendable {
         switch self {
         case .microphone, .noiseSuppression, .echoFilter, .virtualMicrophone, .preprocessImports, .voiceprint, .people:
             .audio
-        case .myName, .defaultEngine, .liveEngine, .liveSpeechCheck, .whisperModels, .engineLanguages, .mergeEngines, .superMaxQuality,
+        case .myName, .defaultEngine, .liveEngine, .liveSpeechCheck, .followMeetingMute, .whisperModels, .engineLanguages, .mergeEngines, .superMaxQuality,
              .meetingSuperFollowUp, .calendarContext, .recordingBrief, .textModelRulings, .turnGranularity, .textEngine:
             .engines
         case .textModelPicks, .textModelComparison, .speechModels, .whisperDownloads:
@@ -156,6 +156,7 @@ enum SettingID: String, CaseIterable, Sendable {
         case .defaultEngine: "Default engine"
         case .liveEngine: "Live captions engine"
         case .liveSpeechCheck: "Keep sounds out of live captions"
+        case .followMeetingMute: "Follow mute in Teams, Zoom and Google Meet"
         case .whisperModels: "Whisper models for English, Ukrainian and other languages"
         case .engineLanguages: "Languages by engine"
         case .mergeEngines: "Super merge engines A and B"
@@ -224,6 +225,8 @@ enum SettingID: String, CaseIterable, Sendable {
             "The speech-to-text engine new recordings and imports use: Parakeet, Whisper or Super, which merges two engines."
         case .liveEngine:
             "The engine that writes live captions while a recording runs."
+        case .followMeetingMute:
+            "While a meeting records, your mic is left out when you are muted in Teams, Zoom or Google Meet, so people talking around you stay out of the transcript. If you talk for a couple of seconds while muted, your speech is put back from where it started. Change it for any meeting under More, Microphone."
         case .liveSpeechCheck:
             "Checks that a sound is speech before the live engine reads it, so a click or a breath doesn't appear as a stray word such as \u{201C}Yeah.\u{201D} Runs on this Mac. Turn it off if live captions miss very quiet or whispered speech. Saved transcripts are not affected."
         case .whisperModels:
@@ -323,6 +326,7 @@ enum SettingID: String, CaseIterable, Sendable {
         case .myName: "you me name speaker"
         case .defaultEngine: "asr speech recognition parakeet whisper super transcription"
         case .liveEngine: "live captions realtime"
+        case .followMeetingMute: "mute muted microphone mic off room voices background teams zoom google meet browser meeting"
         case .liveSpeechCheck: "live captions ghost phrases stray words speech detector vad silero noise clicks"
         case .whisperModels: "turbo large-v3 distil"
         case .engineLanguages: "language ukrainian english arabic dutch"
@@ -368,6 +372,7 @@ enum SettingID: String, CaseIterable, Sendable {
         case .defaultEngine: 40
         case .liveEngine: 40
         case .liveSpeechCheck: 90
+        case .followMeetingMute: 90
         case .whisperModels: 220
         case .engineLanguages: 230
         case .mergeEngines: 80

@@ -644,6 +644,10 @@ struct DetailView: View {
                     }
                 }
                 .disabled(recording.segments.isEmpty || (model?.isRunning ?? false) || !Benchmark.isEnabled)
+                if let m = model, m.hasMicTrack {
+                    Divider()
+                    microphoneMenu(m)
+                }
                 Divider()
                 Button("Split recording…") {
                     showingSplit = true
@@ -721,6 +725,25 @@ struct DetailView: View {
     }
 
     @ViewBuilder
+    /// The mic can be changed long after the meeting: the track is kept as
+    /// recorded and each choice is a new run.
+    private func microphoneMenu(_ m: DetailModel) -> some View {
+        Menu("Microphone") {
+            micChoice(m, .everything, "Everything from my mic")
+            if m.hasMuteLog { micChoice(m, .follow, "Leave out when I was muted") }
+            micChoice(m, .myVoice, "Only my voice").disabled(!m.hasVoicePrint)
+            micChoice(m, .nothing, "Nothing from my mic")
+        }
+        .disabled(m.isRunning || m.isApplyingMic || isMerging)
+    }
+
+    private func micChoice(_ m: DetailModel, _ mode: MicMode, _ title: String) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { m.micLog.effectiveMode == mode },
+            set: { _ in m.setMicMode(mode) }
+        ))
+    }
+
     private func folderMenu() -> some View {
         // `@Query`, not a fetch inside the body: a fetch would run on every
         // evaluation of the detail header — which during a run is once per

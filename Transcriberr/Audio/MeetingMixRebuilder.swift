@@ -61,11 +61,13 @@ nonisolated enum MeetingMixRebuilder {
             let decoder = AudioDecoder()
             async let rawMicTask = decoder.decodeAll(file: micURL)
             async let sysTask = decoder.decodeAll(file: sysURL)
-            let rawMic = try await rawMicTask
+            var rawMic = try await rawMicTask
             let sys = try await sysTask
             // The same voice-print guided canceller the transcript gets.
-            let aec = try await EchoCanceller.cancelGuided(mic: rawMic, ref: sys, print: VoiceprintStore.load(),
-                                                           cacheKey: micURL.path)
+            let voiceprint = VoiceprintStore.load()
+            let micSuffix = try await MicMute.apply(to: &rawMic, main: mainURL, print: voiceprint)
+            let aec = try await EchoCanceller.cancelGuided(mic: rawMic, ref: sys, print: voiceprint,
+                                                           cacheKey: micURL.path + (micSuffix ?? ""))
             let mix = playbackMix(cleanedMic: aec.samples, outcome: aec.outcome, echoDelay: aec.echoDelay, sys: sys)
             guard !mix.isEmpty else { return nil }
 

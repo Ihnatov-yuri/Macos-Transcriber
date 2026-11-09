@@ -65,7 +65,7 @@ struct EnginesSettingsTab: View {
                     Text(SettingID.myName.help)
                 }
             }
-            if filter.showsAny(.defaultEngine, .liveEngine, .liveSpeechCheck, .whisperModels) {
+            if filter.showsAny(.defaultEngine, .liveEngine, .liveSpeechCheck, .followMeetingMute, .whisperModels) {
                 Section("Speech-to-text") {
                     if filter.shows(.defaultEngine) {
                         EnginePicker(title: "Default engine", kinds: audioEngines, selection: Binding(
@@ -87,6 +87,14 @@ struct EnginesSettingsTab: View {
                             set: { container.uiPrefs.liveSpeechCheck = $0 }
                         ))
                         Text(SettingID.liveSpeechCheck.help)
+                            .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
+                    }
+                    if filter.shows(.followMeetingMute) {
+                        Toggle(SettingID.followMeetingMute.label, isOn: Binding(
+                            get: { container.uiPrefs.followMeetingMute },
+                            set: { container.uiPrefs.followMeetingMute = $0 }
+                        ))
+                        Text(SettingID.followMeetingMute.help)
                             .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                     }
                     if filter.shows(.whisperModels) {

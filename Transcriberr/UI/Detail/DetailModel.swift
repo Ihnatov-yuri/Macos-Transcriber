@@ -19,6 +19,44 @@ final class DetailModel {
 
     var lastError: String?
 
+    /// What this meeting's transcript and playback take from its mic.
+    private(set) var micLog: MicMuteLog
+    private(set) var isApplyingMic = false
+
+    var hasMicTrack: Bool {
+        AudioCompressor.sidecarURL(for: URL(fileURLWithPath: recording.audioPath), kind: "mic") != nil
+    }
+    var hasMuteLog: Bool { !micLog.muted.isEmpty }
+    var hasVoicePrint: Bool { VoiceprintStore.load() != nil }
+
+    /// Rebuilds the playback mix for the new choice and transcribes again.
+    /// The mic track is untouched and the old transcript stays a version,
+    /// so any choice can be taken back, on any meeting with a mic track.
+    func setMicMode(_ mode: MicMode) {
+        guard mode != micLog.effectiveMode, !isRunning, !isApplyingMic else { return }
+        isApplyingMic = true
+        let main = URL(fileURLWithPath: recording.audioPath)
+        micLog.mode = mode
+        MicMute.setMode(mode, forMain: main)
+        AppLog.info("mute", "mic mode set to \(mode.rawValue) for \(main.lastPathComponent)")
+        let tracker = container.audioPostProcessTracker
+        let id = recording.id
+        Task { @MainActor in
+            await tracker.waitUntilSettled(id)
+            await tracker.markPending(id)
+            await tracker.markBusy(id)
+            let rebuilt = await MeetingMixRebuilder.rebuildMix(mainURL: main) ?? main
+            // A failed rebuild leaves the old .m4a: encoding it again would only lose quality.
+            let final = rebuilt.pathExtension == "wav"
+                ? await AudioCompressor.compressRecordingFiles(mainURL: rebuilt, includeSidecars: true)
+                : rebuilt
+            if final != main { try? container.repository.updateAudioPath(final, for: recording) }
+            await tracker.markIdle(id)
+            isApplyingMic = false
+            run()
+        }
+    }
+
     init(container: AppContainer, recording: Recording) {
         self.container = container
         self.recording = recording
@@ -35,6 +73,7 @@ final class DetailModel {
             ?? container.uiPrefs.defaultBackend
         self.expectedSpeakers = recording.runExpectedSpeakers ?? 0
         self.speakersExact = recording.runSpeakersExact ?? false
+        self.micLog = MicMute.load(forMain: URL(fileURLWithPath: recording.audioPath)) ?? MicMuteLog()
     }
 
     /// Write the panel's state back onto the recording so it survives

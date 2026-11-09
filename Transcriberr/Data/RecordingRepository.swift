@@ -279,6 +279,10 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         if !meAll.isEmpty, let data = try? JSONEncoder().encode(meAll) {
             AppLog.attempt("repo", "writing the merged me.json") { try data.write(to: sidecarPath(url.path, "me.json")) }
         }
+        if let log = MicMute.merged(MicMute.load(forMain: URL(fileURLWithPath: pathA)),
+                                    MicMute.load(forMain: URL(fileURLWithPath: pathB)), offset: offsetSeconds) {
+            MicMute.save(log, forMain: url)
+        }
 
         // Save with the WAV path FIRST — compressing before the row exists
         // would widen the crash/quit window between "audio written to
@@ -418,7 +422,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             AppLog.attempt("repo", "deleting the rolled-back merge") { try delete(merged) }
             BackupService.removeBackups(for: id)
         }
-        for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
+        for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json", "mute.json"] {
             try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension(ext))
         }
         AppLog.warn("repo", "merge rolled back: \(url.lastPathComponent)")
@@ -561,6 +565,12 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             if !meB.isEmpty, let data = try? JSONEncoder().encode(meB) {
                 AppLog.attempt("repo", "writing the second part's me.json") { try data.write(to: sidecarPath(urlB.path, "me.json")) }
             }
+        }
+
+        if let log = MicMute.load(forMain: URL(fileURLWithPath: recording.audioPath)) {
+            let parts = MicMute.split(log, at: cutSeconds)
+            MicMute.save(parts.first, forMain: urlA)
+            MicMute.save(parts.second, forMain: urlB)
         }
 
         // Two parts of the same meeting: each keeps when it really ended.
@@ -719,7 +729,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
             BackupService.removeBackups(for: firstID)
             BackupService.removeBackups(for: secondID)
             for url in [urlA, urlB] {
-                for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json"] {
+                for ext in ["wav", "m4a", "mic.wav", "mic.m4a", "sys.wav", "sys.m4a", "me.json", "mute.json"] {
                     try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension(ext))
                 }
             }

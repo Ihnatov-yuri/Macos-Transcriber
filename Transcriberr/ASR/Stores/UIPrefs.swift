@@ -60,6 +60,7 @@ nonisolated final class UIPrefs: @unchecked Sendable {
     /// Live captions check for speech before the engine reads. On unless
     /// turned off; LiveTranscriber reads the key, so it applies mid-recording.
     var liveSpeechCheck: Bool { didSet { defaults.set(liveSpeechCheck, forKey: LiveTranscriber.speechCheckKey) } }
+    var followMeetingMute: Bool { didSet { defaults.set(followMeetingMute, forKey: MeetingMuteMonitor.enabledKey) } }
     /// After a meeting's quick auto-transcription, refine it with Super in
     /// the background (the quick draft stays readable meanwhile).
     var meetingSuperFollowUp: Bool { didSet { defaults.set(meetingSuperFollowUp, forKey: "ui.meetingSuperFollowUp") } }
@@ -89,6 +90,7 @@ nonisolated final class UIPrefs: @unchecked Sendable {
         textModelID = ModelCatalog.chosen(.general).id
         superMaxQuality = defaults.bool(forKey: Key.superMaxQuality)
         liveSpeechCheck = defaults.object(forKey: LiveTranscriber.speechCheckKey) as? Bool ?? true
+        followMeetingMute = defaults.object(forKey: MeetingMuteMonitor.enabledKey) as? Bool ?? true
         let storedGap = defaults.double(forKey: Key.turnGap)
         turnCoalesceGapSeconds = storedGap > 0 ? storedGap : 30
         ensembleEngineA = BackendFactory.Kind(rawValue: defaults.string(forKey: Key.ensembleEngineA) ?? "") ?? EnsembleBackend.defaultEngineA

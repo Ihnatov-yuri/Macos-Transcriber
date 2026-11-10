@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.7.2
+
+- Choosing a USB microphone or the MacBook's built-in mic by name now works. Before, dictation and recording could hear nothing with one of those selected, unless the choice was System default.
+
 ## 5.7.1
 
 - Changing a meeting's Microphone choice now re-runs it with the engine that made its transcript, so a Super transcript stays Super.

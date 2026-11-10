@@ -131,12 +131,15 @@ nonisolated enum AudioInputDevices {
     /// before any device could be chosen, and setting the device afterwards
     /// did not hand the profile back.
     ///
-    /// So try `outputNode` first, which reaches the same audio unit without
-    /// opening any input. That only works for devices that also have output
-    /// channels — an input-only device (the built-in mic, most USB mics)
-    /// answers -10851. For those there is no way around binding `inputNode`
-    /// first and accepting that the default input is opened in passing;
-    /// `Capture` keeps that window as short as it can.
+    /// So use `outputNode` when the device has output channels: it reaches the
+    /// same audio unit without opening any input. An input-only device (the
+    /// built-in mic, most USB mics) must never be offered to `outputNode`: it
+    /// answers -10851 and leaves the unit bound to no device at all, so the
+    /// `inputNode` attempt after it fails with -10851 too, and the engine then
+    /// starts with no microphone and delivers no audio. For those there is no
+    /// way around binding `inputNode` first and accepting that the default
+    /// input is opened in passing; `Capture` keeps that window as short as it
+    /// can.
     /// Engines we pointed at a specific device (weakly held).
     private static let pinnedEngines = Mutex(NSHashTable<AVAudioEngine>.weakObjects())
 
@@ -157,7 +160,7 @@ nonisolated enum AudioInputDevices {
             // failing on — the old device while we report the default.
             return followSystemDefault(engine)
         }
-        if (try? engine.outputNode.auAudioUnit.setDeviceID(device.id)) != nil {
+        if device.hasOutput, (try? engine.outputNode.auAudioUnit.setDeviceID(device.id)) != nil {
             AppLog.info("audio", "capturing from '\(device.name)' (no default input opened)")
             setPinned(engine, true)
             return device
@@ -187,7 +190,7 @@ nonisolated enum AudioInputDevices {
         let defaultIsOurs = fallback.map { $0.id != rawSystemDefaultID() } ?? false
         guard wasPinned(engine) || defaultIsOurs else { return fallback }
         if let fallback,
-           (try? engine.outputNode.auAudioUnit.setDeviceID(fallback.id)) != nil
+           (fallback.hasOutput && (try? engine.outputNode.auAudioUnit.setDeviceID(fallback.id)) != nil)
             || (try? engine.inputNode.auAudioUnit.setDeviceID(fallback.id)) != nil {
             setPinned(engine, false)
             AppLog.info("audio", "back to the system default input '\(fallback.name)'")

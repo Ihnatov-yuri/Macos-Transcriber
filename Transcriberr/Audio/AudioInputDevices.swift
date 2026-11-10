@@ -57,12 +57,59 @@ nonisolated enum AudioInputDevices {
         var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
                                          &addr, 0, nil, &size, &ids) == noErr else { return [] }
-        return ids.compactMap { device(for: $0) }
+        return selectable(ids.compactMap { device(for: $0) })
+    }
+
+    // MARK: - Decisions
+    //
+    // Everything below up to "Enumeration, continued" decides from plain
+    // values and never asks CoreAudio, so AudioInputDevicesTests can hand it
+    // device lists no test machine has plugged in.
+
+    /// The devices a picker may offer, out of everything CoreAudio lists.
+    static func selectable(_ candidates: [(device: Device, inputChannels: Int)]) -> [Device] {
+        candidates
             .filter { $0.inputChannels > 0 && $0.device.uid != VirtualMicrophone.micUID }
             // macOS's own private aggregate, not something to pick.
             .filter { !$0.device.name.hasPrefix("CADefaultDeviceAggregate") }
             .map(\.device)
     }
+
+    /// The device a stored UID refers to among `devices`, or nil.
+    static func resolve(uid: String?, in devices: [Device]) -> Device? {
+        guard let uid, !uid.isEmpty else { return nil }
+        return devices.first { $0.uid == uid }
+    }
+
+    /// The real microphone to use when the system default is the
+    /// Transcriberr Microphone: the built-in one, else the first other.
+    static func micBehindOurs(_ microphones: [Device], isBuiltIn: (Device) -> Bool) -> Device? {
+        microphones.first(where: isBuiltIn) ?? microphones.first
+    }
+
+    /// The side of an engine's shared audio unit a device is bound through.
+    enum Route: Sendable { case output, input }
+
+    /// The routes to try, in order, to point an engine at `device`. See
+    /// `apply` for why an input-only device must never be tried on `.output`.
+    static func routes(for device: Device) -> [Route] {
+        device.hasOutput ? [.output, .input] : [.input]
+    }
+
+    /// `captureWouldDisturbBluetooth`, given the device capture would use
+    /// and the system default.
+    static func wouldDisturbBluetooth(effective device: Device?,
+                                      systemDefault: @autoclosure () -> Device?) -> Bool {
+        guard let device else { return false }
+        if device.isBluetooth { return true }
+        // A device with output channels can be selected through `outputNode`,
+        // which never opens the default input — so what the default happens
+        // to be doesn't matter.
+        if routes(for: device).first == .output { return false }
+        return systemDefault()?.isBluetooth == true
+    }
+
+    // MARK: - Enumeration, continued
 
     /// Real microphones: hardware that captures sound. What a "which mic"
     /// picker should offer.
@@ -76,7 +123,7 @@ nonisolated enum AudioInputDevices {
     /// The device a stored UID refers to, or nil when it has been unplugged.
     static func resolve(uid: String?) -> Device? {
         guard let uid, !uid.isEmpty else { return nil }
-        return available().first { $0.uid == uid }
+        return resolve(uid: uid, in: available())
     }
 
     private static func rawSystemDefaultID() -> AudioObjectID {
@@ -106,8 +153,7 @@ nonisolated enum AudioInputDevices {
               id != AudioObjectID(kAudioObjectUnknown) else { return nil }
         guard let found = device(for: id)?.device else { return nil }
         guard found.uid == VirtualMicrophone.micUID else { return found }
-        let mics = microphones()
-        return mics.first { transportType($0.id) == kAudioDeviceTransportTypeBuiltIn } ?? mics.first
+        return micBehindOurs(microphones()) { transportType($0.id) == kAudioDeviceTransportTypeBuiltIn }
     }
 
     /// The device capture will actually use: the stored choice when it is
@@ -160,21 +206,32 @@ nonisolated enum AudioInputDevices {
             // failing on — the old device while we report the default.
             return followSystemDefault(engine)
         }
-        if device.hasOutput, (try? engine.outputNode.auAudioUnit.setDeviceID(device.id)) != nil {
-            AppLog.info("audio", "capturing from '\(device.name)' (no default input opened)")
-            setPinned(engine, true)
-            return device
+        var failure: Error?
+        for route in routes(for: device) {
+            do {
+                try bind(engine, to: device.id, via: route)
+                setPinned(engine, true)
+                switch route {
+                case .output:
+                    AppLog.info("audio", "capturing from '\(device.name)' (no default input opened)")
+                case .input:
+                    AppLog.info("audio", "capturing from '\(device.name)' (input-only device — the system default was opened in passing)")
+                }
+                return device
+            } catch {
+                failure = error
+            }
         }
-        do {
-            try engine.inputNode.auAudioUnit.setDeviceID(device.id)
-            setPinned(engine, true)
-            AppLog.info("audio", "capturing from '\(device.name)' (input-only device — the system default was opened in passing)")
-            return device
-        } catch {
-            AppLog.warn("audio", "could not select input '\(device.name)': \(error.localizedDescription) — falling back to the system default")
-            // Same as losing the device: an engine still pinned to an older
-            // choice would keep recording from it while we reported the default.
-            return followSystemDefault(engine)
+        AppLog.warn("audio", "could not select input '\(device.name)': \(failure?.localizedDescription ?? "no route") — falling back to the system default")
+        // Same as losing the device: an engine still pinned to an older
+        // choice would keep recording from it while we reported the default.
+        return followSystemDefault(engine)
+    }
+
+    private static func bind(_ engine: AVAudioEngine, to id: AudioDeviceID, via route: Route) throws {
+        switch route {
+        case .output: try engine.outputNode.auAudioUnit.setDeviceID(id)
+        case .input: try engine.inputNode.auAudioUnit.setDeviceID(id)
         }
     }
 
@@ -190,8 +247,7 @@ nonisolated enum AudioInputDevices {
         let defaultIsOurs = fallback.map { $0.id != rawSystemDefaultID() } ?? false
         guard wasPinned(engine) || defaultIsOurs else { return fallback }
         if let fallback,
-           (fallback.hasOutput && (try? engine.outputNode.auAudioUnit.setDeviceID(fallback.id)) != nil)
-            || (try? engine.inputNode.auAudioUnit.setDeviceID(fallback.id)) != nil {
+           routes(for: fallback).contains(where: { (try? bind(engine, to: fallback.id, via: $0)) != nil }) {
             setPinned(engine, false)
             AppLog.info("audio", "back to the system default input '\(fallback.name)'")
             return fallback
@@ -206,13 +262,7 @@ nonisolated enum AudioInputDevices {
     /// input-only and the system default — which gets opened on the way past
     /// — is Bluetooth.
     static func captureWouldDisturbBluetooth(uid: String?) -> Bool {
-        guard let device = effective(uid: uid) else { return false }
-        if device.isBluetooth { return true }
-        // A device with output channels can be selected through `outputNode`,
-        // which never opens the default input — so what the default happens
-        // to be doesn't matter.
-        if device.hasOutput { return false }
-        return systemDefault()?.isBluetooth == true
+        wouldDisturbBluetooth(effective: effective(uid: uid), systemDefault: systemDefault())
     }
 
     /// Watches CoreAudio's device list so a settings picker reflects a

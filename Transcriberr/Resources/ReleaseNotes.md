@@ -6,6 +6,11 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.7.3
+
+- Nothing new to see. Choosing a microphone is now checked automatically against device set-ups such as USB mics, Bluetooth headsets and speakerphones, and every release is replayed against real meetings before it ships.
+- The app's log now records which version was launched.
+
 ## 5.7.2
 
 - Choosing a USB microphone or the MacBook's built-in mic by name now works. Before, dictation and recording could hear nothing with one of those selected, unless the choice was System default.

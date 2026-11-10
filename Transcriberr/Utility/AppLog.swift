@@ -34,7 +34,7 @@ nonisolated enum AppLog {
     /// One header line per app launch.
     static func bootBanner() {
         write(level: "BOOT", category: "app",
-              message: "Transcriberr launched – pid \(ProcessInfo.processInfo.processIdentifier)")
+              message: "Transcriberr \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?") launched – pid \(ProcessInfo.processInfo.processIdentifier)")
     }
 
     static func info(_ category: String, _ message: @autoclosure () -> String) {

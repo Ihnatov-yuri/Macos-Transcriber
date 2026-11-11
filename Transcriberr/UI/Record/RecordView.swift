@@ -367,8 +367,23 @@ private struct RecordMeter: View {
                         .uiLabel(9, color: AppColor.ink2)
                     Text("16 kHz · mono")
                         .uiLabel(9, color: AppColor.ink3)
-                    if let app = model.micMutedIn {
-                        Text("Muted in \(app) · mic left out")
+                    if model.showsMicSwitch {
+                        Picker("Microphone", selection: Binding(
+                            get: { model.micSwitch },
+                            set: { model.setMicSwitch($0) }
+                        )) {
+                            Text("Auto").tag(MicSwitch.auto)
+                            Text("Mic on").tag(MicSwitch.on)
+                            Text("Mic off").tag(MicSwitch.off)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize()
+                        .padding(.top, 6)
+                        .help("Auto follows mute in Teams, Zoom and Google Meet. Mic off leaves your mic out of the transcript; the recording keeps it, so it can be brought back later.")
+                    }
+                    if let status = model.micSwitch.status(mutedIn: model.micMutedIn) {
+                        Text(status)
                             .uiLabel(13, color: AppColor.accentOnLight)
                             .padding(.top, 4)
                     }

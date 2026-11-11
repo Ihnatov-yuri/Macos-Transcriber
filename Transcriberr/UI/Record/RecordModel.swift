@@ -165,6 +165,13 @@ final class RecordModel {
     var elapsedMs: Int64 { activeMeeting ? container.meetingRecorder.elapsedMs : container.recorder.elapsedMs }
     var level: Float { activeMeeting ? container.meetingRecorder.level : container.recorder.level }
     var micMutedIn: String? { activeMeeting ? container.meetingRecorder.mutedIn : nil }
+    /// The mic switch exists only while a meeting records.
+    var showsMicSwitch: Bool { activeMeeting && (uiState == .recording || uiState == .paused) }
+    var micSwitch: MicSwitch { activeMeeting ? container.meetingRecorder.micSwitch : .auto }
+    func setMicSwitch(_ choice: MicSwitch) {
+        guard activeMeeting else { return }
+        container.meetingRecorder.setMicSwitch(choice)
+    }
 
     func toggleRecord() async {
         switch uiState {

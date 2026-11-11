@@ -78,8 +78,15 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
     private var controlMeetOnly = false
     private var lastScan = Date.distantPast
     private var last: Reading?
-    private var loggedMisses = false
+    /// What the last miss looked like per app, so each different miss is
+    /// logged once; and how many were logged this recording.
+    private var missSeen: [String: String] = [:]
+    private var missLines = 0
     private var loggedFound = false
+    private var loggedNoApp = false
+    /// Where the next scan of an app starts when the last one ran out of
+    /// budget: the call may be in a later window than the chat list.
+    private var firstWindow: [String: Int] = [:]
     private var enabledPIDs = Set<pid_t>()
     private var onChange: (@Sendable (Reading?) -> Void)?
 
@@ -99,7 +106,7 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
             }
             self.onChange = onChange
             last = nil; control = nil; lastScan = .distantPast
-            loggedMisses = false; loggedFound = false
+            missSeen = [:]; missLines = 0; loggedFound = false; loggedNoApp = false; firstWindow = [:]
             let t = DispatchSource.makeTimerSource(queue: queue)
             t.schedule(deadline: .now(), repeating: Self.pollSeconds, leeway: .milliseconds(200))
             t.setEventHandler { [weak self] in self?.poll() }
@@ -150,8 +157,10 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
     }
 
     private func scan() -> Reading? {
+        var sawApp = false
         for app in Self.apps {
             guard let running = NSRunningApplication.runningApplications(withBundleIdentifier: app.id).first else { continue }
+            sawApp = true
             let root = AXUIElementCreateApplication(running.processIdentifier)
             AXUIElementSetMessagingTimeout(root, Self.axTimeout)
             // Teams draws its call in a web view, whose tree exists only
@@ -162,32 +171,72 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
                     AXUIElementSetAttributeValue(root, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
                 }
             }
-            var roots = [root]
+            // Window by window, each with its own element allowance: walked
+            // as one tree, a large first window (the chat list) used up the
+            // allowance before the call window was reached.
+            let windows = (Self.attr(root, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+            var roots = windows
             if let wanted = app.window {
-                roots = ((Self.attr(root, kAXWindowsAttribute) as? [AXUIElement]) ?? []).filter {
+                roots = windows.filter {
                     (Self.attr($0, kAXTitleAttribute) as? String).map { Self.windowMatches($0, wanted: wanted) } == true
                 }
+            } else if roots.isEmpty {
+                roots = [root]
             }
+            roots = Self.rotated(roots, by: firstWindow[app.id] ?? 0)
             let meetOnly = app.window != nil
-            var nodes = 0
+            var total = 0
             var near: [String] = []
-            let deadline = Date().addingTimeInterval(Self.scanBudgetSeconds)
-            for window in roots {
-                guard let found = find(window, depth: 0, meetOnly: meetOnly, nodes: &nodes, near: &near, deadline: deadline),
-                      let muted = Self.state(of: found, meetOnly: meetOnly) else { continue }
-                control = found
-                controlApp = app.name
-                controlMeetOnly = meetOnly
-                if !loggedFound { loggedFound = true; AppLog.info("mute", "following the mute control in \(app.name)") }
-                return Reading(app: app.name, muted: muted)
+            var stopped = "whole tree read"
+            let began = Date()
+            let deadline = began.addingTimeInterval(Self.scanBudgetSeconds)
+            for (i, window) in roots.enumerated() {
+                var nodes = 0
+                let found = find(window, depth: 0, meetOnly: meetOnly, nodes: &nodes, near: &near, deadline: deadline)
+                total += nodes
+                if let found, let muted = Self.state(of: found, meetOnly: meetOnly) {
+                    control = found
+                    controlApp = app.name
+                    controlMeetOnly = meetOnly
+                    if !loggedFound { loggedFound = true; AppLog.info("mute", "following the mute control in \(app.name)") }
+                    return Reading(app: app.name, muted: muted)
+                }
+                if Date() >= deadline {
+                    stopped = "out of time"
+                    firstWindow[app.id] = ((firstWindow[app.id] ?? 0) + i + 1) % max(roots.count, 1)
+                    break
+                }
+                if nodes > Self.maxNodes { stopped = "element limit reached" }
             }
-            if !loggedMisses, !near.isEmpty {
-                // Interface wording changes: what to match next, for the log.
-                loggedMisses = true
-                AppLog.info("mute", "\(app.name): \(nodes) elements, no mute control; nearest labels: \(near.prefix(8).joined(separator: " / "))")
+            // Always said, once per kind of miss: with no line at all there
+            // is nothing to tell a wording change from an unread window.
+            let miss = Self.missLine(app: app.name, windows: windows.count, searched: roots.count, elements: total,
+                                     seconds: Date().timeIntervalSince(began), stopped: stopped, near: near)
+            let kind = "\(windows.count)|\(roots.count)|\(stopped)|\(near.joined(separator: "/"))"
+            if missSeen[app.id] != kind, missLines < 12 {
+                missSeen[app.id] = kind
+                missLines += 1
+                AppLog.info("mute", miss)
             }
         }
+        if !sawApp, !loggedNoApp {
+            loggedNoApp = true
+            AppLog.info("mute", "no meeting app running (Teams, Zoom or a browser): nothing to follow")
+        }
         return nil
+    }
+
+    static func rotated<T>(_ items: [T], by offset: Int) -> [T] {
+        guard items.count > 1 else { return items }
+        let k = ((offset % items.count) + items.count) % items.count
+        return Array(items[k...] + items[..<k])
+    }
+
+    static func missLine(app: String, windows: Int, searched: Int, elements: Int, seconds: Double,
+                         stopped: String, near: [String]) -> String {
+        let labels = near.isEmpty ? "no button mentions mic or mute" : "nearest labels: " + near.prefix(8).joined(separator: " / ")
+        return "\(app): no mute control; \(searched) of \(windows) windows, \(elements) elements in "
+            + String(format: "%.1f", seconds) + " s (\(stopped)); \(labels)"
     }
 
     private func find(_ e: AXUIElement, depth: Int, meetOnly: Bool, nodes: inout Int, near: inout [String], deadline: Date) -> AXUIElement? {
@@ -197,7 +246,7 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
         if ["AXButton", "AXCheckBox", "AXMenuItem", "AXToggle", "AXSwitch"].contains(role) {
             if Self.state(of: e, meetOnly: meetOnly) != nil { return e }
             if near.count < 8, let l = Self.labels(e).first(where: {
-                $0.range(of: #"\b(mic|microphone)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+$0.range(of: #"\b(mic|microphone|mute|unmute|muted)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
             }) { near.append(String(l.prefix(40))) }
         }
         for child in (Self.attr(e, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {

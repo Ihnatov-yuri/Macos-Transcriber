@@ -76,6 +76,10 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         /// these stretches go to <recording>.mute.json, so what becomes of
         /// them can still be decided after the meeting (see `MicMute`).
         var micMuted = false
+        /// What the meeting app says, and what the Record screen's switch
+        /// says; `micMuted` is the two combined (see `MicSwitch.leavesOut`).
+        var appMuted = false
+        var micSwitch: MicSwitch = .auto
         var muteIntervals: [[Double]] = []
         var muteOpenAt: Double? = nil
         /// Echo duck: while the system tap is loud and the mic is NOT
@@ -96,6 +100,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     private(set) var level: Float = 0
     /// The meeting app that has the user muted right now, if any.
     private(set) var mutedIn: String?
+    /// The Record screen's switch for this meeting. Back to `.auto` with
+    /// every new recording.
+    private(set) var micSwitch: MicSwitch = .auto
     @ObservationIgnored private let muteMonitor = MeetingMuteMonitor()
     private(set) var elapsedMs: Int64 = 0
     /// Rolling per-callback peak history, same shape as WavRecorder's so the
@@ -267,7 +274,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         captureLock.lock()
         defer { captureLock.unlock() }
         muteMonitor.stop()
-        Task { @MainActor in self.mutedIn = nil }
+        Task { @MainActor in self.mutedIn = nil; self.micSwitch = .auto }
         removeDeviceListeners()
         teardownCoreAudio()
         // Drain any in-flight IO callback, then flush the converter tail.
@@ -625,6 +632,8 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             io.muteIntervals.removeAll(keepingCapacity: true)
             io.muteOpenAt = nil
             io.micMuted = false
+            io.appMuted = false
+            io.micSwitch = .auto
             io.meOpenAt = nil
             io.micGain = 1
             io.voiceMic?.setTargetRate(nativeRate)
@@ -864,8 +873,26 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         muteMonitor.start { [weak self] reading in
             guard let self else { return }
             let muted = reading?.muted ?? false
-            self.ioQueue.async { self.io.micMuted = muted }
+            self.ioQueue.async {
+                self.io.appMuted = muted
+                self.io.micMuted = self.io.micSwitch.leavesOut(appMuted: muted)
+            }
             Task { @MainActor in self.mutedIn = muted ? reading?.app : nil }
+        }
+    }
+
+    /// The user's own say over the mic while the meeting records. Works with
+    /// or without a meeting app to follow. Like the app's mute it only
+    /// shapes the live mix and captions and writes stretches to
+    /// `.mute.json`: the `.mic` track keeps everything.
+    @MainActor
+    func setMicSwitch(_ choice: MicSwitch) {
+        guard choice != micSwitch else { return }
+        micSwitch = choice
+        AppLog.info("mute", "mic switch: \(choice.rawValue)")
+        ioQueue.async {
+            self.io.micSwitch = choice
+            self.io.micMuted = choice.leavesOut(appMuted: self.io.appMuted)
         }
     }
 

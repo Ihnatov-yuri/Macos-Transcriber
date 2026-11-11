@@ -1,6 +1,30 @@
 import Foundation
 
 /// What a meeting's transcript and playback take from its mic track.
+/// The Record screen's switch while a meeting records: follow the meeting
+/// app's mute, or overrule it either way.
+nonisolated enum MicSwitch: String, CaseIterable, Sendable {
+    case auto, on, off
+
+    func leavesOut(appMuted: Bool) -> Bool {
+        switch self {
+        case .auto: appMuted
+        case .on: false
+        case .off: true
+        }
+    }
+
+    /// The line under the switch; nil when there is nothing to say.
+    func status(mutedIn app: String?) -> String? {
+        switch (self, app) {
+        case (.off, _): "Mic left out"
+        case (.auto, let app?): "Muted in \(app) · mic left out"
+        case (.on, let app?): "Muted in \(app) · mic kept"
+        default: nil
+        }
+    }
+}
+
 nonisolated enum MicMode: String, Codable, CaseIterable, Sendable {
     /// Leave out the stretches the meeting app was muted, except where the
     /// user clearly spoke anyway.

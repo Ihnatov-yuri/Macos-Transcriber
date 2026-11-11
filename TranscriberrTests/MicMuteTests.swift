@@ -32,6 +32,45 @@ final class MicMuteTests: XCTestCase {
         XCTAssertEqual(MeetingMuteMonitor.parseLabel("Turn off microphone", meetOnly: true), false)
     }
 
+    func testTheSwitchOverrulesTheMeetingApp() {
+        XCTAssertFalse(MicSwitch.auto.leavesOut(appMuted: false))
+        XCTAssertTrue(MicSwitch.auto.leavesOut(appMuted: true))
+        XCTAssertFalse(MicSwitch.on.leavesOut(appMuted: true))
+        XCTAssertTrue(MicSwitch.off.leavesOut(appMuted: false))
+    }
+
+    func testTheSwitchSaysWhatHappensToTheMic() {
+        XCTAssertNil(MicSwitch.auto.status(mutedIn: nil))
+        XCTAssertNil(MicSwitch.on.status(mutedIn: nil))
+        XCTAssertEqual(MicSwitch.auto.status(mutedIn: "Teams"), "Muted in Teams · mic left out")
+        XCTAssertEqual(MicSwitch.on.status(mutedIn: "Teams"), "Muted in Teams · mic kept")
+        XCTAssertEqual(MicSwitch.off.status(mutedIn: nil), "Mic left out")
+        XCTAssertEqual(MicSwitch.off.status(mutedIn: "Zoom"), "Mic left out")
+    }
+
+    @MainActor
+    func testTheRecorderKeepsTheSwitch() {
+        let recorder = MeetingRecorder()
+        XCTAssertEqual(recorder.micSwitch, .auto)
+        recorder.setMicSwitch(.off)
+        XCTAssertEqual(recorder.micSwitch, .off)
+    }
+
+    func testAMissAlwaysLeavesALine() {
+        let silent = MeetingMuteMonitor.missLine(app: "Teams", windows: 2, searched: 2, elements: 6001,
+                                                 seconds: 2.04, stopped: "out of time", near: [])
+        XCTAssertEqual(silent, "Teams: no mute control; 2 of 2 windows, 6001 elements in 2.0 s (out of time); no button mentions mic or mute")
+        let worded = MeetingMuteMonitor.missLine(app: "Teams", windows: 1, searched: 1, elements: 40,
+                                                 seconds: 0.1, stopped: "whole tree read", near: ["Mic options"])
+        XCTAssertTrue(worded.hasSuffix("nearest labels: Mic options"))
+    }
+
+    func testTheNextScanStartsAtAnotherWindow() {
+        XCTAssertEqual(MeetingMuteMonitor.rotated([1, 2, 3], by: 1), [2, 3, 1])
+        XCTAssertEqual(MeetingMuteMonitor.rotated([1, 2, 3], by: 3), [1, 2, 3])
+        XCTAssertEqual(MeetingMuteMonitor.rotated([Int](), by: 2), [])
+    }
+
     func testOnlyAWholeWordMatchesTheWindow() {
         XCTAssertTrue(MeetingMuteMonitor.windowMatches("Meet - abc-defg-hij - Google Chrome", wanted: "Meet"))
         XCTAssertTrue(MeetingMuteMonitor.windowMatches("Google Meet", wanted: "Meet"))

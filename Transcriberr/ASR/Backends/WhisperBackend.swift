@@ -441,8 +441,8 @@ actor WhisperBackend: ASRBackend, DetailedTranscribing {
         var spans: [SegmentSpan] = []
         for result in results {
             for segment in result.segments {
-                let segWords = segment.words ?? []
-                let segText = (segWords.isEmpty
+                let segWords = (segment.words ?? []).filter { !TranscriptHygiene.isBlankFill($0.word) }
+                let segText = TranscriptHygiene.droppingBlankFill(segWords.isEmpty
                     ? Self.stripSpecialTokens(segment.text)
                     : segWords.map(\.word).joined())
                     .trimmingCharacters(in: .whitespacesAndNewlines)

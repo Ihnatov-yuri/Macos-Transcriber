@@ -6,6 +6,15 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.7.5
+
+- Super no longer writes a phrase twice when one engine heard it once and the other looped on it, as in "ти ще й залишишся там. Угу. То може ти ще й залишишся там."
+- A lone "Дякую." or "Thank you." that only Whisper wrote at the edge of a stretch of silence is left out. A thank-you both engines heard stays.
+- Runs of underscores that Whisper sometimes wrote in place of unclear speech no longer reach the transcript.
+- Numbers the two engines spell differently, such as "40" and "сорок", are no longer written twice or dropped by Super.
+- While a meeting records, the Record screen has Auto, Mic on and Mic off. Auto follows your mute in the meeting app; the other two overrule it for this recording. The saved mic track always keeps everything.
+- When the app cannot find the mute button of Teams, Zoom or Google Meet, it now writes a line to the log saying why.
+
 ## 5.7.4
 
 - A transcription that is running when the Mac goes to sleep, for example when the lid is closed, no longer loses words. Before, Super could come back with large parts of the meeting missing after the Mac woke up.

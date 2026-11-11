@@ -42,6 +42,10 @@ nonisolated enum MicMode: String, Codable, CaseIterable, Sendable {
 nonisolated struct MicMuteLog: Codable, Equatable, Sendable {
     var mode: MicMode = .follow
     var muted: [[Double]] = []
+    /// The parts of `muted` the user asked for with Mic off on the Record
+    /// screen. Nothing is kept from these: the user said so themself, where
+    /// the meeting app's mute says nothing about a word spoken anyway.
+    var off: [[Double]]?
     /// The voice scoring is the slow part and the draft, the mix and Super
     /// each need it: the last answer, valid while the span is the same.
     var cachedSpan: [[Double]]?
@@ -50,11 +54,12 @@ nonisolated struct MicMuteLog: Codable, Equatable, Sendable {
     /// The mode the user sees: nothing logged means nothing was left out.
     var effectiveMode: MicMode { mode == .follow && muted.isEmpty ? .everything : mode }
 
-    private enum CodingKeys: String, CodingKey { case mode, muted, cachedSpan, cachedKept }
+    private enum CodingKeys: String, CodingKey { case mode, muted, off, cachedSpan, cachedKept }
 
-    init(mode: MicMode = .follow, muted: [[Double]] = []) {
+    init(mode: MicMode = .follow, muted: [[Double]] = [], off: [[Double]]? = nil) {
         self.mode = mode
         self.muted = muted
+        self.off = (off?.isEmpty ?? true) ? nil : off
     }
 
     init(from decoder: Decoder) throws {
@@ -63,6 +68,7 @@ nonisolated struct MicMuteLog: Codable, Equatable, Sendable {
         // that would quietly bring the room back.
         mode = (try? c.decode(MicMode.self, forKey: .mode)) ?? .follow
         muted = try c.decodeIfPresent([[Double]].self, forKey: .muted) ?? []
+        off = try c.decodeIfPresent([[Double]].self, forKey: .off)
         cachedSpan = try c.decodeIfPresent([[Double]].self, forKey: .cachedSpan)
         cachedKept = try c.decodeIfPresent([[Double]].self, forKey: .cachedKept)
     }
@@ -110,18 +116,23 @@ nonisolated enum MicMute {
     /// The log of two recordings joined, b's stretches shifted. A mode does
     /// not carry over: the merged recording starts from "follow".
     static func merged(_ a: MicMuteLog?, _ b: MicMuteLog?, offset: Double) -> MicMuteLog? {
-        let muted = (a?.muted ?? []) + (b?.muted ?? []).filter { $0.count == 2 }.map { [$0[0] + offset, $0[1] + offset] }
-        return muted.isEmpty ? nil : MicMuteLog(mode: .follow, muted: muted)
+        let shifted = { (pairs: [[Double]]?) in (pairs ?? []).filter { $0.count == 2 }.map { [$0[0] + offset, $0[1] + offset] } }
+        let muted = (a?.muted ?? []) + shifted(b?.muted)
+        return muted.isEmpty ? nil : MicMuteLog(mode: .follow, muted: muted, off: (a?.off ?? []) + shifted(b?.off))
     }
 
     /// The log cut in two, each part keeping the mode.
     static func split(_ log: MicMuteLog, at cut: Double) -> (first: MicMuteLog, second: MicMuteLog) {
-        var a: [[Double]] = [], b: [[Double]] = []
-        for pair in log.muted where pair.count == 2 {
-            if pair[0] < cut { a.append([pair[0], min(pair[1], cut)]) }
-            if pair[1] > cut { b.append([max(pair[0], cut) - cut, pair[1] - cut]) }
+        func halves(_ pairs: [[Double]]) -> ([[Double]], [[Double]]) {
+            var a: [[Double]] = [], b: [[Double]] = []
+            for pair in pairs where pair.count == 2 {
+                if pair[0] < cut { a.append([pair[0], min(pair[1], cut)]) }
+                if pair[1] > cut { b.append([max(pair[0], cut) - cut, pair[1] - cut]) }
+            }
+            return (a, b)
         }
-        return (MicMuteLog(mode: log.mode, muted: a), MicMuteLog(mode: log.mode, muted: b))
+        let (a, b) = halves(log.muted), (offA, offB) = halves(log.off ?? [])
+        return (MicMuteLog(mode: log.mode, muted: a, off: offA), MicMuteLog(mode: log.mode, muted: b, off: offB))
     }
 
     // MARK: - Decisions (pure)
@@ -157,6 +168,14 @@ nonisolated enum MicMute {
             }
         }
         return VoiceActivity.merge(kept, gap: 0)
+    }
+
+    /// What is kept once the user's own Mic off stretches are taken out
+    /// again. Only "follow" knows them: the modes chosen after the meeting
+    /// each say what they do with the whole track.
+    static func keptOutsideOff(_ kept: [ClosedRange<Double>], log: MicMuteLog) -> [ClosedRange<Double>] {
+        guard log.mode == .follow, let off = log.off else { return kept }
+        return holes(span: kept, kept: off.compactMap { $0.count == 2 && $0[1] > $0[0] ? $0[0]...$0[1] : nil })
     }
 
     /// `span` minus `kept`.
@@ -222,6 +241,7 @@ nonisolated enum MicMute {
                 }
             }
         }
+        kept = keptOutsideOff(kept, log: log)
         let holes = holes(span: span, kept: kept)
         silence(&mic, holes: holes)
         let total = { (r: [ClosedRange<Double>]) in Int(r.reduce(0) { $0 + $1.upperBound - $1.lowerBound }) }

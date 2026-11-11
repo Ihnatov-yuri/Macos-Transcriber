@@ -81,7 +81,7 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
     /// What the last miss looked like per app, so each different miss is
     /// logged once; and how many were logged this recording.
     private var missSeen: [String: String] = [:]
-    private var missLines = 0
+    private var missLines: [String: Int] = [:]
     private var loggedFound = false
     private var loggedNoApp = false
     /// Where the next scan of an app starts when the last one ran out of
@@ -106,7 +106,7 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
             }
             self.onChange = onChange
             last = nil; control = nil; lastScan = .distantPast
-            missSeen = [:]; missLines = 0; loggedFound = false; loggedNoApp = false; firstWindow = [:]
+            missSeen = [:]; missLines = [:]; loggedFound = false; loggedNoApp = false; firstWindow = [:]
             let t = DispatchSource.makeTimerSource(queue: queue)
             t.schedule(deadline: .now(), repeating: Self.pollSeconds, leeway: .milliseconds(200))
             t.setEventHandler { [weak self] in self?.poll() }
@@ -203,7 +203,7 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
                 }
                 if Date() >= deadline {
                     stopped = "out of time"
-                    firstWindow[app.id] = ((firstWindow[app.id] ?? 0) + i + 1) % max(roots.count, 1)
+                    firstWindow[app.id] = Self.nextStart(previous: firstWindow[app.id] ?? 0, stoppedAt: i, count: roots.count)
                     break
                 }
                 if nodes > Self.maxNodes { stopped = "element limit reached" }
@@ -212,10 +212,13 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
             // is nothing to tell a wording change from an unread window.
             let miss = Self.missLine(app: app.name, windows: windows.count, searched: roots.count, elements: total,
                                      seconds: Date().timeIntervalSince(began), stopped: stopped, near: near)
-            let kind = "\(windows.count)|\(roots.count)|\(stopped)|\(near.joined(separator: "/"))"
-            if missSeen[app.id] != kind, missLines < 12 {
+            // A browser with no Meet window is not a miss: its lines would
+            // use up what a real miss in Teams or Zoom needs.
+            guard Self.isMiss(browser: app.window != nil, searched: roots.count) else { continue }
+            let kind = "\(roots.count)|\(stopped)|\(near.joined(separator: "/"))"
+            if missSeen[app.id] != kind, missLines[app.id, default: 0] < Self.missLinesPerApp {
                 missSeen[app.id] = kind
-                missLines += 1
+                missLines[app.id, default: 0] += 1
                 AppLog.info("mute", miss)
             }
         }
@@ -224,6 +227,19 @@ nonisolated final class MeetingMuteMonitor: @unchecked Sendable {
             AppLog.info("mute", "no meeting app running (Teams, Zoom or a browser): nothing to follow")
         }
         return nil
+    }
+
+    static let missLinesPerApp = 6
+
+    static func isMiss(browser: Bool, searched: Int) -> Bool { !browser || searched > 0 }
+
+    /// Where the next scan starts after one ran out of time in the window
+    /// at `stoppedAt` (counted from where it started). That window comes
+    /// first, so it gets the whole time; a window that used all the time
+    /// while already first gives way to the next one.
+    static func nextStart(previous: Int, stoppedAt: Int, count: Int) -> Int {
+        guard count > 1 else { return 0 }
+        return (previous + max(stoppedAt, 1)) % count
     }
 
     static func rotated<T>(_ items: [T], by offset: Int) -> [T] {

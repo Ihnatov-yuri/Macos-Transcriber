@@ -82,6 +82,10 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         var micSwitch: MicSwitch = .auto
         var muteIntervals: [[Double]] = []
         var muteOpenAt: Double? = nil
+        /// The stretches the switch stood at Mic off: also in
+        /// `muteIntervals`, and marked so that nothing is kept from them.
+        var offIntervals: [[Double]] = []
+        var offOpenAt: Double? = nil
         /// Echo duck: while the system tap is loud and the mic is NOT
         /// dominant, the mic is mostly hearing the speakers — its
         /// contribution to the mix (and the mic track) is attenuated.
@@ -305,10 +309,15 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
                 io.muteIntervals.append([open, Double(io.framesSeen) / io.nativeRate])
                 io.muteOpenAt = nil
             }
+            if let open = io.offOpenAt {
+                io.offIntervals.append([open, Double(io.framesSeen) / io.nativeRate])
+                io.offOpenAt = nil
+            }
             if let url = self.fileURL, !io.muteIntervals.isEmpty {
-                MicMute.save(MicMuteLog(mode: .follow, muted: io.muteIntervals), forMain: url)
-                AppLog.info("meeting", "muted in the meeting app: \(io.muteIntervals.count) stretches")
+                MicMute.save(MicMuteLog(mode: .follow, muted: io.muteIntervals, off: io.offIntervals), forMain: url)
+                AppLog.info("meeting", "mic left out: \(io.muteIntervals.count) stretches, \(io.offIntervals.count) by the Mic off switch")
                 io.muteIntervals.removeAll()
+                io.offIntervals.removeAll()
             }
             io.micMuted = false
             io.audioFile = nil
@@ -631,6 +640,8 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             io.meIntervals.removeAll(keepingCapacity: true)
             io.muteIntervals.removeAll(keepingCapacity: true)
             io.muteOpenAt = nil
+            io.offIntervals.removeAll(keepingCapacity: true)
+            io.offOpenAt = nil
             io.micMuted = false
             io.appMuted = false
             io.micSwitch = .auto
@@ -864,6 +875,12 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         } else if let open = io.muteOpenAt {
             io.muteIntervals.append([open, t])
             io.muteOpenAt = nil
+        }
+        if io.micSwitch == .off {
+            if io.offOpenAt == nil { io.offOpenAt = t }
+        } else if let open = io.offOpenAt {
+            io.offIntervals.append([open, t])
+            io.offOpenAt = nil
         }
     }
 

@@ -332,4 +332,24 @@ final class TranscriptHygieneTests: XCTestCase {
         XCTAssertEqual(TranscriptStyle.clean.apply("I was I was like, um, sure"), "I was like, sure")
         XCTAssertEqual(TranscriptStyle.verbatim.apply("I was I was like, um, sure"), "I was I was like, um, sure")
     }
+
+    /// 2026-11-11, Ukrainian Super: "…треба наважно. Угу. ______________ _."
+    func testBlankFillTokensAreDropped() {
+        XCTAssertEqual(TranscriptHygiene.droppingBlankFill("треба наважно. Угу. ______________ _."),
+                       "треба наважно. Угу.")
+        XCTAssertEqual(TranscriptHygiene.droppingBlankFill("Ні, ну, нормально. ______________ _."),
+                       "Ні, ну, нормально.")
+        XCTAssertEqual(TranscriptHygiene.droppingBlankFill("___"), "")
+        XCTAssertTrue(TranscriptHygiene.isBlankFill(" _."))
+        XCTAssertTrue(TranscriptHygiene.isBlankFill("__,"))
+    }
+
+    func testRealWordsWithUnderscoresAndPlainTextAreKept() {
+        XCTAssertEqual(TranscriptHygiene.droppingBlankFill("set snake_case and __init__"), "set snake_case and __init__")
+        XCTAssertEqual(TranscriptHygiene.droppingBlankFill("два  пробіли лишаються"), "два  пробіли лишаються", "no underscore: untouched")
+        XCTAssertFalse(TranscriptHygiene.isBlankFill("snake_case"))
+        XCTAssertFalse(TranscriptHygiene.isBlankFill("."))
+        XCTAssertFalse(TranscriptHygiene.isBlankFill(""))
+        XCTAssertFalse(TranscriptHygiene.isBlankFill("_1"))
+    }
 }

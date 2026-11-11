@@ -641,8 +641,16 @@ actor EnsembleBackend: ASRBackend {
                 let voted = haveWords
                     ? Self.roverMergeDetailed(a.words, b.words, priorA: priorA, priorB: priorB,
                                               vocabulary: Self.vocabularyNorms(languages: languages).union(meetingNorms),
-                                              learned: DisputeLearning.pairs())
+                                              learned: DisputeLearning.pairs(),
+                                              whisperSide: Self.whisperSide(kindA, kindB))
                     : (text: preferredText, disputes: [])
+                // TRANSCRIBERR_TRACE_MERGE=1: what each engine read and what
+                // the vote made of it, per chunk, on stderr (CLI debugging).
+                if ProcessInfo.processInfo.environment["TRANSCRIBERR_TRACE_MERGE"] != nil {
+                    let at = window.map { String(format: "track %d @%.1f-%.1f", $0.track, $0.start, $0.end) } ?? "chunk"
+                    FileHandle.standardError.write(Data(
+                        "MERGE \(at)\n  A \(kindA.rawValue): \(a.text)\n  B \(kindB.rawValue): \(b.text)\n  = \(voted.text)\n".utf8))
+                }
                 return RichChunk(
                     text: voted.text.isEmpty ? preferredText : voted.text,
                     agreement: similarity,
@@ -788,7 +796,8 @@ actor EnsembleBackend: ASRBackend {
         }
         let merged = Self.roverMerge(a.words, b.words, priorA: priorA, priorB: priorB,
                                      vocabulary: Self.vocabularyNorms(languages: languages).union(meetingNorms),
-                                     learned: DisputeLearning.pairs())
+                                     learned: DisputeLearning.pairs(),
+                                     whisperSide: Self.whisperSide(kindA, kindB))
         AppLog.info("ensemble", String(format: "agreement %.2f — confidence-voted merge (%d/%d words → %d)", similarity, a.words.count, b.words.count, merged.split(separator: " ").count))
         return merged.isEmpty ? preferredText : merged
     }
@@ -805,9 +814,17 @@ actor EnsembleBackend: ASRBackend {
         priorA: Float = 1,
         priorB: Float = 1,
         vocabulary: Set<String> = [],
-        learned: Set<String> = []
+        learned: Set<String> = [],
+        whisperSide: Int? = nil
     ) -> String {
-        roverMergeDetailed(a, b, priorA: priorA, priorB: priorB, vocabulary: vocabulary, learned: learned).text
+        roverMergeDetailed(a, b, priorA: priorA, priorB: priorB, vocabulary: vocabulary, learned: learned,
+                           whisperSide: whisperSide).text
+    }
+
+    /// 1 when engine A is Whisper, 2 when engine B is, nil when neither:
+    /// the side whose lone stock lines (`isLoneStockLine`) are not believed.
+    static func whisperSide(_ kindA: BackendFactory.Kind, _ kindB: BackendFactory.Kind) -> Int? {
+        kindA == .whisper ? 1 : kindB == .whisper ? 2 : nil
     }
 
     /// The vote, plus every aligned word the engines read differently with
@@ -820,17 +837,31 @@ actor EnsembleBackend: ASRBackend {
         priorA: Float = 1,
         priorB: Float = 1,
         vocabulary: Set<String> = [],
-        learned: Set<String> = []
+        learned: Set<String> = [],
+        whisperSide: Int? = nil
     ) -> (text: String, disputes: [WordDispute]) {
         let n = a.count, m = b.count
         guard n > 0, m > 0 else { return (joinSurfaces((n > 0 ? a : b).map(\.surface)), []) }
+        // Costs: same word 0, two readings of one word 2, unrelated words 3,
+        // a word only one engine has 2. With a flat cost of 1 the alignment
+        // could not tell "днів"/"дней" from "днів"/"сорок": on "За 40 днів це
+        // вже" against "За сорок дней уже" it paired днів with сорок, left 40
+        // without a partner, and the vote wrote "За днів це вже"
+        // (2026-11-11). A pair of unrelated words still costs less than
+        // leaving both alone (3 < 4), so substitutions stay preferred.
+        let gap = 2
+        var pair = [[Int]](repeating: [Int](repeating: 0, count: m), count: n)
+        for i in 0..<n {
+            for j in 0..<m where a[i].norm != b[j].norm {
+                pair[i][j] = Self.readingsAlike(a[i].norm, b[j].norm) ? 2 : 3
+            }
+        }
         var dp = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
-        for i in 0...n { dp[i][0] = i }
-        for j in 0...m { dp[0][j] = j }
+        for i in 0...n { dp[i][0] = i * gap }
+        for j in 0...m { dp[0][j] = j * gap }
         for i in 1...n {
             for j in 1...m {
-                let sub = dp[i-1][j-1] + (a[i-1].norm == b[j-1].norm ? 0 : 1)
-                dp[i][j] = min(sub, dp[i-1][j] + 1, dp[i][j-1] + 1)
+                dp[i][j] = min(dp[i-1][j-1] + pair[i-1][j-1], dp[i-1][j] + gap, dp[i][j-1] + gap)
             }
         }
         let insertionFloor: Float = 0.55
@@ -843,9 +874,7 @@ actor EnsembleBackend: ASRBackend {
         // words, so the two lists stay in step over the source-0 words.
         var losers: [String?] = []
         while i > 0 || j > 0 {
-            if i > 0, j > 0,
-               dp[i][j] == dp[i-1][j-1] + (a[i-1].norm == b[j-1].norm ? 0 : 1)
-            {
+            if i > 0, j > 0, dp[i][j] == dp[i-1][j-1] + pair[i-1][j-1] {
                 let wa = a[i-1], wb = b[j-1]
                 if wa.norm == wb.norm {
                     // Same word: the vote has nothing to decide, so take the
@@ -888,7 +917,7 @@ actor EnsembleBackend: ASRBackend {
                     losers.append(Self.readingsAlike(wa.norm, wb.norm) && !foreign ? loser : nil)
                 }
                 i -= 1; j -= 1
-            } else if i > 0, dp[i][j] == dp[i-1][j] + 1 {
+            } else if i > 0, dp[i][j] == dp[i-1][j] + gap {
                 if a[i-1].confidence >= insertionFloor { reversed.append((a[i-1].surface, 1, a[i-1].norm)) }
                 i -= 1
             } else {
@@ -911,7 +940,7 @@ actor EnsembleBackend: ASRBackend {
                 if end - k < 3 { words.removeSubrange(k..<end) } else { k = end }
             }
         }
-        let kept = dropEchoInsertions(words)
+        let kept = dropEchoInsertions(words, whisperSide: whisperSide)
         var pending = Array(losers.reversed())[...]
         var disputes: [WordDispute] = []
         for (k, w) in kept.enumerated() where w.source == 0 {
@@ -974,7 +1003,8 @@ actor EnsembleBackend: ASRBackend {
     ]
 
     static func dropEchoInsertions(
-        _ words: [(surface: String, source: Int, norm: String)]
+        _ words: [(surface: String, source: Int, norm: String)],
+        whisperSide: Int? = nil
     ) -> [(surface: String, source: Int, norm: String)] {
         guard words.count > 1 else { return words }
         var drop = Set<Int>()
@@ -994,8 +1024,29 @@ actor EnsembleBackend: ASRBackend {
             let after = end + r <= words.count ? words[end..<(end + r)].map(\.norm) : []
             if r > 1, before == runNorms || after == runNorms || neighbours.contains(joined) {
                 drop.formUnion(run)
+            } else if words[k].source == whisperSide, k == 0 || end == words.count,
+                      Self.isLoneStockLine(run.map { words[$0].surface },
+                                           previous: k > 0 ? words[k - 1].surface : nil) {
+                // "Дякую." as a sentence of its own at the edge of a chunk,
+                // written by Whisper and not heard by the other engine: its
+                // stock line, glued to real speech where the per-segment
+                // silence check cannot see it ("Дякую. За 40 днів це вже
+                // душа…", 2026-11-11). Whisper only, and edges only: a thanks
+                // in the middle of a chunk, or one the other engine alone
+                // wrote, is somebody talking.
+                drop.formUnion(run)
             } else {
-                for idx in run {
+                // One engine looped: the run holds a phrase that stands again
+                // right beside it, and there the other engine heard it too
+                // ("може ти ще й залишишся там. Угу. Угу. Угу. То може ти ще
+                // й залишишся там." against a single "То може, що залишишся
+                // там"). The copy only one engine heard goes; the rest of the
+                // run is weighed word by word as before.
+                let lo = max(0, k - r - 4), hi = min(words.count, end + r + 4)
+                if let again = Self.repeatedPhrase(runNorms, around: (Array(words[lo..<k]), Array(words[end..<hi]))) {
+                    drop.formUnion(again.map { run[$0] })
+                }
+                for idx in run where !drop.contains(idx) {
                     let w = words[idx].norm
                     guard !w.isEmpty else { continue }
                     let near = [idx - 1, idx + 1].filter { words.indices.contains($0) && !drop.contains($0) }
@@ -1010,6 +1061,47 @@ actor EnsembleBackend: ASRBackend {
             k = end
         }
         return words.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
+    }
+
+    /// A one-engine run that is a stock phantom line standing as its own
+    /// sentence: it starts a sentence and ends one. "я дякую тобі" with only
+    /// "дякую" unmatched is not that, and stays.
+    static func isLoneStockLine(_ surfaces: [String], previous: String?) -> Bool {
+        guard let last = surfaces.last?.trimmingCharacters(in: .whitespaces), !surfaces.isEmpty else { return false }
+        let enders: Set<Character> = [".", "!", "?", "…"]
+        guard let lastChar = last.last, enders.contains(lastChar) else { return false }
+        if let prev = previous?.trimmingCharacters(in: .whitespaces), let p = prev.last, !enders.contains(p) { return false }
+        return TranscriptHygiene.isStockLineOnly(surfaces.joined(separator: " "))
+    }
+
+    /// Offsets in `run` (words only one engine has) of the longest phrase
+    /// that stands again in the words right before or right after it. Kept
+    /// narrow, because the vote must not eat real speech:
+    ///   - 4+ words in a row, not all of them function words: "if we can"
+    ///     turns up twice in any long sentence by chance;
+    ///   - at least half of the other copy was heard by BOTH engines
+    ///     (source 0). Two engines that order overlapping turns differently
+    ///     each hold the phrase as a one-engine run, and neither is a loop.
+    static func repeatedPhrase(
+        _ run: [String],
+        around: (before: [(surface: String, source: Int, norm: String)],
+                 after: [(surface: String, source: Int, norm: String)])
+    ) -> Range<Int>? {
+        var best: Range<Int>?
+        for side in [around.before, around.after] where side.count >= 4 && run.count >= 4 {
+            for i in 0..<run.count {
+                for j in 0..<side.count {
+                    var len = 0
+                    while i + len < run.count, j + len < side.count, !run[i + len].isEmpty,
+                          run[i + len] == side[j + len].norm { len += 1 }
+                    guard len >= 4, len > (best?.count ?? 0) else { continue }
+                    let phrase = run[i..<(i + len)]
+                    let shared = side[j..<(j + len)].filter { $0.source == 0 }.count
+                    if shared * 2 >= len, !phrase.allSatisfy(functionWords.contains) { best = i..<(i + len) }
+                }
+            }
+        }
+        return best
     }
 
     /// Join word surfaces defensively: trim stray engine whitespace (double

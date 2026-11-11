@@ -16,7 +16,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: "5.7.4"
+    MARKETING_VERSION: "5.7.5"
 
 # Runtimes: Core ML (FluidAudio: Parakeet, diarizer; WhisperKit: Whisper)
 # for speech, MLX (Gemma) and uzu (Qwen) for the text models.

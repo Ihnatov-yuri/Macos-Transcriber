@@ -163,4 +163,105 @@ final class DisputeTests: XCTestCase {
         XCTAssertNotNil(hit)
         XCTAssertEqual(DisputeIndex.pick(hit!, in: text).text, "ask Kaico first, then ask Kaiko again")
     }
+
+    // MARK: - 2026-11-11, Ukrainian Super on the reference slice uk-a
+
+    private func words(_ text: String, _ c: Float = 0.9) -> [ScoredWord] {
+        text.split(separator: " ").map { w(String($0), c) }
+    }
+
+    /// Engine A is Whisper in these merges, as in Super.
+    private func vote(_ a: String, _ b: String, priorA: Float = 1, priorB: Float = 1) -> String {
+        EnsembleBackend.roverMergeDetailed(words(a), words(b), priorA: priorA, priorB: priorB, whisperSide: 1).text
+    }
+
+    /// "За 40 днів це вже" against "За сорок дней уже" came out "За днів це
+    /// вже": the flat-cost alignment paired днів with сорок and left 40,
+    /// a low-confidence word, without a partner.
+    func testTheVoteKeepsANumberTheEnginesSpellDifferently() {
+        var a = words("За 40 днів це вже душа відлетіла, все.")
+        a[1] = w("40", 0.4)
+        let b = words("За сорок дней уже душа вилотила все", 0.6)
+        let text = EnsembleBackend.roverMergeDetailed(a, b, priorA: 1.2, priorB: 1).text
+        XCTAssertTrue(text.hasPrefix("За сорок днів"), text)
+    }
+
+    func testUnrelatedWordsStillPairRatherThanStandAlone() {
+        XCTAssertEqual(vote("big cat sat on mat", "pig bat hat on mat").split(separator: " ").count, 5)
+    }
+
+    /// Whisper's stock line as a sentence of its own in front of real speech.
+    func testWhispersLoneThanksAtAChunkEdgeIsDropped() {
+        XCTAssertEqual(vote("Дякую. За сорок днів це вже душа відлетіла.", "За сорок днів це вже душа відлетіла."),
+                       "За сорок днів це вже душа відлетіла.")
+        XCTAssertEqual(vote("So that is the plan. Thank you.", "So that is the plan."), "So that is the plan.")
+    }
+
+    /// The review's cases: a thanks in the middle of a chunk, one the other
+    /// engine wrote, and one inside a sentence are somebody talking.
+    func testARealThanksStays() {
+        XCTAssertEqual(vote("Okay. Thank you. Next item is budget.", "Okay. Next item is budget."),
+                       "Okay. Thank you. Next item is budget.")
+        XCTAssertEqual(vote("Добре, зробимо. Дякую. Наступне питання бюджет.", "Добре, зробимо. Наступне питання бюджет.",
+                            priorA: 1, priorB: 0.5),
+                       "Добре, зробимо. Дякую. Наступне питання бюджет.")
+        XCTAssertEqual(vote("So that is the plan.", "So that is the plan. Thank you."), "So that is the plan. Thank you.",
+                       "the other engine has no stock-line habit")
+        XCTAssertEqual(vote("я дякую тобі за це", "я тобі за це"), "я дякую тобі за це")
+        XCTAssertEqual(vote("Дякую. За сорок днів.", "Дякую. За сорок днів."), "Дякую. За сорок днів.")
+        // Without a Whisper side the rule is off.
+        XCTAssertEqual(EnsembleBackend.roverMergeDetailed(words("Thank you. And now the budget"), words("And now the budget")).text,
+                       "Thank you. And now the budget")
+    }
+
+    func testLoneStockLineShape() {
+        XCTAssertTrue(EnsembleBackend.isLoneStockLine(["Дякую."], previous: nil))
+        XCTAssertTrue(EnsembleBackend.isLoneStockLine(["Thank", "you."], previous: "plan."))
+        XCTAssertFalse(EnsembleBackend.isLoneStockLine(["Thank", "you."], previous: "plan,"), "mid-sentence")
+        XCTAssertFalse(EnsembleBackend.isLoneStockLine(["дякую"], previous: nil), "no sentence end")
+        XCTAssertFalse(EnsembleBackend.isLoneStockLine(["До", "побачення."], previous: "все."), "a farewell is not a phantom")
+        XCTAssertFalse(EnsembleBackend.isLoneStockLine(["Угу."], previous: "там."), "nor is a back-channel")
+    }
+
+    /// One engine looped a phrase; the other heard it once.
+    func testAPhraseOneEngineLoopedIsKeptOnce() {
+        let text = vote("може ти ще й залишишся там. Угу. Угу. Угу. То може ти ще й залишишся там. Угу.",
+                        "То може ти ще й залишишся там.", priorA: 1.2, priorB: 1)
+        XCTAssertEqual(text.components(separatedBy: "залишишся").count - 1, 1, text)
+        XCTAssertTrue(text.hasSuffix("То може ти ще й залишишся там. Угу."), text)
+        XCTAssertFalse(text.contains("Угу. Угу. Угу."), "the stutter beside the loop is still weighed: \(text)")
+    }
+
+    /// The review's cases: none of these is a loop.
+    func testSpeechThatOnlyLooksLikeALoopStays() {
+        // Two engines order overlapping turns differently: both copies are
+        // one-engine runs, and dropping "the repeat" on each side lost both.
+        let crossed = vote("yes I agree so the point is", "so the point is yes I agree")
+        XCTAssertTrue(crossed.contains("yes I agree") && crossed.contains("so the point is"), crossed)
+        // A chance run of small words inside a real sentence.
+        XCTAssertEqual(vote("okay. I do not know if we can do that today. But if we can then great.",
+                            "okay. But if we can then great."),
+                       "okay. I do not know if we can do that today. But if we can then great.")
+        XCTAssertEqual(vote("Sorry, you know what I mean by that right? So you know what happened.",
+                            "Sorry, So you know what happened."),
+                       "Sorry, you know what I mean by that right? So you know what happened.")
+        // A phrase only one engine heard, said once.
+        XCTAssertEqual(vote("Sorry for interrupting you but the numbers are in", "the numbers are in"),
+                       "Sorry for interrupting you but the numbers are in")
+    }
+
+    func testRepeatedPhraseRules() {
+        typealias Word = (surface: String, source: Int, norm: String)
+        func side(_ text: String, source: Int = 0) -> [Word] {
+            text.split(separator: " ").map { (String($0), source, String($0)) }
+        }
+        let run = ["x", "alpha", "bravo", "charlie", "delta", "y"]
+        XCTAssertEqual(EnsembleBackend.repeatedPhrase(run, around: ([], side("q alpha bravo charlie delta"))), 1..<5)
+        XCTAssertEqual(EnsembleBackend.repeatedPhrase(run, around: (side("alpha bravo charlie delta z"), [])), 1..<5)
+        XCTAssertNil(EnsembleBackend.repeatedPhrase(run, around: ([], side("alpha bravo charlie"))), "three words are not enough")
+        XCTAssertNil(EnsembleBackend.repeatedPhrase(run, around: ([], side("alpha bravo charlie delta", source: 2))),
+                     "the other copy must be heard by both engines")
+        XCTAssertNil(EnsembleBackend.repeatedPhrase(["if", "we", "can", "do"], around: ([], side("if we can do it"))),
+                     "small words only")
+    }
 }

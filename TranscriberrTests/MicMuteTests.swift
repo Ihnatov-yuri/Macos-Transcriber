@@ -71,6 +71,42 @@ final class MicMuteTests: XCTestCase {
         XCTAssertEqual(MeetingMuteMonitor.rotated([Int](), by: 2), [])
     }
 
+    func testAScanCutShortStartsAtTheWindowItDidNotFinish() {
+        // Chat list first, call window cut off: the call window goes first
+        // next time, with the whole time to itself.
+        XCTAssertEqual(MeetingMuteMonitor.nextStart(previous: 0, stoppedAt: 1, count: 2), 1)
+        XCTAssertEqual(MeetingMuteMonitor.nextStart(previous: 1, stoppedAt: 2, count: 3), 0)
+        // The first window used all the time: the next one gets a turn.
+        XCTAssertEqual(MeetingMuteMonitor.nextStart(previous: 0, stoppedAt: 0, count: 2), 1)
+        XCTAssertEqual(MeetingMuteMonitor.nextStart(previous: 0, stoppedAt: 0, count: 1), 0)
+    }
+
+    func testABrowserWithNoMeetWindowIsNotAMiss() {
+        XCTAssertFalse(MeetingMuteMonitor.isMiss(browser: true, searched: 0))
+        XCTAssertTrue(MeetingMuteMonitor.isMiss(browser: true, searched: 1))
+        XCTAssertTrue(MeetingMuteMonitor.isMiss(browser: false, searched: 0))
+    }
+
+    func testNothingIsKeptFromAMicOffStretch() throws {
+        // Muted in the app 0-20 s and by the switch 30-50 s, ten seconds
+        // of the user's voice in each: only the first comes back.
+        let log = MicMuteLog(mode: .follow, muted: [[0, 20], [30, 50]], off: [[30, 50]])
+        let kept = MicMute.keptRanges(muted: MicMute.span(log, duration: 60), voice: [5...15, 35...45], sound: [])
+        XCTAssertEqual(kept, [5...15, 35...45])
+        XCTAssertEqual(MicMute.keptOutsideOff(kept, log: log), [5...15])
+        // A mode chosen after the meeting overrules the switch.
+        var mine = log; mine.mode = .myVoice
+        XCTAssertEqual(MicMute.keptOutsideOff(kept, log: mine), kept)
+        // The stretches survive the file, a join and a cut; older logs have none.
+        let back = try JSONDecoder().decode(MicMuteLog.self, from: JSONEncoder().encode(log))
+        XCTAssertEqual(back.off, [[30, 50]])
+        XCTAssertNil(try JSONDecoder().decode(MicMuteLog.self, from: Data(#"{"mode":"follow","muted":[[0,5]]}"#.utf8)).off)
+        XCTAssertEqual(MicMute.merged(log, log, offset: 100)?.off, [[30, 50], [130, 150]])
+        let halves = MicMute.split(log, at: 40)
+        XCTAssertEqual(halves.first.off, [[30, 40]])
+        XCTAssertEqual(halves.second.off, [[0, 10]])
+    }
+
     func testOnlyAWholeWordMatchesTheWindow() {
         XCTAssertTrue(MeetingMuteMonitor.windowMatches("Meet - abc-defg-hij - Google Chrome", wanted: "Meet"))
         XCTAssertTrue(MeetingMuteMonitor.windowMatches("Google Meet", wanted: "Meet"))

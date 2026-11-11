@@ -71,6 +71,27 @@ nonisolated enum TranscriptHygiene {
             || $0.contains("regardé") || $0 == ["gracias", "por", "ver", "el", "video"]
     }
 
+    /// A token that is only underscores, with or without punctuation around
+    /// it. Whisper writes runs of them where it heard something it would not
+    /// spell ("…треба наважно. Угу. ______________ _." on a Ukrainian
+    /// meeting, 2026-11-11). Nobody said them.
+    static func isBlankFill<S: StringProtocol>(_ token: S) -> Bool {
+        var underscores = 0
+        for ch in token {
+            if ch == "_" { underscores += 1 } else if ch.isLetter || ch.isNumber { return false }
+        }
+        return underscores > 0
+    }
+
+    /// `text` without its blank-fill tokens; spacing between the rest is kept
+    /// as single spaces. Text with no such token comes back untouched.
+    static func droppingBlankFill(_ text: String) -> String {
+        guard text.contains("_") else { return text }
+        return text.split(separator: " ", omittingEmptySubsequences: true)
+            .filter { !isBlankFill($0) }
+            .joined(separator: " ")
+    }
+
     static func isOutroOnly(_ text: String) -> Bool {
         consists(of: outroPhrases.sorted { $0.count > $1.count }, normWords(text))
     }
@@ -89,6 +110,13 @@ nonisolated enum TranscriptHygiene {
             return false
         }
         return true
+    }
+
+    /// Nothing but stock thanks and subtitle lines ("Дякую.", "Thank you.").
+    /// Left out: back-channels ("Угу" alone is far more often real) and
+    /// farewells ("До побачення." closes real meetings).
+    static func isStockLineOnly(_ text: String) -> Bool {
+        consists(of: phrasesLongestFirst.filter { $0.first != "до" }, normWords(text))
     }
 
     static func isBackchannelOnly(_ text: String) -> Bool {

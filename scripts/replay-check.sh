@@ -61,6 +61,10 @@ run_mode() {
   done
 }
 
+# A Mac that sleeps mid-run gives a transcript with words missing and run
+# times in hours (it failed the first v5.7.3 gate run): stay awake until done.
+caffeinate -i -w $$ &
+
 run_mode fast parakeet-v3
 [ "$SUPER" = 1 ] && run_mode super ensemble whisper-large-v3 parakeet-v3
 

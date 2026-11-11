@@ -58,54 +58,69 @@ Export the identity (.p12) to the password manager with the update key.
    xcodebuild test -project Transcriberr.xcodeproj -scheme Transcriberr -destination "platform=macOS" \
        -derivedDataPath ~/Library/Caches/transcriberr-test-dd -clonedSourcePackagesDirPath .build/xcode/SourcePackages
    ```
+   A fix comes with the test that would have caught it; the gate in step 7
+   refuses a release whose code changed without a test change.
 
-5. **Build and package.** `package.sh` re-signs the embedded dylibs and applies the
-   identifier-based signing requirement that keeps permission grants across updates.
+5. **Review, then commit.** Review `git diff <last tag>..HEAD`, fix what the
+   review finds, and commit everything as "vX.Y.Z: <what changed>". Then record
+   the review, which holds for exactly these changes:
    ```bash
-   xcodebuild -scheme Transcriberr -derivedDataPath .build/xcode -configuration Release build
-   ./scripts/package.sh
-   defaults read "$PWD/.build/xcode/Build/Products/Release/Transcriberr.app/Contents/Info.plist" CFBundleShortVersionString
+   ./scripts/release-gate.sh --reviewed
    ```
-   The last line must print the new version before anything is zipped.
 
-6. **Zip and sign.** The zip name is fixed; the app builds the download address
+6. **Push main without a tag.** CI and E2E run on the commit before it becomes a
+   release.
+   ```bash
+   git push origin main
+   ```
+
+7. **Run the release gate.** It builds and signs the Release app and the
+   command-line tool from this commit, waits for CI and E2E, and replays real
+   meetings through the build (`scripts/replay-check.sh`). It ends with what the
+   installed app logged in normal use (`scripts/field-report.sh`). Nobody tests
+   the build by hand, so the gate has no skip switches.
+   ```bash
+   ./scripts/release-gate.sh --build --wait
+   ```
+   Go on only after `GATE PASSED`. A failed check is fixed in a new commit,
+   and steps 5 to 7 run again.
+
+8. **Zip and sign.** The zip name is fixed; the app builds the download address
    from it.
    ```bash
    V=X.Y.Z
    ditto -c -k --sequesterRsrc --keepParent .build/xcode/Build/Products/Release/Transcriberr.app \
-       Transcriberr-v$V-macOS-arm64.zip
-   ./scripts/sign-update.sh Transcriberr-v$V-macOS-arm64.zip
+       build/Transcriberr-v$V-macOS-arm64.zip
+   ./scripts/sign-update.sh build/Transcriberr-v$V-macOS-arm64.zip
    ```
    `sign-update.sh` writes `Transcriberr-v$V-macOS-arm64.zip.sig` and verifies it
    against the public key in the source. It stops if they don't match.
 
-7. **Commit, tag, push.**
+9. **Tag and push the tag.** An annotated tag, on the commit the gate passed.
    ```bash
-   git commit -am "vX.Y.Z: <what changed>"
-   git tag vX.Y.Z
-   git push origin main vX.Y.Z
+   git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
    ```
 
-8. **Publish the GitHub release with both files.** Without the `.sig`, installed
-   copies show only "What's new…" and people have to update by hand.
-   ```bash
-   gh release create vX.Y.Z Transcriberr-v$V-macOS-arm64.zip Transcriberr-v$V-macOS-arm64.zip.sig \
-       --title "vX.Y.Z: <headline>" --notes-file notes.md --latest
-   ```
-   `notes.md` has four parts. **What changed** comes from
-   `scripts/release-notes.sh` (the same lines as About). **How** describes the
-   mechanism, **Learning** what the release taught, and **Verified** the test count
-   and checks.
+10. **Publish the GitHub release with both files.** Without the `.sig`, installed
+    copies show only "What's new…" and people have to update by hand.
+    ```bash
+    gh release create vX.Y.Z build/Transcriberr-v$V-macOS-arm64.zip build/Transcriberr-v$V-macOS-arm64.zip.sig \
+        --title "vX.Y.Z: <headline>" --notes-file notes.md --latest
+    ```
+    `notes.md` has four parts. **What changed** comes from
+    `scripts/release-notes.sh` (the same lines as About). **How** describes the
+    mechanism, **Learning** what the release taught, and **Verified** the test count
+    and checks.
 
-9. **Check what the app will see.**
-   ```bash
-   curl -s -H "User-Agent: Transcriberr" \
-       https://api.github.com/repos/Ihnatov-yuri/Macos-Transcriber/releases/latest \
-       | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['tag_name'],[a['name'] for a in d['assets']])"
-   ```
-   Expect the new tag, the zip and the `.sig`.
+11. **Check what the app will see.**
+    ```bash
+    curl -s -H "User-Agent: Transcriberr" \
+        https://api.github.com/repos/Ihnatov-yuri/Macos-Transcriber/releases/latest \
+        | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['tag_name'],[a['name'] for a in d['assets']])"
+    ```
+    Expect the new tag, the zip and the `.sig`.
 
-10. **Install on this Mac** with Update in the running app, or by copying the
+12. **Install on this Mac** with Update in the running app, or by copying the
     packaged app into /Applications while Transcriberr is closed.
 
 ## How installed copies update

@@ -56,6 +56,24 @@ final class MicMuteTests: XCTestCase {
         XCTAssertEqual(recorder.micSwitch, .off)
     }
 
+    func testTheMicOptionSaysWhatEachValueDoes() {
+        XCTAssertEqual(MicSwitch.allCases.map(\.label), ["Follows mute", "Always in", "Left out"])
+        XCTAssertEqual([MicSwitch.auto.next, MicSwitch.on.next, MicSwitch.off.next], [.on, .off, .auto])
+        for choice in MicSwitch.allCases {
+            XCTAssertTrue(choice.hint.contains("transcript"), "\(choice) does not say what happens to the transcript")
+            XCTAssertEqual(choice.hint.split(separator: "\n").count, 2)
+        }
+    }
+
+    func testTheSwitchShowsBeforeAMeetingRecordsToo() {
+        // Before recording: with Meeting on. While recording: for the
+        // recorder that started, wherever the Meeting option stands now.
+        XCTAssertTrue(RecordModel.showsMicSwitch(meetingMode: true, activeMeeting: false, recording: false))
+        XCTAssertFalse(RecordModel.showsMicSwitch(meetingMode: false, activeMeeting: false, recording: false))
+        XCTAssertTrue(RecordModel.showsMicSwitch(meetingMode: false, activeMeeting: true, recording: true))
+        XCTAssertFalse(RecordModel.showsMicSwitch(meetingMode: true, activeMeeting: false, recording: true))
+    }
+
     func testAMissAlwaysLeavesALine() {
         let silent = MeetingMuteMonitor.missLine(app: "Teams", windows: 2, searched: 2, elements: 6001,
                                                  seconds: 2.04, stopped: "out of time", near: [])

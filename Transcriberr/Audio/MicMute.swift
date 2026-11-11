@@ -14,7 +14,30 @@ nonisolated enum MicSwitch: String, CaseIterable, Sendable {
         }
     }
 
-    /// The line under the switch; nil when there is nothing to say.
+    /// The "My mic" recording option: its value, and the two lines under
+    /// it that say what the value does.
+    var label: String {
+        switch self {
+        case .auto: "Follows mute"
+        case .on: "Always in"
+        case .off: "Left out"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .auto: "in the transcript, except while\nmuted in Teams, Zoom or Meet"
+        case .on: "in the transcript, even while\nmuted in the meeting app"
+        case .off: "not in the transcript ·\nthe recording still keeps it"
+        }
+    }
+
+    var next: MicSwitch {
+        let all = Self.allCases
+        return all[(all.firstIndex(of: self)! + 1) % all.count]
+    }
+
+    /// The line under the level; nil when there is nothing to say.
     func status(mutedIn app: String?) -> String? {
         switch (self, app) {
         case (.off, _): "Mic left out"

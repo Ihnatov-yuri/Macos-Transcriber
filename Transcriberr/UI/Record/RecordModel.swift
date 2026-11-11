@@ -78,7 +78,13 @@ final class RecordModel {
     }
     /// Meeting mode: capture system audio (the other participants, tapped
     /// digitally) alongside the mic. Live captions read the meeting mix.
-    var meetingMode: Bool { didSet { UserDefaults.standard.set(meetingMode, forKey: "ui.meetingMode") } }
+    var meetingMode: Bool {
+        didSet {
+            UserDefaults.standard.set(meetingMode, forKey: "ui.meetingMode")
+            // A choice made for a meeting does not wait for the next one.
+            if !meetingMode, !activeMeeting { container.meetingRecorder.setMicSwitch(.auto) }
+        }
+    }
     /// Which recorder the CURRENT session started with (the toggle may move
     /// mid-recording; stop must go to the recorder that started).
     private var activeMeeting = false
@@ -165,11 +171,18 @@ final class RecordModel {
     var elapsedMs: Int64 { activeMeeting ? container.meetingRecorder.elapsedMs : container.recorder.elapsedMs }
     var level: Float { activeMeeting ? container.meetingRecorder.level : container.recorder.level }
     var micMutedIn: String? { activeMeeting ? container.meetingRecorder.mutedIn : nil }
-    /// The mic switch exists only while a meeting records.
-    var showsMicSwitch: Bool { activeMeeting && (uiState == .recording || uiState == .paused) }
-    var micSwitch: MicSwitch { activeMeeting ? container.meetingRecorder.micSwitch : .auto }
+    /// The mic switch is there for a meeting: while one records, and
+    /// before, so that a call can start with the mic already left out.
+    var showsMicSwitch: Bool {
+        Self.showsMicSwitch(meetingMode: meetingMode, activeMeeting: activeMeeting,
+                            recording: uiState == .recording || uiState == .paused)
+    }
+    nonisolated static func showsMicSwitch(meetingMode: Bool, activeMeeting: Bool, recording: Bool) -> Bool {
+        recording ? activeMeeting : meetingMode
+    }
+    var micSwitch: MicSwitch { showsMicSwitch ? container.meetingRecorder.micSwitch : .auto }
     func setMicSwitch(_ choice: MicSwitch) {
-        guard activeMeeting else { return }
+        guard showsMicSwitch else { return }
         container.meetingRecorder.setMicSwitch(choice)
     }
 

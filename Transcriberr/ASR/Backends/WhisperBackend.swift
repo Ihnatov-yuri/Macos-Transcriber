@@ -4,14 +4,23 @@ import os
 
 /// One native Whisper call's liveness: WhisperKit reports every token it
 /// decodes, so a call that is slow can be told from one that is hung.
+///
+/// Both times are on the awake clock: seconds the Mac slept are not seconds
+/// the call ran, and must not end it or mark it stuck.
 nonisolated final class WhisperCallProgress: @unchecked Sendable {
-    private let last = OSAllocatedUnfairLock(initialState: Date())
-    let started = Date()
+    private let last: OSAllocatedUnfairLock<AwakeClock.Stopwatch>
+    private let total: AwakeClock.Stopwatch
     /// Set when the decode budget ended the call.
     let gaveUp = OSAllocatedUnfairLock(initialState: false)
-    func touch() { last.withLock { $0 = Date() } }
-    var sinceLastToken: TimeInterval { Date().timeIntervalSince(last.withLock { $0 }) }
-    var elapsed: TimeInterval { Date().timeIntervalSince(started) }
+
+    init(clock: @escaping @Sendable () -> TimeInterval = { AwakeClock.now }) {
+        total = AwakeClock.Stopwatch(clock: clock)
+        last = OSAllocatedUnfairLock(initialState: AwakeClock.Stopwatch(clock: clock))
+    }
+
+    func touch() { last.withLock { $0.restart() } }
+    var sinceLastToken: TimeInterval { last.withLock { $0.elapsed } }
+    var elapsed: TimeInterval { total.elapsed }
 }
 
 /// FIFO counting semaphore for Whisper's native calls; a waiter leaves the

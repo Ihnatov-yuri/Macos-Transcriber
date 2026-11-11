@@ -28,8 +28,18 @@ nonisolated enum AppLog {
         // The unit-test host is this same app: its fixtures and fake
         // failures belong in a log of their own, not the user's.
         let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-        return dir.appendingPathComponent(isTestHost ? "transcriberr-tests.log" : "transcriberr.log")
+        return dir.appendingPathComponent(
+            logFileName(isTestHost: isTestHost, processName: ProcessInfo.processInfo.processName))
     }()
+
+    /// transcriberr.log is what the app did for its user, and what
+    /// scripts/field-report.sh reads before a release. The command-line tool
+    /// (experiments, the replay check, the MCP server) keeps its own file:
+    /// its failures were being read as bugs met in real use.
+    static func logFileName(isTestHost: Bool, processName: String) -> String {
+        if isTestHost { return "transcriberr-tests.log" }
+        return processName == "transcriberrcli" ? "transcriberr-cli.log" : "transcriberr.log"
+    }
 
     /// One header line per app launch.
     static func bootBanner() {

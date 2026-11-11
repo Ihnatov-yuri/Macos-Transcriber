@@ -61,7 +61,7 @@ actor GenerationQueue {
         nextId += 1
         if let patience = Self.patience {
             Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(max(0, patience) * 1_000_000_000))
+                try? await AwakeClock.sleep(seconds: patience)
                 await self?.drop(id, with: Busy())
             }
         }

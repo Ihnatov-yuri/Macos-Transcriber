@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-/// Wall-clock deadline for work that may never return — native
+/// Deadline for work that may never return — native
 /// inference blocks its thread and ignores Swift cancellation. Shared by the
 /// chunk loop (`TranscriptionRunner`), post-processing (`PostProcessor`) and
 /// live captions (`LiveTranscriber`).
@@ -33,13 +33,14 @@ nonisolated enum Deadline {
         _ op: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let race = DeadlineRace<T>()
-        let nanos = nanoseconds(seconds)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
                 race.attach(cont)
                 // The deadline goes first so the work can cancel it.
                 let deadline = Task.detached(priority: priority) {
-                    try? await Task.sleep(nanoseconds: nanos)
+                    // Awake time only: a deadline that ran out while the
+                    // Mac slept would fail work that never had its seconds.
+                    try? await AwakeClock.sleep(seconds: seconds)
                     guard !Task.isCancelled else { return }
                     race.settle(.failure(timeoutError()))
                 }

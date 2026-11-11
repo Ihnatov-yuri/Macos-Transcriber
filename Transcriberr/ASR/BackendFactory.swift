@@ -254,7 +254,7 @@ nonisolated final class BackendFactory: @unchecked Sendable {
         cacheLock.withLock {
             textIdleTask?.cancel()
             textIdleTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: Self.textIdleSeconds * 1_000_000_000)
+                try? await AwakeClock.sleep(seconds: TimeInterval(Self.textIdleSeconds))
                 guard !Task.isCancelled, let self else { return }
                 await self.releaseTextIfQuiet()
             }

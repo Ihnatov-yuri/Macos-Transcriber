@@ -124,7 +124,7 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// runner cannot tell which engine hung, so it asks every engine, and
     /// the healthy ones stay as they are.
     func recoverWedge(modelPath: URL?) async throws {
-        let stuck = inFlight.filter { Date().timeIntervalSince($0.value) >= Self.stuckCallAge }
+        let stuck = inFlight.filter { $0.value.elapsed >= Self.stuckCallAge }
         guard !stuck.isEmpty else {
             try await load(modelPath: modelPath)
             return
@@ -139,13 +139,14 @@ actor ParakeetBackend: ASRBackend, DetailedTranscribing {
     /// wedge after 120 s.
     static let stuckCallAge: TimeInterval = 60
 
-    /// Native calls running now, by call id, with their start time.
-    private var inFlight: [Int: Date] = [:]
+    /// Native calls running now, by call id, with their running time (awake
+    /// seconds: a call the Mac slept through is not stuck).
+    private var inFlight: [Int: AwakeClock.Stopwatch] = [:]
     private var nextCallId = 0
 
     private func beginCall() -> Int {
         nextCallId += 1
-        inFlight[nextCallId] = Date()
+        inFlight[nextCallId] = AwakeClock.Stopwatch()
         return nextCallId
     }
 

@@ -196,7 +196,7 @@ nonisolated enum PersonBriefBuilder {
                 // no work to stop.
                 if claim.isDone { work.value?.cancel() }
                 Task.detached(priority: .utility) {
-                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    try? await AwakeClock.sleep(seconds: seconds)
                     // Claimed before the work is cancelled: the cancelled
                     // work would otherwise report a CancellationError first,
                     // and a wedged engine would pass for Stop.

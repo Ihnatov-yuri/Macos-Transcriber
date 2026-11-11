@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.7.4
+
+- A transcription that is running when the Mac goes to sleep, for example when the lid is closed, no longer loses words. Before, Super could come back with large parts of the meeting missing after the Mac woke up.
+
 ## 5.7.3
 
 - Nothing new to see. Choosing a microphone is now checked automatically against device set-ups such as USB mics, Bluetooth headsets and speakerphones, and every release is replayed against real meetings before it ships.

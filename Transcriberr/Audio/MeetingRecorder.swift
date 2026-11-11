@@ -320,6 +320,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
                 io.offIntervals.removeAll()
             }
             io.micMuted = false
+            io.micSwitch = .auto
             io.audioFile = nil
             io.converter = nil
         }
@@ -642,9 +643,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             io.muteOpenAt = nil
             io.offIntervals.removeAll(keepingCapacity: true)
             io.offOpenAt = nil
-            io.micMuted = false
+            // The switch may have been set before the recording began.
+            io.micMuted = io.micSwitch.leavesOut(appMuted: false)
             io.appMuted = false
-            io.micSwitch = .auto
             io.meOpenAt = nil
             io.micGain = 1
             io.voiceMic?.setTargetRate(nativeRate)

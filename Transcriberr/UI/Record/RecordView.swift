@@ -147,6 +147,11 @@ struct RecordView: View {
                 option("Meeting", m.meetingMode ? "On" : "Off",
                        active: m.meetingMode,
                        hint: "also record system\naudio (calls, zoom)") { m.meetingMode.toggle() }
+                if m.showsMicSwitch {
+                    option("My mic", m.micSwitch.label,
+                           active: m.micSwitch != .auto,
+                           hint: m.micSwitch.hint) { m.setMicSwitch(m.micSwitch.next) }
+                }
                 option("Mic boost", RecorderSettings.shared.micSensitivity.label,
                        active: RecorderSettings.shared.micSensitivity != .auto,
                        hint: "input volume · auto\nor fixed 2–6×") { cycleMicSensitivity() }
@@ -367,21 +372,6 @@ private struct RecordMeter: View {
                         .uiLabel(9, color: AppColor.ink2)
                     Text("16 kHz · mono")
                         .uiLabel(9, color: AppColor.ink3)
-                    if model.showsMicSwitch {
-                        Picker("Microphone", selection: Binding(
-                            get: { model.micSwitch },
-                            set: { model.setMicSwitch($0) }
-                        )) {
-                            Text("Auto").tag(MicSwitch.auto)
-                            Text("Mic on").tag(MicSwitch.on)
-                            Text("Mic off").tag(MicSwitch.off)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .fixedSize()
-                        .padding(.top, 6)
-                        .help("Auto follows mute in Teams, Zoom and Google Meet. Mic off leaves your mic out of the transcript; the recording keeps it, so it can be brought back later.")
-                    }
                     if let status = model.micSwitch.status(mutedIn: model.micMutedIn) {
                         Text(status)
                             .uiLabel(13, color: AppColor.accentOnLight)

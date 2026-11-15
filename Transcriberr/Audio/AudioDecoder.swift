@@ -318,10 +318,10 @@ nonisolated struct AudioDecoder: Sendable {
         var errorDescription: String? {
             switch self {
             case .undecodable(let f, let r, let a):
-                return "Could not decode \(f). AVAssetReader: \(r). AVAudioFile: \(a)."
-            case .noAudioTrack:               return "No audio track found in file."
-            case .readerStartFailed(let m):   return "AVAssetReader could not start: \(m)"
-            case .readerFailed(let m):        return "AVAssetReader failed: \(m)"
+                return String(localized: "Could not decode \(f). AVAssetReader: \(r). AVAudioFile: \(a).", comment: "First value is a file name, the others error details")
+            case .noAudioTrack:               return String(localized: "No audio track found in file.")
+            case .readerStartFailed(let m):   return String(localized: "AVAssetReader could not start: \(m)")
+            case .readerFailed(let m):        return String(localized: "AVAssetReader failed: \(m)")
             }
         }
     }

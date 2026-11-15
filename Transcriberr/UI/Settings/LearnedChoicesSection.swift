@@ -17,7 +17,7 @@ struct LearnedChoicesSection: View {
                     ForEach(showAll ? pairs : Array(pairs.prefix(LearnedTermsSection.folded)), id: \.self) { pair in
                         let parts = pair.split(separator: ">", maxSplits: 1).map(String.init)
                         WordChip(parts.last ?? "", struck: parts.first ?? "",
-                                 help: "Super picks “\(parts.last ?? "")” over “\(parts.first ?? "")” when the engines split this way. × forgets the choice.",
+                                 help: String(localized: "Super picks “\(parts.last ?? "")” over “\(parts.first ?? "")” when the engines split this way. × forgets the choice."),
                                  remove: {
                                      DisputeLearning.remove(pair)
                                      pairs = DisputeLearning.ordered()
@@ -26,7 +26,7 @@ struct LearnedChoicesSection: View {
                 }
                 if pairs.count > LearnedTermsSection.folded {
                     TapButton { showAll.toggle() } label: {
-                        Text(showAll ? "Show fewer" : "Show all \(pairs.count)")
+                        (showAll ? Text("Show fewer") : Text("Show all \(pairs.count)"))
                             .font(AppFont.text(12)).foregroundStyle(AppColor.accentOnLight)
                     }
                 }

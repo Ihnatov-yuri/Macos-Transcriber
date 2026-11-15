@@ -18,17 +18,17 @@ nonisolated enum MicSwitch: String, CaseIterable, Sendable {
     /// it that say what the value does.
     var label: String {
         switch self {
-        case .auto: "Follows mute"
-        case .on: "Always in"
-        case .off: "Left out"
+        case .auto: String(localized: "Follows mute", comment: "My mic option: the mic follows the meeting app mute")
+        case .on: String(localized: "Always in", comment: "My mic option: the mic is always in the transcript")
+        case .off: String(localized: "Left out", comment: "My mic option: the mic is left out of the transcript")
         }
     }
 
     var hint: String {
         switch self {
-        case .auto: "in the transcript, except while\nmuted in Teams, Zoom or Meet"
-        case .on: "in the transcript, even while\nmuted in the meeting app"
-        case .off: "not in the transcript ·\nthe recording still keeps it"
+        case .auto: String(localized: "in the transcript, except while\nmuted in Teams, Zoom or Meet")
+        case .on: String(localized: "in the transcript, even while\nmuted in the meeting app")
+        case .off: String(localized: "not in the transcript ·\nthe recording still keeps it")
         }
     }
 
@@ -40,9 +40,9 @@ nonisolated enum MicSwitch: String, CaseIterable, Sendable {
     /// The line under the level; nil when there is nothing to say.
     func status(mutedIn app: String?) -> String? {
         switch (self, app) {
-        case (.off, _): "Mic left out"
-        case (.auto, let app?): "Muted in \(app) · mic left out"
-        case (.on, let app?): "Muted in \(app) · mic kept"
+        case (.off, _): String(localized: "Mic left out")
+        case (.auto, let app?): String(localized: "Muted in \(app) · mic left out")
+        case (.on, let app?): String(localized: "Muted in \(app) · mic kept")
         default: nil
         }
     }

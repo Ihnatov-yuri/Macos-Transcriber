@@ -60,7 +60,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
             return
         }
         guard let preset = presets.preset(presetId) else {
-            setStatus(key, .failed("Unknown preset \(presetId)"))
+            setStatus(key, .failed(String(localized: "Unknown preset \(presetId)")))
             AppLog.error("postproc", "unknown preset \(presetId)")
             return
         }
@@ -68,7 +68,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
         // preset is edited (Settings → preset → History).
         presets.checkpoint(presetId, reason: .run)
         if kind == .localText, !ModelCatalog.isInstalled(ModelCatalog.selected(.general)) {
-            setStatus(key, .failed("\(ModelCatalog.selected(.general).name) is not downloaded — Settings → Models."))
+            setStatus(key, .failed(String(localized: "\(ModelCatalog.selected(.general).name) is not downloaded — Settings → Models.")))
             return
         }
         // Enqueue behind whatever is already generating and return — the
@@ -94,7 +94,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
     ) async {
         let presetId = preset.id
         guard recording.modelContext != nil else {
-            setStatus(key, .failed("Recording was deleted."))
+            setStatus(key, .failed(String(localized: "Recording was deleted.")))
             return
         }
         setStatus(key, .loading)
@@ -125,7 +125,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
         // the RAW text so a short-but-real recording isn't misreported as
         // empty just because destutter shrank it.
         guard rawTranscript.count >= 40 else {
-            setStatus(key, .failed("Transcript is empty — run transcription first."))
+            setStatus(key, .failed(String(localized: "Transcript is empty — run transcription first.")))
             AppLog.warn("postproc", "preset=\(presetId) skipped: transcript only \(transcript.count) chars")
             return
         }
@@ -204,11 +204,11 @@ nonisolated final class PostProcessor: @unchecked Sendable {
                 throw NSError(
                     domain: "PostProcessor", code: -2,
                     userInfo: [NSLocalizedDescriptionKey:
-                        "Model returned \(trimmed.count) chars — kept the previous output. Try again."]
+                        String(localized: "Model returned \(trimmed.count) characters — kept the previous output. Try again.")]
                 )
             }
             try persist(markdown: ModelText.replacingLaTeXSymbols(markdown), preset: preset, recording: recording,
-                        provenance: .init(engineLabel: kind.displayName,
+                        provenance: .init(engineLabel: kind.storedName,
                                           systemPrompt: preset.systemTemplate,
                                           userPrompt: preset.userTemplate))
             AppLog.info("postproc", "preset=\(presetId) done (\(markdown.count) chars)")
@@ -273,7 +273,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
             throw NSError(
                 domain: "PostProcessor", code: -4,
                 userInfo: [NSLocalizedDescriptionKey:
-                    "No speech content left after cleanup — nothing to rewrite."]
+                    String(localized: "No speech content left after cleanup — nothing to rewrite.")]
             )
         }
         var stitched: [String] = []
@@ -327,7 +327,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
         guard failures < windows.count else {
             throw NSError(
                 domain: "PostProcessor", code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "All \(windows.count) chunks failed — engine wedged?"]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "All \(windows.count) chunks failed — engine wedged?")]
             )
         }
         return stitched.joined(separator: "\n")
@@ -410,7 +410,7 @@ nonisolated final class PostProcessor: @unchecked Sendable {
             throw NSError(
                 domain: "PostProcessor",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Recording is no longer attached to a SwiftData context."]
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "Recording is no longer attached to a SwiftData context.")]
             )
         }
 

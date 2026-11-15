@@ -32,6 +32,10 @@ struct LitButtonChrome<Label: View>: View {
 
     var body: some View {
         label()
+            // A pill never breaks its label over two lines: Dutch and
+            // Ukrainian words run longer than the English ("Ask" → "Vraag").
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .font(AppFont.display(compact ? 13 : 15, weight: .semibold))
             .tracking(-0.1)
             .foregroundStyle(foreground)

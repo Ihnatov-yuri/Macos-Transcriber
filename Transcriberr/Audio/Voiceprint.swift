@@ -75,7 +75,8 @@ nonisolated enum VoiceprintStore {
     struct MixedReading: LocalizedError {
         let similarity: Float
         var errorDescription: String? {
-            "The reading sounded mixed (\(String(format: "%.2f", similarity)), at least 0.60 needed), as if someone else or a lot of noise was in it. Record again in a quiet room."
+            let value = String(format: "%.2f", similarity)
+            return String(localized: "The reading sounded mixed (\(value), at least 0.60 needed), as if someone else or a lot of noise was in it. Record again in a quiet room.")
         }
     }
 
@@ -106,19 +107,20 @@ nonisolated enum VoiceprintStore {
     struct NotYourVoice: LocalizedError {
         let similarity: Float
         var errorDescription: String? {
-            String(format: "This reading does not sound like your saved voice (%.2f, at least 0.50 needed). Was someone else reading? To start over, use Record again in Settings → Audio input.", similarity)
+            let value = String(format: "%.2f", similarity)
+            return String(localized: "This reading does not sound like your saved voice (\(value), at least 0.50 needed). Was someone else reading? To start over, use Record again in Settings → Audio input.")
         }
     }
 
     struct OtherModel: LocalizedError {
         var errorDescription: String? {
-            "This reading was read with another voice model than your saved voice, so it was not added; nothing was changed."
+            String(localized: "This reading was read with another voice model than your saved voice, so it was not added; nothing was changed.")
         }
     }
 
     struct UnreadablePrint: LocalizedError {
         var errorDescription: String? {
-            "Your saved voice cannot be read (damaged, or made by an older model). Record it again in Settings → Audio input; nothing was changed."
+            String(localized: "Your saved voice cannot be read (damaged, or made by an older model). Record it again in Settings → Audio input; nothing was changed.")
         }
     }
 
@@ -562,7 +564,7 @@ enum VoiceprintError: LocalizedError {
     case tooLittleSpeech
     var errorDescription: String? {
         switch self {
-        case .tooLittleSpeech: return "Not enough speech to learn your voice. Read the passage aloud for about 30 seconds."
+        case .tooLittleSpeech: return String(localized: "Not enough speech to learn your voice. Read the passage aloud for about 30 seconds.")
         }
     }
 }

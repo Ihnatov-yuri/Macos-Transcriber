@@ -14,8 +14,8 @@ enum SettingsLevel: String, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .normal: "Normal"
-        case .advanced: "Advanced"
+        case .normal: String(localized: "Normal", comment: "Settings level: shows the common settings only")
+        case .advanced: String(localized: "Advanced", comment: "Settings level: shows every setting")
         }
     }
 }
@@ -31,17 +31,17 @@ enum SettingsSection: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .audio: "Audio input"
-        case .engines: "Engines"
-        case .models: "Models"
-        case .presets: "Post-processing presets"
-        case .style: "Style & vocabulary"
-        case .snippets: "Snippets"
-        case .prompts: "Prompts"
-        case .apiKeys: "API keys"
-        case .dictation: "Dictation"
-        case .updates: "Updates"
-        case .assistants: "AI assistants"
+        case .audio: String(localized: "Audio input")
+        case .engines: String(localized: "Engines")
+        case .models: String(localized: "Models")
+        case .presets: String(localized: "Post-processing presets")
+        case .style: String(localized: "Style & vocabulary")
+        case .snippets: String(localized: "Snippets")
+        case .prompts: String(localized: "Prompts")
+        case .apiKeys: String(localized: "API keys")
+        case .dictation: String(localized: "Dictation")
+        case .updates: String(localized: "Updates")
+        case .assistants: String(localized: "AI assistants")
         }
     }
 
@@ -145,59 +145,59 @@ enum SettingID: String, CaseIterable, Sendable {
     /// What the setting is called on screen.
     var label: String {
         switch self {
-        case .microphone: "Microphone"
-        case .noiseSuppression: "Noise suppression while recording"
-        case .echoFilter: "Echo filter in meetings"
-        case .virtualMicrophone: "Transcriberr Microphone for calls"
-        case .preprocessImports: "Pre-process imported files"
-        case .voiceprint: "Your voice"
-        case .people: "People"
-        case .myName: "My name"
-        case .defaultEngine: "Default engine"
-        case .liveEngine: "Live captions engine"
-        case .liveSpeechCheck: "Keep sounds out of live captions"
-        case .followMeetingMute: "Follow mute in Teams, Zoom and Google Meet"
-        case .whisperModels: "Whisper models for English, Ukrainian and other languages"
-        case .engineLanguages: "Languages by engine"
-        case .mergeEngines: "Super merge engines A and B"
-        case .superMaxQuality: "Max quality"
-        case .meetingSuperFollowUp: "Refine meetings with Super in the background"
-        case .calendarContext: "Use the meeting's calendar invite"
-        case .recordingBrief: "Recording brief"
-        case .textModelRulings: "Text model rules on disputed chunks"
-        case .turnGranularity: "Turn granularity"
-        case .textEngine: "Text engine"
-        case .textModelPicks: "Text models for Super merge and everything else"
-        case .textModelComparison: "Text model comparison and downloads"
-        case .speechModels: "Speech-to-text models"
-        case .whisperDownloads: "Whisper model downloads"
-        case .presets: "Post-processing presets"
-        case .tone: "Tone"
-        case .fillersVerbatim: "Remove fillers, Verbatim"
-        case .vocabulary: "Vocabulary for all languages"
-        case .vocabularyByLanguage: "Vocabulary per language"
-        case .learnedTerms: "Learned from your transcripts"
-        case .learnedChoices: "Your word choices"
-        case .benchmark: "Your benchmark"
-        case .domainPacks: "Domain packs"
-        case .snippets: "Snippets"
-        case .transcribePrompt: "Transcribe prompt"
-        case .translatePrompt: "Translate prompt"
-        case .apiKeys: "API keys"
-        case .dictationHotkey: "Dictation hotkey and mode"
-        case .dictationAccessibility: "Accessibility access"
-        case .dictationRecognition: "Dictation engine and language"
-        case .dictationCleanup: "Spoken commands, fillers and vocabulary spellings"
-        case .dictationFormatting: "Apps without a rule"
-        case .dictationContext: "Text around the cursor, self-corrections and live preview"
-        case .dictationAppRules: "Per-app rules"
-        case .dictationPrompt: "Smart pass prompt"
-        case .dictationInsertion: "Spacing and clipboard"
-        case .dictationIndicators: "Status strip, menu bar and sounds"
-        case .dictationLinks: "transcriberr://dictate links"
-        case .dictationHistory: "Keep every dictation in the Library"
-        case .updates: "Check for new versions"
-        case .assistants: "Let AI assistants read my library"
+        case .microphone: String(localized: "Microphone")
+        case .noiseSuppression: String(localized: "Noise suppression while recording")
+        case .echoFilter: String(localized: "Echo filter in meetings")
+        case .virtualMicrophone: String(localized: "Transcriberr Microphone for calls")
+        case .preprocessImports: String(localized: "Pre-process imported files")
+        case .voiceprint: String(localized: "Your voice")
+        case .people: String(localized: "People")
+        case .myName: String(localized: "My name")
+        case .defaultEngine: String(localized: "Default engine")
+        case .liveEngine: String(localized: "Live captions engine")
+        case .liveSpeechCheck: String(localized: "Keep sounds out of live captions")
+        case .followMeetingMute: String(localized: "Follow mute in Teams, Zoom and Google Meet")
+        case .whisperModels: String(localized: "Whisper models for English, Ukrainian and other languages")
+        case .engineLanguages: String(localized: "Languages by engine")
+        case .mergeEngines: String(localized: "Super merge engines A and B")
+        case .superMaxQuality: String(localized: "Max quality")
+        case .meetingSuperFollowUp: String(localized: "Refine meetings with Super in the background")
+        case .calendarContext: String(localized: "Use the meeting's calendar invite")
+        case .recordingBrief: String(localized: "Recording brief")
+        case .textModelRulings: String(localized: "Text model rules on disputed chunks")
+        case .turnGranularity: String(localized: "Turn granularity")
+        case .textEngine: String(localized: "Text engine")
+        case .textModelPicks: String(localized: "Text models for Super merge and everything else")
+        case .textModelComparison: String(localized: "Text model comparison and downloads")
+        case .speechModels: String(localized: "Speech-to-text models")
+        case .whisperDownloads: String(localized: "Whisper model downloads")
+        case .presets: String(localized: "Post-processing presets")
+        case .tone: String(localized: "Tone")
+        case .fillersVerbatim: String(localized: "Remove fillers, Verbatim")
+        case .vocabulary: String(localized: "Vocabulary for all languages")
+        case .vocabularyByLanguage: String(localized: "Vocabulary per language")
+        case .learnedTerms: String(localized: "Learned from your transcripts")
+        case .learnedChoices: String(localized: "Your word choices")
+        case .benchmark: String(localized: "Your benchmark")
+        case .domainPacks: String(localized: "Domain packs")
+        case .snippets: String(localized: "Snippets")
+        case .transcribePrompt: String(localized: "Transcribe prompt")
+        case .translatePrompt: String(localized: "Translate prompt")
+        case .apiKeys: String(localized: "API keys")
+        case .dictationHotkey: String(localized: "Dictation hotkey and mode")
+        case .dictationAccessibility: String(localized: "Accessibility access")
+        case .dictationRecognition: String(localized: "Dictation engine and language")
+        case .dictationCleanup: String(localized: "Spoken commands, fillers and vocabulary spellings")
+        case .dictationFormatting: String(localized: "Apps without a rule")
+        case .dictationContext: String(localized: "Text around the cursor, self-corrections and live preview")
+        case .dictationAppRules: String(localized: "Per-app rules")
+        case .dictationPrompt: String(localized: "Smart pass prompt")
+        case .dictationInsertion: String(localized: "Spacing and clipboard")
+        case .dictationIndicators: String(localized: "Status strip, menu bar and sounds")
+        case .dictationLinks: String(localized: "transcriberr://dictate links")
+        case .dictationHistory: String(localized: "Keep every dictation in the Library")
+        case .updates: String(localized: "Check for new versions")
+        case .assistants: String(localized: "Let AI assistants read my library")
         }
     }
 
@@ -206,111 +206,111 @@ enum SettingID: String, CaseIterable, Sendable {
     var help: String {
         switch self {
         case .microphone:
-            "Used for dictation, plain recordings and the meeting recorder. System default or a chosen input device; a Bluetooth mic drops to hands-free while recording; loopback devices record system audio, not a room."
+            String(localized: "Used for dictation, plain recordings and the meeting recorder. System default or a chosen input device; a Bluetooth mic drops to hands-free while recording; loopback devices record system audio, not a room.")
         case .noiseSuppression:
-            "Recommended. Applied on the input node before each chunk is written. macOS turns other apps down slightly while it runs; they come back when the recording stops."
+            String(localized: "Recommended. Applied on the input node before each chunk is written. macOS turns other apps down slightly while it runs; they come back when the recording stops.")
         case .echoFilter:
-            "Not needed for the transcript: Transcriberr removes the echo of the call from your mic itself. Apple's filter can silence your mic in Teams, so the other people can't hear you, and it drops short pieces of the recording. Off with headphones. Other apps play about 4 dB quieter while a meeting records."
+            String(localized: "Not needed for the transcript: Transcriberr removes the echo of the call from your mic itself. Apple's filter can silence your mic in Teams, so the other people can't hear you, and it drops short pieces of the recording. Off with headphones. Other apps play about 4 dB quieter while a meeting records.")
         case .virtualMicrophone:
-            "Transcriberr runs the echo filter on your mic and passes the cleaned sound to your call through a virtual microphone. In Teams, Meet or Zoom, choose it as the microphone. Needs a small audio driver."
+            String(localized: "Transcriberr runs the echo filter on your mic and passes the cleaned sound to your call through a virtual microphone. In Teams, Meet or Zoom, choose it as the microphone. Needs a small audio driver.")
         case .preprocessImports:
-            "Runs the same cleanup over MP3 / M4A / WAV files before they are transcribed. Adds a few seconds to the decode step."
+            String(localized: "Runs the same cleanup over MP3 / M4A / WAV files before they are transcribed. Adds a few seconds to the decode step.")
         case .voiceprint:
-            "Record a short passage so meeting mode can tell your voice apart from the others. Record again or forget my voice."
+            String(localized: "Record a short passage so meeting mode can tell your voice apart from the others. Record again or forget my voice.")
         case .people:
-            "Voices saved from recordings, so later recordings name these people on their own. Add person, keep learning from meetings, voice model, rename or delete."
+            String(localized: "Voices saved from recordings, so later recordings name these people on their own. Add person, keep learning from meetings, voice model, rename or delete.")
         case .myName:
-            "Meeting mode knows which voice came from your microphone — it labels that speaker with this name automatically."
+            String(localized: "Meeting mode knows which voice came from your microphone — it labels that speaker with this name automatically.")
         case .defaultEngine:
-            "The speech-to-text engine new recordings and imports use: Parakeet, Whisper or Super, which merges two engines."
+            String(localized: "The speech-to-text engine new recordings and imports use: Parakeet, Whisper or Super, which merges two engines.")
         case .liveEngine:
-            "The engine that writes live captions while a recording runs."
+            String(localized: "The engine that writes live captions while a recording runs.")
         case .followMeetingMute:
-            "While a meeting records, your mic is left out when you are muted in Teams, Zoom or Google Meet, so people talking around you stay out of the transcript. If you talk for a couple of seconds while muted, your speech is put back from where it started. Change it for any meeting under More, Microphone."
+            String(localized: "While a meeting records, your mic is left out when you are muted in Teams, Zoom or Google Meet, so people talking around you stay out of the transcript. If you talk for a couple of seconds while muted, your speech is put back from where it started. Change it for any meeting under More, Microphone.")
         case .liveSpeechCheck:
-            "Checks that a sound is speech before the live engine reads it, so a click or a breath doesn't appear as a stray word such as \u{201C}Yeah.\u{201D} Runs on this Mac. Turn it off if live captions miss very quiet or whispered speech. Saved transcripts are not affected."
+            String(localized: "Checks that a sound is speech before the live engine reads it, so a click or a breath doesn't appear as a stray word such as \u{201C}Yeah.\u{201D} Runs on this Mac. Turn it off if live captions miss very quiet or whispered speech. Saved transcripts are not affected.")
         case .whisperModels:
-            "Whisper uses the first model when a recording's languages are English only, the second for anything else, auto-detect included. On the reference set, turbo compressed made English Super about 4x faster at the same accuracy; in Ukrainian every model but large-v3 lost 5-15 points. Speech models download automatically on first use: Parakeet v3/v2/UK (~0.6-1 GB each, Neural Engine) and the Whisper models picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models."
+            String(localized: "Whisper uses the first model when a recording's languages are English only, the second for anything else, auto-detect included. On the reference set, turbo compressed made English Super about 4x faster at the same accuracy; in Ukrainian every model but large-v3 lost 5-15 points. Speech models download automatically on first use: Parakeet v3/v2/UK (~0.6-1 GB each, Neural Engine) and the Whisper models picked here (0.5-3 GB, CoreML). Whisper models can also be downloaded ahead of time, or deleted, in Models.")
         case .engineLanguages:
-            "Recommendations: English → Parakeet v3 (or v2). Ukrainian → Ihnatov Parakeet UK. Other European languages → Parakeet v3. Arabic → Whisper. Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge."
+            String(localized: "Recommendations: English → Parakeet v3 (or v2). Ukrainian → Ihnatov Parakeet UK. Other European languages → Parakeet v3. Arabic → Whisper. Korean/Japanese/Chinese → Whisper. Unsure or mixed → Whisper or Super merge.")
         case .mergeEngines:
-            "The two engines Super runs side by side on every chunk. Picking one engine for both swaps them."
+            String(localized: "The two engines Super runs side by side on every chunk. Picking one engine for both swaps them.")
         case .superMaxQuality:
-            "Arbitrate every disputed chunk with surrounding context + vocabulary."
+            String(localized: "Arbitrate every disputed chunk with surrounding context + vocabulary.")
         case .meetingSuperFollowUp:
-            "When a meeting recording stops, the default engine writes a quick draft you can read at once; Super then runs in the background and replaces it when it finishes. The draft stays in VERSIONS."
+            String(localized: "When a meeting recording stops, the default engine writes a quick draft you can read at once; Super then runs in the background and replaces it when it finishes. The draft stays in VERSIONS.")
         case .calendarContext:
-            "Before a recording is transcribed, the invite it was made in (its title, attendees and the names in its notes) and the names that recur in your earlier meetings with the same people become vocabulary for that run. Read from the Calendar app on this Mac; nothing leaves it."
+            String(localized: "Before a recording is transcribed, the invite it was made in (its title, attendees and the names in its notes) and the names that recur in your earlier meetings with the same people become vocabulary for that run. Read from the Calendar app on this Mac; nothing leaves it.")
         case .recordingBrief:
-            "A few extra reads (about a minute per hour of recording) give the text model the topic, the people and the names as spelled in this recording. Max-quality arbitration and the Clean / Context rewrite / Translate presets all use it, and a name spelled inconsistently is unified when the correction sounds the same."
+            String(localized: "A few extra reads (about a minute per hour of recording) give the text model the topic, the people and the names as spelled in this recording. Max-quality arbitration and the Clean / Context rewrite / Translate presets all use it, and a name spelled inconsistently is unified when the correction sounds the same.")
         case .textModelRulings:
-            "Both engines transcribe every chunk in parallel; disagreements are settled word by word by recognizer confidence. With Max quality on, the whole recording is also read at once (long-form Whisper, English stretches re-read in English, echo removed by timing). The text model's rulings on disputed chunks helped in English and hurt in Ukrainian when measured against checked transcripts, so by default they run for English only."
+            String(localized: "Both engines transcribe every chunk in parallel; disagreements are settled word by word by recognizer confidence. With Max quality on, the whole recording is also read at once (long-form Whisper, English stretches re-read in English, echo removed by timing). The text model's rulings on disputed chunks helped in English and hurt in Ukrainian when measured against checked transcripts, so by default they run for English only.")
         case .turnGranularity:
-            "How aggressively adjacent same-speaker segments merge into one turn. Fine matches phone-recorder granularity; applies to the next run."
+            String(localized: "How aggressively adjacent same-speaker segments merge into one turn. Fine matches phone-recorder granularity; applies to the next run.")
         case .textEngine:
-            "The on-device model is picked under Models; cloud engines need an API key. Preset prompt templates are edited under Post-processing presets; transcription prompts under Prompts."
+            String(localized: "The on-device model is picked under Models; cloud engines need an API key. Preset prompt templates are edited under Post-processing presets; transcription prompts under Prompts.")
         case .textModelPicks:
-            "Super merge reads the whole meeting for names and topics, then rules on disputed words. Everything else covers summaries, cleanup, titles, person briefs, the speech coach and dictation polish."
+            String(localized: "Super merge reads the whole meeting for names and topics, then rules on disputed words. Everything else covers summaries, cleanup, titles, person briefs, the speech coach and dictation polish.")
         case .textModelComparison:
-            "Gemma and Qwen side by side: speed, quality and memory, measured. Download or delete each on-device model."
+            String(localized: "Gemma and Qwen side by side: speed, quality and memory, measured. Download or delete each on-device model.")
         case .speechModels:
-            "Parakeet v3/v2/UK are downloaded on first use (~0.6-1 GB each) and cached in Application Support."
+            String(localized: "Parakeet v3/v2/UK are downloaded on first use (~0.6-1 GB each) and cached in Application Support.")
         case .whisperDownloads:
-            "Download Whisper models ahead of time, or delete them to free disk space."
+            String(localized: "Download Whisper models ahead of time, or delete them to free disk space.")
         case .presets:
-            "Each preset is a tab in a recording: summary, minutes, clean, translate and your own. Add, reorder, edit the prompts, restore built-in presets, history."
+            String(localized: "Each preset is a tab in a recording: summary, minutes, clean, translate and your own. Add, reorder, edit the prompts, restore built-in presets, history.")
         case .tone:
-            "The tone of cleaned-up text."
+            String(localized: "The tone of cleaned-up text.")
         case .fillersVerbatim:
-            "Remove fillers such as um and uh, or keep the transcript verbatim."
+            String(localized: "Remove fillers such as um and uh, or keep the transcript verbatim.")
         case .vocabulary:
-            "Applied to every run. Names that work in any language (people, companies)."
+            String(localized: "Applied to every run. Names that work in any language (people, companies).")
         case .vocabularyByLanguage:
-            "Injected only when a run's LANG matches — keeps Ukrainian runs free of English terms and vice versa."
+            String(localized: "Injected only when a run's LANG matches — keeps Ukrainian runs free of English terms and vice versa.")
         case .learnedTerms:
-            "A capitalized word that recurs across recordings and never appears as an ordinary lowercase word is treated as a name. Learned names are applied to dictation (exact spelling, never fuzzy) and offered here; Add makes one permanent, × hides it for good."
+            String(localized: "A capitalized word that recurs across recordings and never appears as an ordinary lowercase word is treated as a name. Learned names are applied to dictation (exact spelling, never fuzzy) and offered here; Add makes one permanent, × hides it for good.")
         case .learnedChoices:
-            "The disputed words you settled by hand in Super transcripts. Super then picks that reading whenever the engines split the same way."
+            String(localized: "The disputed words you settled by hand in Super transcripts. Super then picks that reading whenever the engines split the same way.")
         case .benchmark:
-            "Keep corrected lines as a benchmark: a line you correct keeps a copy of its audio, so any engine can be scored on it."
+            String(localized: "Keep corrected lines as a benchmark: a line you correct keeps a copy of its audio, so any engine can be scored on it.")
         case .domainPacks:
-            "Add a ready-made list of terms for a field to your vocabulary."
+            String(localized: "Add a ready-made list of terms for a field to your vocabulary.")
         case .snippets:
-            "Reusable text blocks for prompts: write {snippet:name} inside any preset or prompt template."
+            String(localized: "Reusable text blocks for prompts: write {snippet:name} inside any preset or prompt template.")
         case .transcribePrompt:
-            "The prompt sent with audio to transcribe with a cloud engine."
+            String(localized: "The prompt sent with audio to transcribe with a cloud engine.")
         case .translatePrompt:
-            "The prompt used to translate a transcript."
+            String(localized: "The prompt used to translate a transcript.")
         case .apiKeys:
-            "Keys for cloud engines, stored in the Keychain."
+            String(localized: "Keys for cloud engines, stored in the Keychain.")
         case .dictationHotkey:
-            "A right-hand modifier is never a shortcut on its own, so it can't collide with the app you're typing in. If you pick fn / Globe, set “Press 🌐 key to” → Do Nothing in System Settings → Keyboard so macOS dictation doesn't also start. Accessibility access is what lets Transcriberr see the key in other apps and paste the result."
+            String(localized: "A right-hand modifier is never a shortcut on its own, so it can't collide with the app you're typing in. If you pick fn / Globe, set “Press 🌐 key to” → Do Nothing in System Settings → Keyboard so macOS dictation doesn't also start. Accessibility access is what lets Transcriberr see the key in other apps and paste the result.")
         case .dictationAccessibility:
-            "Lets Transcriberr see the hotkey in other apps and paste the result."
+            String(localized: "Lets Transcriberr see the hotkey in other apps and paste the result.")
         case .dictationRecognition:
-            "The engine and language dictation listens with."
+            String(localized: "The engine and language dictation listens with.")
         case .dictationCleanup:
-            "Parakeet decodes a whole passage in well under a second on the Neural Engine, punctuation and casing included. Vocabulary terms are matched exactly (case- and spacing-insensitive) and rewritten to their canonical spelling — never fuzzily."
+            String(localized: "Parakeet decodes a whole passage in well under a second on the Neural Engine, punctuation and casing included. Vocabulary terms are matched exactly (case- and spacing-insensitive) and rewritten to their canonical spelling — never fuzzily.")
         case .dictationFormatting:
-            "Verbatim inserts the recognizer's words untouched. Clean applies the deterministic passes (vocabulary, fillers, commands, self-corrections) in well under a second. Smart additionally runs the text model with the target app, its register, and the text before the cursor — chat stays short and casual, mail gets full sentences, an enumeration becomes a list. Smart uses the text engine chosen under Post-processing; if that is a cloud engine, the dictated passage is sent to it, but the window title and the text around your cursor never leave this Mac. Password fields are always verbatim and never read."
+            String(localized: "Verbatim inserts the recognizer's words untouched. Clean applies the deterministic passes (vocabulary, fillers, commands, self-corrections) in well under a second. Smart additionally runs the text model with the target app, its register, and the text before the cursor — chat stays short and casual, mail gets full sentences, an enumeration becomes a list. Smart uses the text engine chosen under Post-processing; if that is a cloud engine, the dictated passage is sent to it, but the window title and the text around your cursor never leave this Mac. Password fields are always verbatim and never read.")
         case .dictationContext:
-            "Read the text around the cursor, apply spoken self-corrections, follow the language of the field, live preview while speaking, use names learned from my transcripts."
+            String(localized: "Read the text around the cursor, apply spoken self-corrections, follow the language of the field, live preview while speaking, use names learned from my transcripts.")
         case .dictationAppRules:
-            "Rules match the app's bundle identifier; an identifier ending in “.” matches a family (com.jetbrains.). Terminals and code editors default to verbatim, chat apps to smart & casual, mail to smart & formal."
+            String(localized: "Rules match the app's bundle identifier; an identifier ending in “.” matches a family (com.jetbrains.). Terminals and code editors default to verbatim, chat apps to smart & casual, mail to smart & formal.")
         case .dictationPrompt:
-            "Appended to the built-in context prompt when you change it. Uses the post-processing text engine (Settings → Engines); a second or two per passage on the on-device model. A result that isn't clearly the same passage (wrong length, answers the text, echoes the prompt) is discarded in favour of the deterministic output."
+            String(localized: "Appended to the built-in context prompt when you change it. Uses the post-processing text engine (Settings → Engines); a second or two per passage on the on-device model. A result that isn't clearly the same passage (wrong length, answers the text, echoes the prompt) is discarded in favour of the deterministic output.")
         case .dictationInsertion:
-            "Text is inserted with ⌘V into whatever has keyboard focus; the previous clipboard contents come back 0.8 s later. Automatic spacing reads the characters before the cursor through Accessibility (a space only after a word, a capital only at a sentence start) and falls back to a trailing space where an app hides its text. Say “scratch that” to take the last passage back. When Transcriberr itself is in front with the Dictate screen open, text goes to its scratch pad instead."
+            String(localized: "Text is inserted with ⌘V into whatever has keyboard focus; the previous clipboard contents come back 0.8 s later. Automatic spacing reads the characters before the cursor through Accessibility (a space only after a word, a capital only at a sentence start) and falls back to a trailing space where an app hides its text. Say “scratch that” to take the last passage back. When Transcriberr itself is in front with the Dictate screen open, text goes to its scratch pad instead.")
         case .dictationIndicators:
-            "Show the floating status strip, show in the menu bar, start / stop sounds."
+            String(localized: "Show the floating status strip, show in the menu bar, start / stop sounds.")
         case .dictationLinks:
-            "Allow transcriberr://dictate links (text goes to the Dictate screen)."
+            String(localized: "Allow transcriberr://dictate links (text goes to the Dictate screen).")
         case .dictationHistory:
-            "Each passage is saved with its audio as a normal recording: playable, re-transcribable with another engine, searchable through the knowledge-base CLI and MCP server."
+            String(localized: "Each passage is saved with its audio as a normal recording: playable, re-transcribable with another engine, searchable through the knowledge-base CLI and MCP server.")
         case .updates:
-            "Check for new versions once a day, check now and update. The check reads the public latest-release record on GitHub and sends nothing about this Mac."
+            String(localized: "Check for new versions once a day, check now and update. The check reads the public latest-release record on GitHub and sends nothing about this Mac.")
         case .assistants:
-            "Claude and other assistants connected to Transcriberr through the MCP server can list, search and read your transcripts, outputs, folders and tags. They can never change or delete anything."
+            String(localized: "Claude and other assistants connected to Transcriberr through the MCP server can list, search and read your transcripts, outputs, folders and tags. They can never change or delete anything.")
         }
     }
 

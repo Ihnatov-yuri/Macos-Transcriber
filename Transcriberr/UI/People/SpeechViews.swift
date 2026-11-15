@@ -71,7 +71,7 @@ struct MetricTile: View {
                 Sparkline(values: series).frame(height: 26)
             } else {
                 // One point is not a line: say so instead of drawing a dot.
-                Text(series.isEmpty ? "Not measured yet" : "One meeting so far")
+                (series.isEmpty ? Text("Not measured yet") : Text("One meeting so far"))
                     .font(AppFont.text(11)).foregroundStyle(AppColor.ink4)
                     .frame(height: 26, alignment: .leading)
             }
@@ -94,15 +94,24 @@ struct MetricTile: View {
         .litGlass()
         .help(metric.explanation)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(metric.title): \(avg.map(metric.format) ?? "not measured") \(metric.unit). \(trend ?? "")")
+        .accessibilityLabel(Text(spokenSummary(avg)))
+    }
+
+    /// What VoiceOver reads for the tile.
+    private func spokenSummary(_ avg: Double?) -> String {
+        let title = metric.title, unit = metric.unit
+        guard let avg else { return String(localized: "\(title): not measured.") }
+        let value = metric.format(avg)
+        guard let trend else { return String(localized: "\(title): \(value) \(unit).") }
+        return String(localized: "\(title): \(value) \(unit). \(trend)")
     }
 
     /// Why a tile has no number, in plain words.
     private var emptyReason: String {
         switch metric {
-        case .pace: return "Needs more short, well-timed lines than these meetings have."
-        case .fillers, .hedges: return "Counted in English and Ukrainian only, from 150 words up."
-        default: return "Not enough speech in these meetings to measure."
+        case .pace: return String(localized: "Needs more short, well-timed lines than these meetings have.")
+        case .fillers, .hedges: return String(localized: "Counted in English and Ukrainian only, from 150 words up.")
+        default: return String(localized: "Not enough speech in these meetings to measure.")
         }
     }
 
@@ -110,11 +119,14 @@ struct MetricTile: View {
     /// each half has three.
     private var trend: String? {
         let s = series
-        guard s.count >= 6 else { return s.isEmpty ? nil : "From the last \(s.count == 1 ? "meeting" : "\(s.count) meetings")." }
+        guard s.count >= 6 else { return s.isEmpty ? nil : String(localized: "From the last \(s.count) meetings.") }
         let old = s.prefix(s.count / 2), new = s.suffix(s.count / 2)
         let a = old.reduce(0, +) / Double(old.count), b = new.reduce(0, +) / Double(new.count)
-        guard abs(b - a) >= max(0.05 * abs(a), 0.05) else { return "Steady over the last \(s.count) meetings." }
-        return "\(metric.format(b)) lately, \(b < a ? "down" : "up") from \(metric.format(a)) before (last \(s.count) meetings)."
+        guard abs(b - a) >= max(0.05 * abs(a), 0.05) else { return String(localized: "Steady over the last \(s.count) meetings.") }
+        let lately = metric.format(b), before = metric.format(a), n = s.count
+        return b < a
+            ? String(localized: "\(lately) lately, down from \(before) before (last \(n) meetings).")
+            : String(localized: "\(lately) lately, up from \(before) before (last \(n) meetings).")
     }
 }
 
@@ -161,9 +173,9 @@ extension SpeechMetric {
     /// "English" / "Ukrainian" for a language code.
     static func languageName(_ code: String?) -> String {
         switch code {
-        case "en": return "English"
-        case "uk": return "Ukrainian"
-        case nil: return "All languages"
+        case "en": return String(localized: "English")
+        case "uk": return String(localized: "Ukrainian")
+        case nil: return String(localized: "All languages")
         default: return code ?? ""
         }
     }

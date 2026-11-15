@@ -23,14 +23,34 @@ nonisolated final class BackendFactory: @unchecked Sendable {
         case anthropic  = "anthropic"
         case gemini     = "gemini"
 
+        /// The name pickers and the interface show, in the interface language.
         var displayName: String {
+            switch self {
+            case .parakeet:   return String(localized: "\(Self.parakeetV3Name) (local, ANE)", comment: "Engine name; ANE is the Apple Neural Engine")
+            case .parakeetV2: return String(localized: "Parakeet v2 (English, ANE)", comment: "Engine name; ANE is the Apple Neural Engine")
+            case .parakeetUK: return String(localized: "\(ParakeetUKModel.displayName) (Ukrainian, ANE)", comment: "Engine name; ANE is the Apple Neural Engine")
+            case .whisper:
+                // A run pins its model by language; outside one there are two.
+                return WhisperModel.inUse.map { Self.whisperLabel(WhisperModel.model($0), english: false) }
+                    ?? String(localized: "Whisper (local, CoreML)", comment: "Engine name")
+            case .localText:
+                let model = ModelCatalog.chosen(.general).name
+                return String(localized: "On-device model (\(model))", comment: "Engine name: the on-device text model, then its name")
+            case .ensemble:   return String(localized: "Super · dual-engine merge (local)", comment: "Engine name: Super merges two speech engines")
+            case .openAI, .anthropic, .gemini: return storedName
+            }
+        }
+
+        /// The same name in English: saved with a run's version (Detail →
+        /// VERSIONS, exported files) and quoted in Super's arbiter prompt, so
+        /// it does not change with the interface language.
+        var storedName: String {
             switch self {
             case .parakeet:   return "\(Self.parakeetV3Name) (local, ANE)"
             case .parakeetV2: return "Parakeet v2 (English, ANE)"
             case .parakeetUK: return "\(ParakeetUKModel.displayName) (Ukrainian, ANE)"
             case .whisper:
-                // A run pins its model by language; outside one there are two.
-                return WhisperModel.inUse.map { Self.whisperLabel(WhisperModel.model($0)) }
+                return WhisperModel.inUse.map { Self.whisperLabel(WhisperModel.model($0), english: true) }
                     ?? "Whisper (local, CoreML)"
             case .localText:  return "On-device model (\(ModelCatalog.chosen(.general).name))"
             case .ensemble:   return "Super · dual-engine merge (local)"
@@ -44,16 +64,19 @@ nonisolated final class BackendFactory: @unchecked Sendable {
         /// VERSIONS). Taken when the job starts: the run's Whisper pin is
         /// released before the job stores its version.
         func runLabel(languages: Set<String>) -> String {
-            self == .whisper ? Self.whisperLabel(WhisperModel.forRun(languages)) : displayName
+            self == .whisper ? Self.whisperLabel(WhisperModel.forRun(languages), english: true) : storedName
         }
 
         /// The label once the run is over, from the model it actually used (still pinned while the job saves its result, else the last run's).
         func finishedRunLabel(_ started: String) -> String {
             guard self == .whisper, let id = WhisperModel.inUse ?? WhisperModel.lastRunID else { return started }
-            return Self.whisperLabel(WhisperModel.model(id))
+            return Self.whisperLabel(WhisperModel.model(id), english: true)
         }
 
-        private static func whisperLabel(_ m: WhisperModel) -> String { "Whisper \(m.name) (local, CoreML)" }
+        private static func whisperLabel(_ m: WhisperModel, english: Bool) -> String {
+            english ? "Whisper \(m.name) (local, CoreML)"
+                : String(localized: "Whisper \(m.name) (local, CoreML)", comment: "Engine name with the Whisper model's size")
+        }
 
         /// Name of the Parakeet v3 weights in FluidAudio's model folder. A fine-tune installed in place of the
         /// stock files (the folder name is fixed by FluidAudio) names itself with `display_name` in the

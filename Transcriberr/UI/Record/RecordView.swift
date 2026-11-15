@@ -58,7 +58,7 @@ struct RecordView: View {
                     InkRule()
                     Spacer().frame(height: AppMetric.l)
 
-                    SectionIndex(2, "Capture",
+                    SectionIndex(2, String(localized: "Capture", comment: "Record screen section: capturing audio"),
                                  summary: liveSummary(model))
                         .padding(.horizontal, AppMetric.sheetPadding)
 
@@ -127,8 +127,12 @@ struct RecordView: View {
 
     private func liveSummary(_ m: RecordModel) -> String {
         let engine = m.liveEngine.displayName
-        let langs = m.liveLanguages.isEmpty ? "auto-detect" : m.liveLanguages.sorted().joined(separator: ", ")
-        return m.liveEnabled ? "Live engine: \(engine). Language: \(langs)." : "Language: \(langs)."
+        let langs = m.liveLanguages.isEmpty
+            ? String(localized: "auto-detect", comment: "Record screen summary: spoken language not set")
+            : m.liveLanguages.sorted().map(SettingsLanguageNames.name).joined(separator: ", ")
+        return m.liveEnabled
+            ? String(localized: "Live engine: \(engine). Language: \(langs).")
+            : String(localized: "Language: \(langs).")
     }
 
     // MARK: - Options row
@@ -141,35 +145,47 @@ struct RecordView: View {
             // Wraps: the row needs ~1000 pt, the pane has ~740 at the
             // minimum window.
             FlowLayout(spacing: AppMetric.l) {
-                option("Auto-run", m.autoTranscribe ? "On" : "Off",
+                option(String(localized: "Auto-run", comment: "Record option: transcribe when the recording stops"),
+                       onOff(m.autoTranscribe),
                        active: m.autoTranscribe,
-                       hint: "transcribe as soon\nas you press stop") { m.autoTranscribe.toggle() }
-                option("Live", m.liveEnabled ? "On" : "Off",
+                       hint: String(localized: "transcribe as soon\nas you press stop")) { m.autoTranscribe.toggle() }
+                option(String(localized: "Live", comment: "Record option: live captions while recording"),
+                       onOff(m.liveEnabled),
                        active: m.liveEnabled,
-                       hint: "rough live text\nwhile you record") { m.liveEnabled.toggle() }
-                option("Meeting", m.meetingMode ? "On" : "Off",
+                       hint: String(localized: "rough live text\nwhile you record")) { m.liveEnabled.toggle() }
+                option(String(localized: "Meeting", comment: "Record option: also record system audio"),
+                       onOff(m.meetingMode),
                        active: m.meetingMode,
-                       hint: "also record system\naudio (calls, zoom)") { m.meetingMode.toggle() }
+                       hint: String(localized: "also record system\naudio (calls, zoom)")) { m.meetingMode.toggle() }
                 if m.showsMicSwitch {
-                    option("My mic", m.micSwitch.label,
+                    option(String(localized: "My mic", comment: "Record option: how your own microphone is kept in a meeting"),
+                           m.micSwitch.label,
                            active: m.micSwitch != .auto,
                            hint: m.micSwitch.hint) { m.setMicSwitch(m.micSwitch.next) }
                 }
-                option("Mic boost", RecorderSettings.shared.micSensitivity.label,
+                option(String(localized: "Mic boost", comment: "Record option: microphone input gain"),
+                       RecorderSettings.shared.micSensitivity.label,
                        active: RecorderSettings.shared.micSensitivity != .auto,
-                       hint: "input volume · auto\nor fixed 2–6×") { cycleMicSensitivity() }
+                       hint: String(localized: "input volume · auto\nor fixed 2–6×")) { cycleMicSensitivity() }
                 if m.liveEnabled {
-                    option("Engine", m.liveEngine.displayName,
+                    option(String(localized: "Engine", comment: "Record option: speech engine for live captions"),
+                           m.liveEngine.displayName,
                            active: false,
-                           hint: "engine for the\nlive preview") { cycleEngine(m) }
-                    option("Lang", m.liveLanguages.isEmpty
-                               ? "Auto"
-                               : m.liveLanguages.sorted().joined(separator: ", "),
+                           hint: String(localized: "engine for the\nlive preview")) { cycleEngine(m) }
+                    option(String(localized: "Lang", comment: "Record option, short for spoken language"),
+                           m.liveLanguages.isEmpty
+                               ? String(localized: "Auto", comment: "Record option value: language detected automatically")
+                               : m.liveLanguages.sorted().map(SettingsLanguageNames.name).joined(separator: ", "),
                            active: !m.liveLanguages.isEmpty,
-                           hint: "spoken language\nfor live preview") { cycleLanguage(m) }
+                           hint: String(localized: "spoken language\nfor live preview")) { cycleLanguage(m) }
                 }
             }
         }
+    }
+
+    private func onOff(_ on: Bool) -> String {
+        on ? String(localized: "On", comment: "Record option value: switched on")
+           : String(localized: "Off", comment: "Record option value: switched off")
     }
 
     /// One option pill + a permanent two-line explanation underneath: without
@@ -242,8 +258,10 @@ struct RecordView: View {
         switch m.uiState {
         case .idle, .finished:
             InverseFooter(
-                starting ? "Starting…" : "Record",
-                subtitle: starting ? "Getting the microphone ready" : m.autoTranscribe ? "Auto-transcribe on stop" : "Manual run",
+                starting ? String(localized: "Starting…") : String(localized: "Record", comment: "Record screen footer: start recording"),
+                subtitle: starting ? String(localized: "Getting the microphone ready")
+                    : m.autoTranscribe ? String(localized: "Auto-transcribe on stop")
+                    : String(localized: "Manual run", comment: "Record footer: transcription is started by hand after stop"),
                 action: starting ? nil : { triggerToggleRecord(m) }
             ) {
                 PulseDot(animated: starting)
@@ -260,7 +278,7 @@ struct RecordView: View {
 
         case .recording, .paused:
             HStack(spacing: 0) {
-                Text(m.uiState == .recording ? "Pause" : "Resume")
+                (m.uiState == .recording ? Text("Pause") : Text("Resume"))
                     .uiLabel(11)
                     .padding(.horizontal, AppMetric.l)
                     .frame(maxHeight: .infinity)
@@ -276,11 +294,11 @@ struct RecordView: View {
                     .accessibilityAction { triggerPauseToggle(m) }
 
                 VStack(spacing: 2) {
-                    Text(m.autoTranscribe ? "Stop & transcribe" : "Stop & save")
+                    (m.autoTranscribe ? Text("Stop & transcribe") : Text("Stop & save"))
                         .font(AppFont.display(17, weight: .semibold))
                         .tracking(0.1)
                         .foregroundStyle(AppColor.onNight)
-                    Text(m.autoTranscribe ? "Auto-run after stop" : "Open detail to run")
+                    (m.autoTranscribe ? Text("Auto-run after stop") : Text("Open detail to run"))
                         .uiLabel(9, color: AppColor.onNight2)
                 }
                 .frame(maxWidth: .infinity)
@@ -371,7 +389,9 @@ private struct RecordMeter: View {
                         .font(AppFont.display(17, weight: .semibold))
                         .tracking(0.2)
                         .foregroundStyle(AppColor.ink)
-                    Text("Level · \(model.level > 0.6 ? "hot" : "clean")")
+                    (model.level > 0.6
+                        ? Text("Level · hot", comment: "Record meter: input level too high")
+                        : Text("Level · clean", comment: "Record meter: input level fine"))
                         .uiLabel(9, color: AppColor.ink2)
                     Text("16 kHz · mono")
                         .uiLabel(9, color: AppColor.ink3)
@@ -479,13 +499,13 @@ struct LivePanel: View {
         let tail = partialJoins ? paragraphs.popLast() : nil
 
         return VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text("Live\(statusSuffix(worker.status, heardAudio: worker.heardAudio))")
+            Text(statusLine(worker.status, heardAudio: worker.heardAudio))
                 .uiLabel(10, color: AppColor.ink2)
 
             if paragraphs.isEmpty && tail == nil && partial == nil {
-                Text(model.liveEnabled
-                     ? "Live captions will appear here while recording."
-                     : "Live is off. Turn it on above to read along while you record.")
+                (model.liveEnabled
+                     ? Text("Live captions will appear here while recording.")
+                     : Text("Live is off. Turn it on above to read along while you record."))
                     .font(AppFont.text(17))
                     .foregroundStyle(AppColor.ink3)
                     .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
@@ -525,13 +545,18 @@ struct LivePanel: View {
         }
     }
 
-    private func statusSuffix(_ s: LiveTranscriber.Status, heardAudio: Bool) -> String {
+    private func statusLine(_ s: LiveTranscriber.Status, heardAudio: Bool) -> String {
         switch s {
-        case .idle:                return ""
-        case .loading:             return " · loading model"
-        case .running:             return heardAudio ? " · listening" : " · waiting for audio"
-        case .modelMissing(let b): return " · model missing (\(b))"
-        case .failed(let r):       return " · failed \(r)"
+        case .idle:
+            return String(localized: "Live", comment: "Live captions panel heading")
+        case .loading:
+            return String(localized: "Live · loading model")
+        case .running:
+            return heardAudio ? String(localized: "Live · listening") : String(localized: "Live · waiting for audio")
+        case .modelMissing(let b):
+            return String(localized: "Live · model missing (\(b))")
+        case .failed(let r):
+            return String(localized: "Live · failed \(r)")
         }
     }
 }

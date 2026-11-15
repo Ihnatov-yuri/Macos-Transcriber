@@ -203,14 +203,19 @@ struct DictationHUDView: View {
     private var statusLabel: String {
         switch controller.phase {
         case .listening:
-            guard controller.micOpen else { return "Opening mic" }
+            guard controller.micOpen else { return String(localized: "Opening mic", comment: "Dictation HUD status") }
             let t = Int(controller.capture.elapsedSeconds)
-            let pending = controller.pendingPasses > 0 ? " · writing…" : ""
-            return String(format: "Listening · %d:%02d%@", t / 60, t % 60, pending)
-        case .transcribing: return controller.activeMode == .smart ? "Recognizing · formatting" : "Recognizing"
-        case .inserting:    return "Inserting"
-        case .message:      return "Dictation"
-        case .idle:         return "Inserted"
+            let time = String(format: "%d:%02d", t / 60, t % 60)
+            return controller.pendingPasses > 0
+                ? String(localized: "Listening · \(time) · writing…", comment: "Dictation HUD status; the value is the elapsed time, e.g. 0:12")
+                : String(localized: "Listening · \(time)", comment: "Dictation HUD status; the value is the elapsed time, e.g. 0:12")
+        case .transcribing:
+            return controller.activeMode == .smart
+                ? String(localized: "Recognizing · formatting", comment: "Dictation HUD status")
+                : String(localized: "Recognizing", comment: "Dictation HUD status")
+        case .inserting:    return String(localized: "Inserting", comment: "Dictation HUD status: the text is being typed into the app")
+        case .message:      return String(localized: "Dictation", comment: "Dictation HUD status while it shows a notice")
+        case .idle:         return String(localized: "Inserted", comment: "Dictation HUD status: the text was typed into the app")
         }
     }
 
@@ -244,8 +249,8 @@ struct DictationHUDView: View {
             if !controller.previewText.isEmpty { return controller.previewText + " …" }
             if !controller.lastText.isEmpty { return controller.lastText }
             return controller.settings.mode == .hold
-                ? "Speak, then release \(controller.settings.hotkey.glyph)."
-                : "Speak. Tap \(controller.settings.hotkey.glyph) again to stop."
+                ? String(localized: "Speak, then release \(controller.settings.hotkey.glyph).", comment: "Dictation HUD; the value is a key symbol")
+                : String(localized: "Speak. Tap \(controller.settings.hotkey.glyph) again to stop.", comment: "Dictation HUD; the value is a key symbol")
         case .transcribing, .inserting:
             return controller.lastText.isEmpty ? "…" : controller.lastText
         case .idle:

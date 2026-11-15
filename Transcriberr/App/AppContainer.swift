@@ -426,18 +426,18 @@ nonisolated final class AppContainer: @unchecked Sendable {
     @MainActor
     func updateBlocker() -> String? {
         switch recorder.state {
-        case .recording, .paused: return "A recording is in progress. Stop it, then update."
+        case .recording, .paused: return String(localized: "A recording is in progress. Stop it, then update.")
         default: break
         }
-        if meetingRecorder.isRunning { return "A meeting is being recorded. Stop it, then update." }
+        if meetingRecorder.isRunning { return String(localized: "A meeting is being recorded. Stop it, then update.") }
         switch dictation.phase {
-        case .listening, .transcribing, .inserting: return "Dictation is running. Let it finish, then update."
+        case .listening, .transcribing, .inserting: return String(localized: "Dictation is running. Let it finish, then update.")
         default: break
         }
         // Quitting would ask about the call, and a cancelled quit would leave
         // the update stuck at "relaunching" for the rest of the session.
         if VirtualMicrophone.shared.isInUseByCall {
-            return "A call is using the Transcriberr Microphone. End the call, then update."
+            return String(localized: "A call is using the Transcriberr Microphone. End the call, then update.")
         }
         return nil
     }
@@ -449,17 +449,17 @@ nonisolated final class AppContainer: @unchecked Sendable {
     func installUpdate(_ release: UpdateChecker.Release) {
         if let why = updateBlocker() {
             let alert = NSAlert()
-            alert.messageText = "Not now"
+            alert.messageText = String(localized: "Not now", comment: "Alert title: the update cannot start right now")
             alert.informativeText = why
             alert.runModal()
             return
         }
         if jobManager.statuses.values.contains(where: { !$0.failed }) {
             let alert = NSAlert()
-            alert.messageText = "A transcription is running"
-            alert.informativeText = "Transcriberr quits to update, and the transcription starts again after it reopens."
-            alert.addButton(withTitle: "Update Now")
-            alert.addButton(withTitle: "Cancel")
+            alert.messageText = String(localized: "A transcription is running")
+            alert.informativeText = String(localized: "Transcriberr quits to update, and the transcription starts again after it reopens.")
+            alert.addButton(withTitle: String(localized: "Update Now"))
+            alert.addButton(withTitle: String(localized: "Cancel"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         let updates = self.updates

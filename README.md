@@ -134,6 +134,8 @@ Everything above runs locally: recording, the speech engines, diarization, voice
 
 Settings hold the global defaults: the default and live-caption engines, which Whisper model to use for English, for Ukrainian and for other languages, the two engines Super merges, whether meetings are refined with Super in the background, the text models (one for Super, one for everything else), the calendar invite, your name for the microphone track, the Transcriberr Microphone, the dictation rules per app, the presets and the vocabulary. Each recording can override the engine, languages, diarization, expected speakers and translation in its own Run sheet.
 
+The app's own screens are in English, Ukrainian or Dutch, picked at the top of Settings (System follows macOS); transcripts and summaries follow the speech and the presets, whatever the interface language. How the translations are kept up to date: **[docs/localization.md](docs/localization.md)**.
+
 The Normal view shows what most people change and Advanced shows everything. The search field narrows the screen to the matching settings, always looking through all of them. You can also ask for a change in your own words, such as "turn off the echo filter": the text model proposes the changes, nothing changes until you press Apply, and Undo is offered afterwards. API keys, cloud engines and AI-assistant access can only be changed by hand.
 
 ## Install

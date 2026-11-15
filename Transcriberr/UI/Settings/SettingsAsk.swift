@@ -56,10 +56,10 @@ enum SettingKind: Equatable {
     /// The value as the person reads it: "On", an option's name, "1.5 s".
     func displayName(_ value: String) -> String {
         switch self {
-        case .toggle: return value == "on" ? "On" : "Off"
+        case .toggle: return value == "on" ? String(localized: "On", comment: "A setting's value: switched on") : String(localized: "Off", comment: "A setting's value: switched off")
         case .choice(let options): return options.first { $0.value == value }?.name ?? value
         case .number(_, _, let unit): return unit.isEmpty ? value : "\(value) \(unit)"
-        case .text: return value.isEmpty ? "(empty)" : "\u{201C}\(value)\u{201D}"
+        case .text: return value.isEmpty ? String(localized: "(empty)", comment: "A text setting with nothing in it") : "\u{201C}\(value)\u{201D}"
         }
     }
 
@@ -72,6 +72,25 @@ enum SettingKind: Equatable {
         case .number(let range, let step, let unit):
             return "number \(SettingKind.format(range.lowerBound, step: step))–\(SettingKind.format(range.upperBound, step: step))\(unit.isEmpty ? "" : " \(unit)"), step \(SettingKind.format(step, step: step))"
         case .text(let max): return "text, up to \(max) characters"
+        }
+    }
+
+    /// What the person is told the setting takes, in their language; the
+    /// model gets `allowedSummary`.
+    var allowedForPeople: String {
+        switch self {
+        case .toggle:
+            return String(localized: "\(displayName("on")) or \(displayName("off"))", comment: "The values a switch takes: On or Off")
+        case .choice(let options):
+            return options.map(\.name).formatted(.list(type: .or))
+        case .number(let range, let step, let unit):
+            let low = SettingKind.format(range.lowerBound, step: step)
+            let high = SettingKind.format(range.upperBound, step: step)
+            return unit.isEmpty
+                ? String(localized: "a number from \(low) to \(high)")
+                : String(localized: "a number from \(low) to \(high) \(unit)")
+        case .text(let max):
+            return String(localized: "text of up to \(max) characters")
         }
     }
 
@@ -134,6 +153,19 @@ enum SettingKind: Equatable {
     }
 }
 
+/// The tone's name on screen. The raw value is what is stored.
+extension PromptStore.Tone {
+    var settingsTitle: String {
+        switch self {
+        case .neutral: String(localized: "Neutral", comment: "Tone of cleaned-up text")
+        case .formal: String(localized: "Formal", comment: "Tone of cleaned-up text")
+        case .casual: String(localized: "Casual", comment: "Tone of cleaned-up text")
+        case .enthusiastic: String(localized: "Enthusiastic", comment: "Tone of cleaned-up text")
+        case .technical: String(localized: "Technical", comment: "Tone of cleaned-up text")
+        }
+    }
+}
+
 // MARK: - Accessors
 
 /// One value a request may change. `key` is what the model answers with:
@@ -156,24 +188,24 @@ enum SettingAccessors {
     /// Settings a request never changes, with the reason the person is told.
     static func exclusion(_ id: SettingID) -> String? {
         switch id {
-        case .apiKeys: "API keys are only typed by hand."
-        case .virtualMicrophone: "the Transcriberr Microphone needs its audio driver installed by hand."
-        case .voiceprint: "your voice is a recording, not a value."
-        case .people: "people and their voices are recordings, not values."
-        case .presets: "presets are edited by hand."
-        case .snippets: "snippets are edited by hand."
-        case .transcribePrompt, .translatePrompt, .dictationPrompt: "prompts are edited by hand."
-        case .vocabulary, .vocabularyByLanguage: "vocabulary is edited by hand, so nothing in it is lost."
-        case .learnedTerms, .learnedChoices: "learned terms and choices are kept or hidden one by one."
-        case .domainPacks: "a domain pack is added by hand."
-        case .dictationAppRules: "per-app rules are edited by hand."
-        case .dictationAccessibility: "Accessibility access is granted in System Settings."
-        case .textModelComparison, .speechModels, .whisperDownloads: "models are downloaded or deleted by hand."
-        case .engineLanguages: "it is a table of which engine knows which language."
+        case .apiKeys: String(localized: "API keys are only typed by hand.")
+        case .virtualMicrophone: String(localized: "the Transcriberr Microphone needs its audio driver installed by hand.")
+        case .voiceprint: String(localized: "your voice is a recording, not a value.")
+        case .people: String(localized: "people and their voices are recordings, not values.")
+        case .presets: String(localized: "presets are edited by hand.")
+        case .snippets: String(localized: "snippets are edited by hand.")
+        case .transcribePrompt, .translatePrompt, .dictationPrompt: String(localized: "prompts are edited by hand.")
+        case .vocabulary, .vocabularyByLanguage: String(localized: "vocabulary is edited by hand, so nothing in it is lost.")
+        case .learnedTerms, .learnedChoices: String(localized: "learned terms and choices are kept or hidden one by one.")
+        case .domainPacks: String(localized: "a domain pack is added by hand.")
+        case .dictationAppRules: String(localized: "per-app rules are edited by hand.")
+        case .dictationAccessibility: String(localized: "Accessibility access is granted in System Settings.")
+        case .textModelComparison, .speechModels, .whisperDownloads: String(localized: "models are downloaded or deleted by hand.")
+        case .engineLanguages: String(localized: "it is a table of which engine knows which language.")
         // Privacy switches: what leaves this Mac and who may read the
         // library change only by the person's own hand, like API keys.
-        case .textEngine: "choosing a cloud engine sends transcripts off this Mac, so it is picked by hand."
-        case .assistants: "access to your library is granted by hand."
+        case .textEngine: String(localized: "choosing a cloud engine sends transcripts off this Mac, so it is picked by hand.")
+        case .assistants: String(localized: "access to your library is granted by hand.")
         case .dictationLinks, .dictationHistory, .dictationIndicators, .dictationInsertion,
              .microphone, .noiseSuppression, .echoFilter, .preprocessImports, .myName, .defaultEngine,
              .liveEngine, .liveSpeechCheck, .followMeetingMute, .whisperModels, .mergeEngines, .superMaxQuality, .meetingSuperFollowUp,
@@ -264,11 +296,11 @@ enum SettingAccessors {
         SettingAccessor(
             key: SettingID.microphone.rawValue, setting: .microphone, label: SettingID.microphone.label,
             kind: { s in
-                let system = SettingOption(value: "system", name: "System default")
+                let system = SettingOption(value: "system", name: String(localized: "System default"))
                 var options = [system] + AudioInputDevices.microphones().map { SettingOption(value: $0.uid, name: $0.name) }
                 // A chosen mic that is unplugged stays a value it holds.
                 if let uid = s.recorder.inputDeviceUID, !options.contains(where: { $0.value == uid }) {
-                    options.append(SettingOption(value: uid, name: "\(uid) (not connected)"))
+                    options.append(SettingOption(value: uid, name: String(localized: "\(uid) (not connected)", comment: "A chosen microphone that is unplugged; the value is its device id")))
                 }
                 return .choice(options)
             },
@@ -291,23 +323,23 @@ enum SettingAccessors {
                get: { $0.ui.defaultBackend }, set: { $0.ui.defaultBackend = $1 }),
         engine(SettingID.liveEngine.rawValue, .liveEngine, SettingID.liveEngine.label, options: liveEngines,
                get: { $0.ui.liveEngine }, set: { $0.ui.liveEngine = $1 }),
-        whisper("whisperModels.english", "Whisper for English",
+        whisper("whisperModels.english", String(localized: "Whisper for English"),
                 defaultsKey: WhisperModel.englishSettingsKey, defaultID: WhisperModel.englishDefaultID,
                 offers: { !$0.ukrainianOnly }),
-        whisper("whisperModels.ukrainian", "Whisper for Ukrainian",
+        whisper("whisperModels.ukrainian", String(localized: "Whisper for Ukrainian"),
                 defaultsKey: WhisperModel.ukrainianSettingsKey, defaultID: WhisperModel.ukrainianDefaultID,
                 offers: { !$0.englishOnly }),
-        whisper("whisperModels.other", "Whisper for other languages",
+        whisper("whisperModels.other", String(localized: "Whisper for other languages"),
                 defaultsKey: WhisperModel.settingsKey, defaultID: WhisperModel.defaultID,
                 offers: { !$0.englishOnly && !$0.ukrainianOnly }),
         // Picking the other engine's choice swaps them, as on screen.
-        engine("mergeEngines.a", .mergeEngines, "Super merge engine A", options: mergeEngines,
+        engine("mergeEngines.a", .mergeEngines, String(localized: "Super merge engine A"), options: mergeEngines,
                get: { $0.ui.ensembleEngineA },
                set: { s, k in
                    if k == s.ui.ensembleEngineB { s.ui.ensembleEngineB = s.ui.ensembleEngineA }
                    s.ui.ensembleEngineA = k
                }, coupled: ["mergeEngines.b"]),
-        engine("mergeEngines.b", .mergeEngines, "Super merge engine B", options: mergeEngines,
+        engine("mergeEngines.b", .mergeEngines, String(localized: "Super merge engine B"), options: mergeEngines,
                get: { $0.ui.ensembleEngineB },
                set: { s, k in
                    if k == s.ui.ensembleEngineA { s.ui.ensembleEngineA = s.ui.ensembleEngineB }
@@ -317,7 +349,7 @@ enum SettingAccessors {
                get: { $0.ui.liveSpeechCheck }, set: { $0.ui.liveSpeechCheck = $1 }),
         toggle(SettingID.followMeetingMute.rawValue, .followMeetingMute, SettingID.followMeetingMute.label,
                get: { $0.ui.followMeetingMute }, set: { $0.ui.followMeetingMute = $1 }),
-        toggle(SettingID.superMaxQuality.rawValue, .superMaxQuality, "Super max quality",
+        toggle(SettingID.superMaxQuality.rawValue, .superMaxQuality, String(localized: "Super max quality"),
                get: { $0.ui.superMaxQuality }, set: { $0.ui.superMaxQuality = $1 }),
         toggle(SettingID.meetingSuperFollowUp.rawValue, .meetingSuperFollowUp, SettingID.meetingSuperFollowUp.label,
                get: { $0.ui.meetingSuperFollowUp }, set: { $0.ui.meetingSuperFollowUp = $1 }),
@@ -327,92 +359,92 @@ enum SettingAccessors {
                        defaultsKey: "ui.meetingBrief", default: true),
         SettingAccessor(
             key: SettingID.textModelRulings.rawValue, setting: .textModelRulings, label: SettingID.textModelRulings.label,
-            kind: { _ in .choice([SettingOption(value: "english", name: "English runs"),
-                                  SettingOption(value: "all", name: "All languages"),
-                                  SettingOption(value: "off", name: "Never")]) },
+            kind: { _ in .choice([SettingOption(value: "english", name: String(localized: "English runs")),
+                                  SettingOption(value: "all", name: String(localized: "All languages")),
+                                  SettingOption(value: "off", name: String(localized: "Never"))]) },
             get: { $0.defaults.string(forKey: "ui.superGemmaRulings") ?? "english" },
             set: { s, v in if ["english", "all", "off"].contains(v) { s.defaults.set(v, forKey: "ui.superGemmaRulings") } }),
         SettingAccessor(
             key: SettingID.turnGranularity.rawValue, setting: .turnGranularity, label: SettingID.turnGranularity.label,
-            kind: { _ in .choice([SettingOption(value: "30", name: "Smooth"),
-                                  SettingOption(value: "10", name: "Balanced"),
-                                  SettingOption(value: "2", name: "Fine")]) },
+            kind: { _ in .choice([SettingOption(value: "30", name: String(localized: "Smooth")),
+                                  SettingOption(value: "10", name: String(localized: "Balanced")),
+                                  SettingOption(value: "2", name: String(localized: "Fine"))]) },
             get: { String(Int($0.ui.turnCoalesceGapSeconds.rounded())) },
             set: { s, v in if let x = Double(v), [30.0, 10, 2].contains(x) { s.ui.turnCoalesceGapSeconds = x } }),
 
         // C · Models
-        textModel("textModelPicks.super", "Text model for Super merge",
+        textModel("textModelPicks.super", String(localized: "Text model for Super merge"),
                   get: { $0.ui.superTextModelID }, set: { $0.ui.superTextModelID = $1 }),
-        textModel("textModelPicks.general", "Text model for everything else",
+        textModel("textModelPicks.general", String(localized: "Text model for everything else"),
                   get: { $0.ui.textModelID }, set: { $0.ui.textModelID = $1 }),
 
         // E · Style
-        choice(SettingID.tone.rawValue, .tone, SettingID.tone.label, PromptStore.Tone.self, name: { $0.rawValue.capitalized },
+        choice(SettingID.tone.rawValue, .tone, SettingID.tone.label, PromptStore.Tone.self, name: \.settingsTitle,
                get: { $0.prompts.tone }, set: { $0.prompts.tone = $1 }),
-        toggle("fillersVerbatim.removeFillers", .fillersVerbatim, "Remove fillers",
+        toggle("fillersVerbatim.removeFillers", .fillersVerbatim, String(localized: "Remove fillers"),
                get: { $0.prompts.removeFillers }, set: { $0.prompts.removeFillers = $1 }),
-        toggle("fillersVerbatim.verbatim", .fillersVerbatim, "Verbatim",
+        toggle("fillersVerbatim.verbatim", .fillersVerbatim, String(localized: "Verbatim"),
                get: { $0.prompts.verbatim }, set: { $0.prompts.verbatim = $1 }),
-        defaultsToggle(SettingID.benchmark.rawValue, .benchmark, "Keep corrected lines as a benchmark",
+        defaultsToggle(SettingID.benchmark.rawValue, .benchmark, String(localized: "Keep corrected lines as a benchmark"),
                        defaultsKey: Benchmark.enabledKey, default: true),
 
         // I · Dictation
-        choice("dictationHotkey.hotkey", .dictationHotkey, "Dictation hotkey", DictationSettings.Hotkey.self, name: \.label,
+        choice("dictationHotkey.hotkey", .dictationHotkey, String(localized: "Dictation hotkey"), DictationSettings.Hotkey.self, name: \.label,
                get: { $0.dictation.hotkey }, set: { $0.dictation.hotkey = $1 }),
-        choice("dictationHotkey.mode", .dictationHotkey, "Dictation mode", DictationSettings.Mode.self, name: \.label,
+        choice("dictationHotkey.mode", .dictationHotkey, String(localized: "Dictation mode"), DictationSettings.Mode.self, name: \.label,
                get: { $0.dictation.mode }, set: { $0.dictation.mode = $1 }),
         SettingAccessor(
-            key: "dictationHotkey.pauseFlush", setting: .dictationHotkey, label: "Dictation flush after a pause",
+            key: "dictationHotkey.pauseFlush", setting: .dictationHotkey, label: String(localized: "Dictation flush after a pause"),
             kind: { _ in .number(0.8 ... 4.0, step: 0.1, unit: "s") },
             get: { SettingKind.format($0.dictation.pauseFlushSeconds, step: 0.1) },
             set: { s, v in if let x = Double(v), (0.8 ... 4.0).contains(x) { s.dictation.pauseFlushSeconds = x } }),
-        engine("dictationRecognition.engine", .dictationRecognition, "Dictation engine", options: liveEngines,
+        engine("dictationRecognition.engine", .dictationRecognition, String(localized: "Dictation engine"), options: liveEngines,
                get: { $0.dictation.engine }, set: { $0.dictation.engine = $1 }),
         SettingAccessor(
-            key: "dictationRecognition.language", setting: .dictationRecognition, label: "Dictation language",
-            kind: { _ in .choice([SettingOption(value: "auto", name: "Auto-detect")]
-                                 + DictationSettings.languageOptions.map { SettingOption(value: $0, name: $0) }) },
+            key: "dictationRecognition.language", setting: .dictationRecognition, label: String(localized: "Dictation language"),
+            kind: { _ in .choice([SettingOption(value: "auto", name: String(localized: "Auto-detect"))]
+                                 + DictationSettings.languageOptions.map { SettingOption(value: $0, name: SettingsLanguageNames.name($0)) }) },
             get: { $0.dictation.languages.sorted().first ?? "auto" },
             set: { s, v in
                 if v == "auto" { s.dictation.languages = [] }
                 else if DictationSettings.languageOptions.contains(v) { s.dictation.languages = [v] }
             }),
-        toggle("dictationCleanup.spokenCommands", .dictationCleanup, "Dictation spoken commands",
+        toggle("dictationCleanup.spokenCommands", .dictationCleanup, String(localized: "Dictation spoken commands"),
                get: { $0.dictation.spokenCommands }, set: { $0.dictation.spokenCommands = $1 }),
-        toggle("dictationCleanup.destutter", .dictationCleanup, "Dictation collapses fillers and stutters",
+        toggle("dictationCleanup.destutter", .dictationCleanup, String(localized: "Dictation collapses fillers and stutters"),
                get: { $0.dictation.destutter }, set: { $0.dictation.destutter = $1 }),
-        toggle("dictationCleanup.applyVocabulary", .dictationCleanup, "Dictation applies vocabulary spellings",
+        toggle("dictationCleanup.applyVocabulary", .dictationCleanup, String(localized: "Dictation applies vocabulary spellings"),
                get: { $0.dictation.applyVocabulary }, set: { $0.dictation.applyVocabulary = $1 }),
-        choice("dictationFormatting.defaultMode", .dictationFormatting, "Dictation in apps without a rule",
+        choice("dictationFormatting.defaultMode", .dictationFormatting, String(localized: "Dictation in apps without a rule"),
                DictationSettings.FormatMode.self, name: \.label,
                get: { $0.dictation.defaultMode }, set: { $0.dictation.defaultMode = $1 }),
-        toggle("dictationContext.readContext", .dictationContext, "Dictation reads the text around the cursor",
+        toggle("dictationContext.readContext", .dictationContext, String(localized: "Dictation reads the text around the cursor"),
                get: { $0.dictation.readContext }, set: { $0.dictation.readContext = $1 }),
-        toggle("dictationContext.selfCorrections", .dictationContext, "Dictation applies spoken self-corrections",
+        toggle("dictationContext.selfCorrections", .dictationContext, String(localized: "Dictation applies spoken self-corrections"),
                get: { $0.dictation.selfCorrections }, set: { $0.dictation.selfCorrections = $1 }),
-        toggle("dictationContext.languageFromContext", .dictationContext, "Dictation follows the field's language",
+        toggle("dictationContext.languageFromContext", .dictationContext, String(localized: "Dictation follows the field's language"),
                get: { $0.dictation.languageFromContext }, set: { $0.dictation.languageFromContext = $1 }),
-        toggle("dictationContext.livePreview", .dictationContext, "Dictation live preview",
+        toggle("dictationContext.livePreview", .dictationContext, String(localized: "Dictation live preview"),
                get: { $0.dictation.livePreview }, set: { $0.dictation.livePreview = $1 }),
-        toggle("dictationContext.useLearnedTerms", .dictationContext, "Dictation uses names learned from transcripts",
+        toggle("dictationContext.useLearnedTerms", .dictationContext, String(localized: "Dictation uses names learned from transcripts"),
                get: { $0.dictation.useLearnedTerms }, set: { $0.dictation.useLearnedTerms = $1 }),
-        choice("dictationInsertion.spacing", .dictationInsertion, "Dictation spacing", DictationSettings.Spacing.self, name: \.label,
+        choice("dictationInsertion.spacing", .dictationInsertion, String(localized: "Dictation spacing"), DictationSettings.Spacing.self, name: \.label,
                get: { $0.dictation.spacing }, set: { $0.dictation.spacing = $1 }),
-        toggle("dictationInsertion.restoreClipboard", .dictationInsertion, "Dictation restores the clipboard",
+        toggle("dictationInsertion.restoreClipboard", .dictationInsertion, String(localized: "Dictation restores the clipboard"),
                get: { $0.dictation.restoreClipboard }, set: { $0.dictation.restoreClipboard = $1 }),
-        toggle("dictationIndicators.showHUD", .dictationIndicators, "Dictation status strip",
+        toggle("dictationIndicators.showHUD", .dictationIndicators, String(localized: "Dictation status strip"),
                get: { $0.dictation.showHUD }, set: { $0.dictation.showHUD = $1 }),
-        toggle("dictationIndicators.showMenuBar", .dictationIndicators, "Dictation in the menu bar",
+        toggle("dictationIndicators.showMenuBar", .dictationIndicators, String(localized: "Dictation in the menu bar"),
                get: { $0.dictation.showMenuBar }, set: { $0.dictation.showMenuBar = $1 }),
-        toggle("dictationIndicators.playSounds", .dictationIndicators, "Dictation start / stop sounds",
+        toggle("dictationIndicators.playSounds", .dictationIndicators, String(localized: "Dictation start / stop sounds"),
                get: { $0.dictation.playSounds }, set: { $0.dictation.playSounds = $1 }),
-        toggle(SettingID.dictationLinks.rawValue, .dictationLinks, "Allow transcriberr://dictate links",
+        toggle(SettingID.dictationLinks.rawValue, .dictationLinks, String(localized: "Allow transcriberr://dictate links"),
                get: { $0.dictation.urlActions }, set: { $0.dictation.urlActions = $1 }),
         toggle(SettingID.dictationHistory.rawValue, .dictationHistory, SettingID.dictationHistory.label,
                get: { $0.dictation.keepHistory }, set: { $0.dictation.keepHistory = $1 }),
 
         // J · Updates, K · AI assistants
-        toggle(SettingID.updates.rawValue, .updates, "Check for new versions once a day",
+        toggle(SettingID.updates.rawValue, .updates, String(localized: "Check for new versions once a day"),
                get: { $0.updates.autoCheck }, set: { $0.updates.autoCheck = $1 }),
     ]
 }
@@ -449,8 +481,8 @@ enum SettingsAskError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .notJSON: "The text model's answer wasn't a list of settings, so nothing was changed. Try naming the setting, such as \u{201C}turn off the echo filter\u{201D}."
-        case .model(let why): "The on-device text model couldn't answer: \(why)"
+        case .notJSON: String(localized: "The text model's answer wasn't a list of settings, so nothing was changed. Try naming the setting, such as \u{201C}turn off the echo filter\u{201D}.")
+        case .model(let why): String(localized: "The on-device text model couldn't answer: \(why)")
         }
     }
 }
@@ -472,6 +504,13 @@ enum SettingsAsk {
 
     /// One line per accessor: id, label, current value, allowed values and
     /// the first sentence of the help, cut short.
+    ///
+    /// Labels, option names and help are in the interface language on
+    /// purpose (5.8.0): the request is typed in that language, and the model
+    /// matches "вимкни фільтр луни" to a Ukrainian label more surely than to
+    /// an English one. The system prompt stays English, and the ids and
+    /// values the model answers with are English in every language, so the
+    /// parsing does not change.
     static func catalog(_ stores: SettingsStores, accessors: [SettingAccessor] = SettingAccessors.all) -> String {
         accessors.map { a in
             let kind = a.kind(stores)
@@ -545,26 +584,31 @@ enum SettingsAsk {
             guard let a = SettingAccessors.accessor(id) else {
                 let base = SettingID(rawValue: String(id.split(separator: ".").first ?? ""))
                 if let base, let why = SettingAccessors.exclusion(base) {
-                    result.dropped.append("\(base.label) can't be changed by a request: \(why)")
+                    result.dropped.append(String(localized: "\(base.label) can't be changed by a request: \(why)"))
                 } else {
-                    result.dropped.append("There is no setting called \u{201C}\(id)\u{201D}, so that part was dropped.")
+                    result.dropped.append(String(localized: "There is no setting called \u{201C}\(id)\u{201D}, so that part was dropped."))
                 }
                 continue
             }
             let kind = a.kind(stores)
             guard let v = kind.normalize(value) else {
                 if let raw = value as? String, isCloudEngine(raw) {
-                    result.dropped.append("\(a.label) can't be switched to a cloud engine by a request: it sends recordings off this Mac, so it is picked by hand.")
+                    result.dropped.append(String(localized: "\(a.label) can't be switched to a cloud engine by a request: it sends recordings off this Mac, so it is picked by hand."))
                     continue
                 }
-                result.dropped.append("\(a.label) can't be set to \(describe(value)). It takes \(kind.allowedSummary.replacingOccurrences(of: " | ", with: ", ")).")
+                let allowed = kind.allowedForPeople
+                if let shown = describe(value) {
+                    result.dropped.append(String(localized: "\(a.label) can't be set to \(shown). It takes \(allowed)."))
+                } else {
+                    result.dropped.append(String(localized: "\(a.label) can't be set to that. It takes \(allowed)."))
+                }
                 continue
             }
             let current = a.get(stores)
             if !order.contains(a.key) { order.append(a.key) }
             if v == current {
                 proposed[a.key] = nil
-                same[a.key] = "\(a.label) is already \(kind.displayName(v))."
+                same[a.key] = String(localized: "\(a.label) is already \(kind.displayName(v)).")
             } else {
                 same[a.key] = nil
                 proposed[a.key] = SettingChange(key: a.key, label: a.label, from: current, to: v,
@@ -576,10 +620,10 @@ enum SettingsAsk {
         return result
     }
 
-    private static func describe(_ value: Any) -> String {
+    private static func describe(_ value: Any) -> String? {
         if let s = value as? String { return "\u{201C}\(s)\u{201D}" }
         if let n = value as? NSNumber { return SettingKind.isBool(value) ? (n.boolValue ? "true" : "false") : n.stringValue }
-        return "that"
+        return nil
     }
 
     // MARK: Apply and undo
@@ -661,7 +705,7 @@ struct OnDeviceSettingsAskModel: SettingsAskModel {
     static let deadline: TimeInterval = 60
 
     struct TookTooLong: LocalizedError {
-        var errorDescription: String? { "it took longer than a minute, so nothing was changed. Try again, or change the setting by hand." }
+        var errorDescription: String? { String(localized: "it took longer than a minute, so nothing was changed. Try again, or change the setting by hand.", comment: "Ends the sentence: The on-device text model couldn't answer: …") }
     }
 
     func answer(system: String, user: String, maxTokens: Int) async throws -> String {
@@ -686,11 +730,11 @@ extension SettingsAsk {
         let text = SettingsFilter.fold(request)
         func has(_ words: String...) -> Bool { words.contains { text.contains($0) } }
         if has("openai", "chatgpt", "gpt", "anthropic", "claude", "gemini", "cloud") {
-            return has("api key", "key") ? "API keys are only typed by hand, in Settings under API keys."
-                : "Cloud engines send your recordings or transcripts off this Mac, so they are picked by hand in Settings under Engines."
+            return has("api key", "key") ? String(localized: "API keys are only typed by hand, in Settings under API keys.")
+                : String(localized: "Cloud engines send your recordings or transcripts off this Mac, so they are picked by hand in Settings under Engines.")
         }
-        if has("api key") { return "API keys are only typed by hand, in Settings under API keys." }
-        if has("assistant", "mcp") { return "Access to your library is granted by hand, in Settings under AI assistants." }
+        if has("api key") { return String(localized: "API keys are only typed by hand, in Settings under API keys.") }
+        if has("assistant", "mcp") { return String(localized: "Access to your library is granted by hand, in Settings under AI assistants.") }
         return nil
     }
 

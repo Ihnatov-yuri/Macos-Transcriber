@@ -58,9 +58,9 @@ struct DetailView: View {
         }
         var label: String {
             switch self {
-            case .transcript: return "Transcript"
+            case .transcript: return String(localized: "Transcript")
             case .output(_, let label): return label
-            case .versions: return "Versions"
+            case .versions: return String(localized: "Versions")
             }
         }
     }
@@ -75,7 +75,7 @@ struct DetailView: View {
             orphans.append(.output(presetId: doc.presetId, label: doc.title))
         }
         return [.transcript]
-            + presets.map { .output(presetId: $0.id, label: $0.name.isEmpty ? "Untitled" : $0.name) }
+            + presets.map { .output(presetId: $0.id, label: $0.shownName) }
             + orphans
             + [.versions]
     }
@@ -237,8 +237,7 @@ struct DetailView: View {
                 if !unnamed.isEmpty, !(model?.isRunning ?? false) {
                     HStack(spacing: AppMetric.s) {
                         Rectangle().fill(AppColor.accent).frame(width: 3, height: 14)
-                        Text(unnamed.count == 1 ? "1 person in this meeting isn't named yet"
-                             : "\(unnamed.count) people in this meeting aren't named yet")
+                        Text("\(unnamed.count) people in this meeting aren't named yet")
                             .uiLabel(10)
                         Spacer()
                         TapButton {
@@ -246,7 +245,7 @@ struct DetailView: View {
                             renamingSpeaker = unnamed.first?.key
                         } label: {
                             LitButtonChrome(.secondary, compact: true) {
-                                Text(unnamed.count == 1 ? "Name them" : "Name all \(unnamed.count), one by one")
+                                Text(unnamed.count == 1 ? String(localized: "Name them") : String(localized: "Name all \(unnamed.count), one by one"))
                             }
                         }
                         .help("Opens Who is this? for each unnamed speaker in turn: listen, pick a name (people on the invite come first) or type one, or skip.")
@@ -266,7 +265,7 @@ struct DetailView: View {
                                 Rectangle()
                                     .fill(speakerColor(for: entry.key))
                                     .frame(width: 7, height: 7)
-                                Text(named ? entry.display : "\(SpeakerLabel.display(nil, key: entry.key)) · who?")
+                                Text(named ? entry.display : String(localized: "\(SpeakerLabel.display(nil, key: entry.key)) · who?"))
                                     .uiLabel(10, color: named ? AppColor.ink : AppColor.accentOnLight)
                                 if recognised {
                                     Text("✓").uiLabel(9, color: AppColor.statusSuccess)
@@ -278,9 +277,9 @@ struct DetailView: View {
                             .padding(.vertical, 4)
                             .background(Capsule().fill(Color.white.opacity(0.6)))
                         }
-                        .help(recognised ? "\(entry.display): voice saved. Click to rename, listen, or open their page."
-                              : named ? "\(entry.display): named, voice not saved yet. Click to save it."
-                              : "Who is this? Click to listen and name them.")
+                        .help(recognised ? String(localized: "\(entry.display): voice saved. Click to rename, listen, or open their page.")
+                              : named ? String(localized: "\(entry.display): named, voice not saved yet. Click to save it.")
+                              : String(localized: "Who is this? Click to listen and name them."))
                         .contextMenu {
                             if let person = savedPerson(named: entry.display) {
                                 Button("Open \(person.name)'s page") {
@@ -288,7 +287,7 @@ struct DetailView: View {
                                 }
                                 Divider()
                             }
-                            Button(named ? "Rename\u{2026}" : "Name them\u{2026}") {
+                            Button(named ? String(localized: "Rename\u{2026}") : String(localized: "Name them\u{2026}")) {
                                 namingQueue = []
                                 renamingSpeaker = entry.key
                             }
@@ -316,7 +315,7 @@ struct DetailView: View {
                     }
                     if hasPeople {
                         TapButton { findPeople() } label: {
-                            Text(findingPeople ? "Finding people…" : (peopleNote ?? "Find saved people ↗"))
+                            Text(findingPeople ? String(localized: "Finding people…") : (peopleNote ?? String(localized: "Find saved people ↗")))
                                 .uiLabel(9, color: findingPeople ? AppColor.ink3 : AppColor.accentOnLight)
                         }
                         // Not mid-run: the speakers it would name are about
@@ -339,8 +338,8 @@ struct DetailView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "Export Here"
-        panel.message = "Choose where to put the folder for \u{201C}\(recording.title)\u{201D}."
+        panel.prompt = String(localized: "Export Here")
+        panel.message = String(localized: "Choose where to put the folder for \u{201C}\(recording.title)\u{201D}.")
         guard panel.runModal() == .OK, let parent = panel.url else { return }
         do {
             let folder = try RecordingFolderExporter.export(
@@ -349,7 +348,7 @@ struct DetailView: View {
         } catch {
             AppLog.error("detail", "folder export failed: \(error.localizedDescription)")
             let alert = NSAlert()
-            alert.messageText = "Could not export the recording"
+            alert.messageText = String(localized: "Could not export the recording")
             alert.informativeText = error.localizedDescription
             alert.runModal()
         }
@@ -372,14 +371,14 @@ struct DetailView: View {
             case .clear: try repo.untagSegment(seg, in: recording)
             case .someoneElse:
                 let alert = NSAlert()
-                alert.messageText = "Who said this?"
-                alert.informativeText = "This line goes to a speaker of that name, or a new one."
+                alert.messageText = String(localized: "Who said this?")
+                alert.informativeText = String(localized: "This line goes to a speaker of that name, or a new one.")
                 let field = NSTextField(string: "")
-                field.placeholderString = "Name"
+                field.placeholderString = String(localized: "Name", comment: "Placeholder: a speaker's name")
                 field.frame = NSRect(x: 0, y: 0, width: 280, height: 22)
                 alert.accessoryView = field
-                alert.addButton(withTitle: "Tag")
-                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: String(localized: "Tag", comment: "Button: assign the line to this speaker"))
+                alert.addButton(withTitle: String(localized: "Cancel"))
                 alert.window.initialFirstResponder = field
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
                 let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -405,8 +404,8 @@ struct DetailView: View {
             // The user may have moved to another recording meanwhile: the
             // live model, not this view's captured `recording`, says which.
             guard model?.recording.id == id else { return }
-            peopleNote = named == 0 ? "No saved person found ↗"
-                : named == 1 ? "1 speaker named ↗" : "\(named) speakers named ↗"
+            peopleNote = named == 0 ? String(localized: "No saved person found ↗")
+                : String(localized: "\(named) speakers named ↗")
             findingPeople = false
         }
     }
@@ -621,7 +620,7 @@ struct DetailView: View {
             .fixedSize()
 
             Menu {
-                Button(fullscreen ? "Exit fullscreen" : "Fullscreen") { fullscreen.toggle() }
+                Button(fullscreen ? String(localized: "Exit fullscreen") : String(localized: "Fullscreen")) { fullscreen.toggle() }
                 Divider()
                 Button("Reveal in Finder") {
                     let url = URL(fileURLWithPath: recording.audioPath)
@@ -729,10 +728,10 @@ struct DetailView: View {
     /// recorded and each choice is a new run.
     private func microphoneMenu(_ m: DetailModel) -> some View {
         Menu("Microphone") {
-            micChoice(m, .everything, "Everything from my mic")
-            if m.hasMuteLog { micChoice(m, .follow, "Leave out when I was muted") }
-            micChoice(m, .myVoice, "Only my voice").disabled(!m.hasVoicePrint)
-            micChoice(m, .nothing, "Nothing from my mic")
+            micChoice(m, .everything, String(localized: "Everything from my mic"))
+            if m.hasMuteLog { micChoice(m, .follow, String(localized: "Leave out when I was muted")) }
+            micChoice(m, .myVoice, String(localized: "Only my voice")).disabled(!m.hasVoicePrint)
+            micChoice(m, .nothing, String(localized: "Nothing from my mic"))
         }
         .disabled(m.isRunning || m.isApplyingMic || isMerging)
     }
@@ -751,7 +750,7 @@ struct DetailView: View {
         // keeping up to date for the rest of the screen.
         Menu {
             ForEach(allFolders.filter { $0.id != recording.folder?.id && !$0.isDictation }, id: \.id) { folder in
-                Button(folder.name) {
+                Button(folder.shownName) {
                     try? container.repository.move(recording, to: folder)
                 }
             }
@@ -762,7 +761,7 @@ struct DetailView: View {
                 }
             }
         } label: {
-            Text("Folder: \(recording.folder?.name ?? "—") ▾")
+            Text("Folder: \(recording.folder?.shownName ?? "—") ▾")
                 .uiLabel(9, color: recording.folder == nil ? AppColor.ink2 : AppColor.accentOnLight)
         }
         .menuStyle(.borderlessButton)
@@ -778,19 +777,19 @@ struct DetailView: View {
                 ? String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
                 : String(format: "%d:%02d", total / 60, total % 60))
             if let b = recording.transcribedWithBackend, !b.isEmpty {
-                out.append(b)
+                out.append(BackendFactory.Kind(rawValue: b)?.displayName ?? b)
             }
             if let lang = recording.sourceLanguage, !lang.isEmpty {
-                out.append(lang)
+                out.append(SettingsLanguageNames.name(lang))
             }
             let speakers = Set(recording.segments.compactMap { $0.speaker }).count
-            if speakers > 0 { out.append(speakers == 1 ? "1 speaker" : "\(speakers) speakers") }
+            if speakers > 0 { out.append(String(localized: "\(speakers) speakers")) }
             let turns = recording.segments.count
-            out.append(turns == 1 ? "1 turn" : "\(turns) turns")
+            out.append(String(localized: "\(turns) turns"))
             if let mc = MeetingContext.decode(recording.meetingContextJSON) {
-                var s = "Invite: \(mc.title)"
-                if !mc.attendees.isEmpty { s += " · \(mc.attendees.count) people" }
-                if mc.pastMeetings > 0 { s += " · \(mc.pastMeetings) earlier meetings" }
+                var s = String(localized: "Invite: \(mc.title)")
+                if !mc.attendees.isEmpty { s += " · " + String(localized: "\(mc.attendees.count) people") }
+                if mc.pastMeetings > 0 { s += " · " + String(localized: "\(mc.pastMeetings) earlier meetings") }
                 out.append(s)
             }
             return out
@@ -815,7 +814,7 @@ struct DetailView: View {
                 runExpanded.toggle()
             } label: {
                 HStack(spacing: AppMetric.s) {
-                    Text(runExpanded ? "Run ▾" : "Run ▸").uiLabel(11)
+                    Text(runExpanded ? String(localized: "Run ▾", comment: "Detail: collapse the transcription run options") : String(localized: "Run ▸", comment: "Detail: expand the transcription run options")).uiLabel(11)
                     Text(runSummary(m)).uiLabel(10, color: AppColor.ink2)
                         .lineLimit(1)
                     Spacer()
@@ -848,9 +847,9 @@ struct DetailView: View {
 
     private func runSummary(_ m: DetailModel) -> String {
         var parts: [String] = [m.backend.displayName]
-        parts.append(m.languages.isEmpty ? "auto lang" : m.languages.sorted().joined(separator: ", "))
-        if m.translateToEnglish { parts.append("→ english") }
-        if m.diarize { parts.append(m.hybridDiarize ? "hybrid diar" : "diar") }
+        parts.append(m.languages.isEmpty ? String(localized: "auto lang", comment: "Run summary: language detected automatically") : m.languages.sorted().map(SettingsLanguageNames.name).joined(separator: ", "))
+        if m.translateToEnglish { parts.append(String(localized: "→ english", comment: "Run summary: translated to English")) }
+        if m.diarize { parts.append(m.hybridDiarize ? String(localized: "hybrid diar", comment: "Run summary: hybrid speaker diarization, abbreviated") : String(localized: "diar", comment: "Run summary: speaker diarization, abbreviated")) }
         return parts.joined(separator: " · ")
     }
 
@@ -858,7 +857,7 @@ struct DetailView: View {
     private func runOptionsBlock(_ m: DetailModel) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HairlineSoft()
-            LedgerRow("Engine") {
+            LedgerRow(String(localized: "Engine")) {
                 EnginePicker(title: "", kinds: BackendFactory.Kind.allCases.filter(\.supportsAudio), selection: Binding(
                     get: { m.backend }, set: { m.backend = $0 }
                 ))
@@ -872,7 +871,7 @@ struct DetailView: View {
                 let mergeOptions = BackendFactory.Kind.allCases.filter {
                     $0.isLocal && $0.supportsAudio && $0 != .ensemble
                 }
-                LedgerRow("Merge A") {
+                LedgerRow(String(localized: "Merge A")) {
                     EnginePicker(title: "", kinds: mergeOptions, selection: Binding(
                         get: { m.container.uiPrefs.ensembleEngineA },
                         set: { newValue in
@@ -887,7 +886,7 @@ struct DetailView: View {
                     .frame(maxWidth: 260)
                 }
                 HairlineSoft()
-                LedgerRow("Merge B") {
+                LedgerRow(String(localized: "Merge B")) {
                     EnginePicker(title: "", kinds: mergeOptions, selection: Binding(
                         get: { m.container.uiPrefs.ensembleEngineB },
                         set: { newValue in
@@ -907,13 +906,13 @@ struct DetailView: View {
                     .padding(.vertical, 6)
                 HairlineSoft()
             }
-            LedgerRow("Lang") {
+            LedgerRow(String(localized: "Lang", comment: "Run option: language, abbreviated")) {
                 HStack(spacing: AppMetric.s) {
-                    languagePill("Auto", isOn: m.languages.isEmpty) {
+                    languagePill(String(localized: "Auto", comment: "Language pill: detect the language automatically"), isOn: m.languages.isEmpty) {
                         m.languages.removeAll()
                     }
                     ForEach(supportedLanguages, id: \.self) { lang in
-                        languagePill(lang,
+                        languagePill(SettingsLanguageNames.name(lang),
                                      isOn: m.languages.contains(lang)) {
                             if m.languages.contains(lang) {
                                 m.languages.remove(lang)
@@ -925,7 +924,7 @@ struct DetailView: View {
                 }
             }
             HairlineSoft()
-            LedgerRow("Diarize") {
+            LedgerRow(String(localized: "Diarize", comment: "Run option: tell speakers apart")) {
                 Toggle("", isOn: Binding(
                     get: { m.diarize }, set: { m.diarize = $0 }
                 ))
@@ -933,16 +932,16 @@ struct DetailView: View {
             }
             HairlineSoft()
             if m.diarize {
-                LedgerRow("Speakers") {
+                LedgerRow(String(localized: "Speakers")) {
                     HStack(spacing: 12) {
                         Stepper(
-                            m.expectedSpeakers == 0 ? "Auto-detect" : "\(m.expectedSpeakers)",
+                            m.expectedSpeakers == 0 ? String(localized: "Auto-detect") : "\(m.expectedSpeakers)",
                             value: Binding(get: { m.expectedSpeakers }, set: { m.expectedSpeakers = $0 }),
                             in: 0...8
                         )
                         if m.expectedSpeakers > 0 {
                             TapButton { m.speakersExact.toggle() } label: {
-                                Text(m.speakersExact ? "Exactly \(m.expectedSpeakers)" : "Up to \(m.expectedSpeakers)")
+                                Text(m.speakersExact ? String(localized: "Exactly \(m.expectedSpeakers)") : String(localized: "Up to \(m.expectedSpeakers)"))
                                     .uiLabel(9, color: m.speakersExact ? AppColor.accentOnLight : AppColor.ink2)
                             }
                             .help("Up to: the diarizer may find fewer. Exactly: it re-tries with a finer ear until it can tell this many voices apart (never invents phantoms).")
@@ -953,7 +952,7 @@ struct DetailView: View {
                 HairlineSoft()
             }
             if m.diarize && !m.backend.needsDiarizerForSpeakers {
-                LedgerRow("Hybrid") {
+                LedgerRow(String(localized: "Hybrid", comment: "Run option: hybrid speaker diarization")) {
                     Toggle("", isOn: Binding(
                         get: { m.hybridDiarize }, set: { m.hybridDiarize = $0 }
                     ))
@@ -961,7 +960,7 @@ struct DetailView: View {
                 }
                 HairlineSoft()
             }
-            LedgerRow("Translate") {
+            LedgerRow(String(localized: "Translate", comment: "Run option: translate into English")) {
                 Toggle("", isOn: Binding(
                     get: { m.translateToEnglish }, set: { m.translateToEnglish = $0 }
                 ))
@@ -1039,7 +1038,7 @@ struct DetailView: View {
                 // (RUN TRANSCRIPTION) — rather than a second hand-rolled
                 // night-ground bar with its own copy of the lift shadow.
                 InverseFooter(
-                    m.status == nil ? "Run transcription" : "Re-run transcription",
+                    m.status == nil ? String(localized: "Run transcription") : String(localized: "Re-run transcription"),
                     action: { m.run() }
                 ) {
                     PulseDot(diameter: 6, animated: false)
@@ -1086,26 +1085,26 @@ struct DetailView: View {
                         proseMode.toggle()
                         container.uiPrefs.proseMode = proseMode
                     } label: {
-                        Text(proseMode ? "Cards" : "Prose").uiLabel(9, color: AppColor.ink2).viewToggleTarget()
+                        Text(proseMode ? String(localized: "Cards", comment: "Transcript view: one card per line") : String(localized: "Prose", comment: "Transcript view: running text")).uiLabel(9, color: AppColor.ink2).viewToggleTarget()
                     }
                     TapButton {
                         transcriptStyle = transcriptStyle == .clean ? .verbatim : .clean
                         container.uiPrefs.transcriptStyle = transcriptStyle
                     } label: {
                         // Names the mode you would switch TO, like Cards/Prose.
-                        Text(transcriptStyle == .clean ? "Verbatim" : "Clean").uiLabel(9, color: AppColor.ink2).viewToggleTarget()
+                        Text(transcriptStyle == .clean ? String(localized: "Verbatim", comment: "Transcript view: exactly what was heard") : String(localized: "Clean", comment: "Transcript view: text with fillers removed")).uiLabel(9, color: AppColor.ink2).viewToggleTarget()
                     }
                     .help(transcriptStyle == .clean
-                          ? "Showing clean text (no um/uh, no stutters). Switch to exactly what was heard."
-                          : "Showing verbatim text. Switch to clean reading text.")
+                          ? String(localized: "Showing clean text (no um/uh, no stutters). Switch to exactly what was heard.")
+                          : String(localized: "Showing verbatim text. Switch to clean reading text."))
                     TapButton {
                         showTimestamps.toggle()
                         container.uiPrefs.showTimestamps = showTimestamps
                     } label: {
-                        Text(showTimestamps ? "−Times" : "+Times").uiLabel(9, color: AppColor.ink2).viewToggleTarget()
+                        Text(showTimestamps ? String(localized: "−Times", comment: "Transcript view: hide timestamps") : String(localized: "+Times", comment: "Transcript view: show timestamps")).uiLabel(9, color: AppColor.ink2).viewToggleTarget()
                     }
                     TapButton { fullscreen.toggle() } label: {
-                        Text(fullscreen ? "Exit ⤡" : "Read ⤢")
+                        Text(fullscreen ? String(localized: "Exit ⤡", comment: "Transcript view: leave reading mode") : String(localized: "Read ⤢", comment: "Transcript view: full-window reading mode"))
                             .uiLabel(9, color: fullscreen ? AppColor.accentOnLight : AppColor.ink2)
                             .viewToggleTarget()
                     }
@@ -1303,7 +1302,7 @@ private struct VersionsPane: View {
                     // A run in flight writes into the current transcript: a
                     // restore now would be mixed with it or overwritten.
                     .disabled(model.isRunning)
-                    .help(model.isRunning ? "Wait for the run to finish, then restore." : "")
+                    .help(model.isRunning ? String(localized: "Wait for the run to finish, then restore.") : "")
                     TapButton { deletingVersion = v } label: {
                         Text("Delete")
                             .uiLabel(9, color: AppColor.ink2)
@@ -1487,8 +1486,8 @@ struct TranscriptPane: View {
                 HStack(spacing: 8) {
                     PulseDot(diameter: 5)
                     Text(backgroundRun
-                         ? "Quick draft — Super is refining this in the background and will replace it when done"
-                         : "Live draft — speakers, echo cleanup and turn merging apply when the run finishes")
+                         ? String(localized: "Quick draft — Super is refining this in the background and will replace it when done")
+                         : String(localized: "Live draft — speakers, echo cleanup and turn merging apply when the run finishes"))
                         .uiLabel(9, color: AppColor.ink2)
                     Spacer()
                 }
@@ -1659,8 +1658,8 @@ struct TranscriptPane: View {
                     // start a selection and never reach the row's seek: only
                     // clicks on the margin would jump the audio. Copy is in the
                     // context menu; the prose view stays selectable.
-                    .help(hits.isEmpty ? "" : hits.map { "\($0.dispute.chosen) · other engine heard \"\($0.dispute.alternative)\"" }
-                        .joined(separator: "\n") + "\nClick an underlined word to use the other reading.")
+                    .help(hits.isEmpty ? "" : hits.map { String(localized: "\($0.dispute.chosen) · other engine heard \"\($0.dispute.alternative)\"") }
+                        .joined(separator: "\n") + "\n" + String(localized: "Click an underlined word to use the other reading."))
                     .environment(\.openURL, OpenURLAction { url in
                         guard url.scheme == "transcriberr-dispute", let k = Int(url.absoluteString.dropFirst("transcriberr-dispute:".count))
                         else { return .systemAction }
@@ -1738,19 +1737,19 @@ struct TranscriptPane: View {
     private func lineActions(_ seg: Segment) -> [[LineAction]] {
         let who = seg.speakerName.flatMap { SpeakerLabel.isPlaceholder($0) || $0.isEmpty ? nil : $0 }
         let shown = seg.speaker.map { SpeakerLabel.display(seg.speakerName, key: $0) } ?? seg.speakerName
-        var copying = [LineAction(title: "Copy line") { copy(style.apply(seg.text)) }]
-        copying.append(LineAction(title: "Copy with speaker and time") {
+        var copying = [LineAction(title: String(localized: "Copy line")) { copy(style.apply(seg.text)) }]
+        copying.append(LineAction(title: String(localized: "Copy with speaker and time")) {
             let head = [timestamp(seg.startSeconds), shown].compactMap { $0 }.joined(separator: " ")
             copy("\(head): \(style.apply(seg.text))")
         })
         var finding: [LineAction] = []
         if let who, focusName != who {
-            finding.append(LineAction(title: "Mark \(who)'s lines") { onFocusSpeaker(who) })
+            finding.append(LineAction(title: String(localized: "Mark \(who)'s lines")) { onFocusSpeaker(who) })
         }
         // As in the More menu: not during a run or a merge.
-        if canSplit { finding.append(LineAction(title: "Split recording here…") { onSplitHere(seg.startSeconds) }) }
-        return [[LineAction(title: "Play from here") { player.seek(to: seg.startSeconds); player.play() },
-                 LineAction(title: "Edit text…") { onEditSegment(seg) }],
+        if canSplit { finding.append(LineAction(title: String(localized: "Split recording here…")) { onSplitHere(seg.startSeconds) }) }
+        return [[LineAction(title: String(localized: "Play from here")) { player.seek(to: seg.startSeconds); player.play() },
+                 LineAction(title: String(localized: "Edit text…")) { onEditSegment(seg) }],
                 copying, finding]
     }
 
@@ -1760,7 +1759,7 @@ struct TranscriptPane: View {
         HStack(spacing: AppMetric.m) {
             Rectangle().fill(AppColor.accent).frame(width: 3, height: 14)
             Text("\(name)'s lines are marked").uiLabel(10)
-            Text(starts.count == 1 ? "1 line" : "\(starts.count) lines").uiLabel(9, color: AppColor.ink3)
+            Text("\(starts.count) lines").uiLabel(9, color: AppColor.ink3)
             Spacer()
             TapButton { jump(in: starts, forward: false) } label: {
                 LitButtonChrome(.ghost, compact: true) { Text("Previous") }
@@ -1789,9 +1788,9 @@ struct TranscriptPane: View {
         let count = searchHits.count
         return HStack(spacing: AppMetric.m) {
             Rectangle().fill(AppColor.accent).frame(width: 3, height: 14)
-            Text(count > 0 ? "“\(query)” in \(count == 1 ? "1 line" : "\(count) lines")"
-                 : searchOnlyRaw ? "“\(query)” is only in words the Clean view leaves out: turn Clean off to see it"
-                 : "No line here contains “\(query)”").uiLabel(10)
+            Text(count > 0 ? String(localized: "“\(query)” in \(count) lines")
+                 : searchOnlyRaw ? String(localized: "“\(query)” is only in words the Clean view leaves out: turn Clean off to see it")
+                 : String(localized: "No line here contains “\(query)”")).uiLabel(10)
             if count > 1 {
                 Text("\(searchPosition + 1) of \(count)").uiLabel(9, color: AppColor.ink3)
             }
@@ -1924,7 +1923,7 @@ struct OutputPane: View {
                 Spacer()
                 if historyCount > 1 || showingHistory {
                     TapButton { showingHistory.toggle() } label: {
-                        Text(showingHistory ? "Back to output" : "History (\(historyCount))")
+                        Text(showingHistory ? String(localized: "Back to output") : String(localized: "History (\(historyCount))"))
                             .uiLabel(10, color: AppColor.ink2)
                     }
                     .help("Earlier outputs of this preset, with the prompt and engine that made each.")
@@ -1953,7 +1952,7 @@ struct OutputPane: View {
                             )
                         }
                     } label: {
-                        Text(isBusy ? "Working…" : "Generate ↗")
+                        Text(isBusy ? String(localized: "Working…") : String(localized: "Generate ↗"))
                             .uiLabel(10, color: isBusy ? AppColor.ink3 : AppColor.accentOnLight)
                     }
                 }
@@ -1982,7 +1981,7 @@ struct OutputPane: View {
             } else {
                 VStack(alignment: .leading) {
                     Spacer()
-                    Text(isBusy ? "Generating. It appears here when it is done." : "Not generated yet · press Generate ↗ above")
+                    Text(isBusy ? String(localized: "Generating. It appears here when it is done.") : String(localized: "Not generated yet · press Generate ↗ above"))
                         .uiLabel(11, color: AppColor.ink3)
                         .frame(maxWidth: .infinity, alignment: .center)
                     Spacer()
@@ -2038,7 +2037,7 @@ private struct OutputHistoryList: View {
                                 .uiLabel(10)
                             if isCurrent { Text("Current").uiLabel(9, color: AppColor.accentOnLight) }
                         }
-                        Text(v.engineLabel ?? "Made before 4.5.0")
+                        Text(v.engineLabel ?? String(localized: "Made before 4.5.0"))
                             .uiLabel(9, color: AppColor.ink2)
                         if !isOpen {
                             Text(v.markdown.prefix(160).replacingOccurrences(of: "\n", with: " "))
@@ -2092,7 +2091,7 @@ private struct OutputHistoryList: View {
                     }
                     if v.userPrompt != nil {
                         TapButton { showingPrompt = showingPrompt == v.id ? nil : v.id } label: {
-                            Text(showingPrompt == v.id ? "Hide prompt" : "Show prompt")
+                            Text(showingPrompt == v.id ? String(localized: "Hide prompt") : String(localized: "Show prompt"))
                                 .uiLabel(9, color: AppColor.ink2)
                         }
                     }
@@ -2129,13 +2128,13 @@ enum RecordingRename {
     @MainActor
     static func prompt(_ recording: Recording) {
         let alert = NSAlert()
-        alert.messageText = "Rename recording"
+        alert.messageText = String(localized: "Rename recording")
         alert.informativeText = ""
         let field = NSTextField(string: recording.title)
         field.frame = NSRect(x: 0, y: 0, width: 280, height: 22)
         alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: String(localized: "Save"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         if alert.runModal() == .alertFirstButtonReturn {
             let new = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !new.isEmpty {

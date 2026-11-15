@@ -38,21 +38,21 @@ nonisolated struct WhisperModel: Identifiable, Hashable, Sendable {
     /// Sizes from the repo listing.
     static let all: [WhisperModel] = [
         WhisperModel(id: "openai_whisper-large-v3", name: "large-v3", sizeBytes: 3_090_000_000,
-                     note: "Most accurate. Every measurement in the app was made with it."),
+                     note: String(localized: "Most accurate. Every measurement in the app was made with it.", comment: "Settings → Models: Whisper model description")),
         WhisperModel(id: "openai_whisper-large-v3-v20240930_turbo", name: "large-v3 turbo", sizeBytes: 1_640_000_000,
-                     note: "OpenAI's turbo build: a much smaller decoder, so faster; slightly less accurate by OpenAI's figures."),
+                     note: String(localized: "OpenAI's turbo build: a much smaller decoder, so faster; slightly less accurate by OpenAI's figures.", comment: "Settings → Models: Whisper model description")),
         WhisperModel(id: "openai_whisper-large-v3_947MB", name: "large-v3 compressed", sizeBytes: 950_000_000,
-                     note: "large-v3 compressed to under a third of the size."),
+                     note: String(localized: "large-v3 compressed to under a third of the size.", comment: "Settings → Models: Whisper model description")),
         WhisperModel(id: "openai_whisper-large-v3-v20240930_626MB", name: "large-v3 turbo compressed", sizeBytes: 630_000_000,
-                     note: "The turbo build compressed: the smallest of the large models."),
+                     note: String(localized: "The turbo build compressed: the smallest of the large models.", comment: "Settings → Models: Whisper model description")),
         WhisperModel(id: "distil-whisper_distil-large-v3", name: "distil-large-v3", sizeBytes: 1_510_000_000,
-                     note: "Distilled for speed. English only.", englishOnly: true),
+                     note: String(localized: "Distilled for speed. English only.", comment: "Settings → Models: Whisper model description"), englishOnly: true),
         WhisperModel(id: "openai_whisper-medium", name: "medium", sizeBytes: 1_530_000_000,
-                     note: "The previous generation's middle size, all languages."),
+                     note: String(localized: "The previous generation's middle size, all languages.", comment: "Settings → Models: Whisper model description")),
         WhisperModel(id: "openai_whisper-small", name: "small", sizeBytes: 490_000_000,
-                     note: "Small and quick; clearly less accurate than the large models."),
+                     note: String(localized: "Small and quick; clearly less accurate than the large models.", comment: "Settings → Models: Whisper model description")),
         WhisperModel(id: WhisperUKModel.id, name: "UK (large-v3 turbo)", sizeBytes: 1_620_000_000,
-                     note: "The turbo build fine-tuned on Ukrainian speech (ihnatov-yuri/whisper-large-v3-turbo-uk): 8.2% WER on the Ukrainian test sets against large-v3's 9.8%.",
+                     note: String(localized: "The turbo build fine-tuned on Ukrainian speech (ihnatov-yuri/whisper-large-v3-turbo-uk): 8.2% WER on the Ukrainian test sets against large-v3's 9.8%.", comment: "Settings → Models: Whisper model description"),
                      ukrainianOnly: true),
     ]
 
@@ -238,7 +238,7 @@ final class WhisperDownloads {
         // The running job's model: its next wedge recovery would download it
         // again in the middle of the run.
         guard WhisperModel.inUse != model.id else {
-            failures[model.id] = "In use by the running transcription. Delete it when the run has finished."
+            failures[model.id] = String(localized: "In use by the running transcription. Delete it when the run has finished.")
             return
         }
         try? FileManager.default.removeItem(at: model.folder)

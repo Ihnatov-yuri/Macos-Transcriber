@@ -197,7 +197,7 @@ final class LiveTranscriber: @unchecked Sendable {
         // No recorder attached (or it went away): `.running` with no
         // consumer would claim captions that can never arrive.
         guard let source else {
-            status = .failed(reason: "no audio source")
+            status = .failed(reason: String(localized: "no audio source", comment: "Live captions failed: no recorder to listen to"))
             return
         }
         self.backend = backend

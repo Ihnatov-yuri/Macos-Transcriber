@@ -27,9 +27,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         var errorDescription: String? {
             switch self {
             case .coreAudio(let what, let code):
-                return "\(what) failed (\(code)). If this is the first meeting recording, grant Transcriberr “System Audio Recording” in System Settings → Privacy & Security → Screen & System Audio Recording, then try again."
+                return String(localized: "\(what) failed (\(code)). If this is the first meeting recording, grant Transcriberr “System Audio Recording” in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.", comment: "First value is a Core Audio step name in English, second an error code")
             case .denied:
-                return "Microphone access is not authorized."
+                return String(localized: "Microphone access is not authorized.")
             }
         }
     }
@@ -383,10 +383,13 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     private func handleDeviceChange() {
         guard isRunning, interruption == nil else { return }
         let reason: String
+        let message: String
         if !Self.isAlive(watchedMic) {
             reason = "The microphone was disconnected"
+            message = String(localized: "The microphone was disconnected, so the meeting recording stopped. Press Stop to keep what was recorded.")
         } else if !Self.isAlive(watchedAggregate) {
             reason = "The meeting audio device stopped"
+            message = String(localized: "The meeting audio device stopped, so the meeting recording stopped. Press Stop to keep what was recorded.")
         } else if let newRate = deviceSampleRate(watchedAggregate),
                   Self.rateChanged(capture: watchedRate, now: newRate) {
             // A rate change is survivable: rebuild the converters for the
@@ -395,10 +398,10 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             AppLog.warn("meeting", "aggregate rate moved from \(Int(watchedRate)) Hz to \(Int(newRate)) Hz — rebuilding converters")
             if rebuildConverters(forRate: newRate) { return }
             reason = "The audio device changed its sample rate"
+            message = String(localized: "The audio device changed its sample rate, so the meeting recording stopped. Press Stop to keep what was recorded.")
         } else {
             return
         }
-        let message = "\(reason), so the meeting recording stopped. Press Stop to keep what was recorded."
         AppLog.warn("meeting", "\(reason.lowercased()) mid-meeting — closing capture, audio so far is kept")
         interruption = message
         // Off the main actor: AudioDeviceStop waits for the IO proc to return.

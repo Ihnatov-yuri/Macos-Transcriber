@@ -15,9 +15,9 @@ struct LearnedTermsSection: View {
                    isOn: Binding(get: { s.useLearnedTerms }, set: { s.useLearnedTerms = $0 }))
             let terms = s.learnedTerms.filter { !s.dismissedTermKeys.contains($0.key) }
             if terms.isEmpty {
-                Text(s.learnedAt == nil
-                     ? "Scanning the library…"
-                     : "Nothing new — every recurring name is already in your vocabulary.")
+                (s.learnedAt == nil
+                     ? Text("Scanning the library…")
+                     : Text("Nothing new — every recurring name is already in your vocabulary."))
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             } else {
                 // Chips that wrap: with one name per line, forty names
@@ -25,7 +25,7 @@ struct LearnedTermsSection: View {
                 FlowLayout(spacing: 6) {
                     ForEach(showAll ? terms : Array(terms.prefix(Self.folded))) { term in
                         WordChip(term.spelling,
-                                 help: "\(term.recordings) recordings · \(term.occurrences)×. + adds it to your vocabulary; × hides it for good.",
+                                 help: String(localized: "\(term.recordings) recordings · \(term.occurrences)×. + adds it to your vocabulary; × hides it for good."),
                                  add: { c.addToVocabulary(term.spelling) },
                                  remove: { c.dismissSuggestion(term.spelling) })
                     }
@@ -33,7 +33,7 @@ struct LearnedTermsSection: View {
                 HStack(spacing: AppMetric.m) {
                     if terms.count > Self.folded {
                         TapButton { showAll.toggle() } label: {
-                            Text(showAll ? "Show fewer" : "Show all \(terms.count)")
+                            (showAll ? Text("Show fewer") : Text("Show all \(terms.count)"))
                                 .font(AppFont.text(12)).foregroundStyle(AppColor.accentOnLight)
                         }
                     }
@@ -73,7 +73,7 @@ struct WordChip: View {
         HStack(spacing: 5) {
             if let struck {
                 Text(struck).strikethrough().foregroundStyle(AppColor.ink3)
-                Text("→").foregroundStyle(AppColor.ink3)
+                Text(verbatim: "→").foregroundStyle(AppColor.ink3)
             }
             Text(word).foregroundStyle(AppColor.ink)
             if let add {

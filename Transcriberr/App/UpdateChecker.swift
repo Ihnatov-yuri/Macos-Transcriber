@@ -138,7 +138,7 @@ nonisolated final class UpdateChecker: @unchecked Sendable {
                 result = .upToDate
             }
         } catch {
-            result = .failed("Couldn't reach GitHub")
+            result = .failed(String(localized: "Couldn't reach GitHub"))
             AppLog.info("update", "check failed: \(error.localizedDescription)")
         }
         await MainActor.run {
@@ -151,13 +151,13 @@ nonisolated final class UpdateChecker: @unchecked Sendable {
     /// The first-launch question's text. Kept accurate: model downloads and
     /// the cloud engines (API keys) also reach the network, so the check is
     /// described as the one thing the app would share on its own.
-    static let consentExplanation = """
+    static let consentExplanation = String(localized: """
         Your recordings and transcripts stay on this Mac. Apart from downloading its speech models, this check would be the only thing Transcriberr shares with the outside world on its own.
 
         Once a day it asks GitHub for the number of the newest release and compares it with the version on this Mac, and, if you use Parakeet UK, asks Hugging Face whether that model has a newer release, which then downloads and takes over at the next launch. The comparison happens here. The request is the same from every Mac and carries no version, account or identifier; GitHub sees your IP address, as it would for any web page.
 
         When a new version is out, a notice appears in the sidebar. Nothing is downloaded until you press Update; then the new version is checked against a signature only its author can make, installed, and the app reopens. You can change this later in Settings, Updates.
-        """
+        """)
 
     // MARK: - The request (kept identical for every user)
 

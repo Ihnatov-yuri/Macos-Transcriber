@@ -6,6 +6,7 @@ options:
   createIntermediateGroups: true
   generateEmptyDirectories: true
   groupSortPosition: top
+  developmentLanguage: en
 
 settings:
   base:
@@ -17,6 +18,10 @@ settings:
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
     MARKETING_VERSION: "5.8.0"
+    # Interface in English, Ukrainian and Dutch: SwiftUI literals and
+    # String(localized:) are extracted into Transcriberr/Resources/*.xcstrings.
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
 
 # Runtimes: Core ML (FluidAudio: Parakeet, diarizer; WhisperKit: Whisper)
 # for speech, MLX (Gemma) and uzu (Qwen) for the text models.
@@ -121,6 +126,9 @@ targets:
       path: Transcriberr/Info.plist
       properties:
         CFBundleDisplayName: Transcriberr
+        CFBundleDevelopmentRegion: en
+        # The languages System Settings offers for this app.
+        CFBundleLocalizations: [en, uk, nl]
         # XcodeGen writes 1.0 / 1 into the plist when these are missing, and
         # the plist wins over the build settings — so the sidebar badge and
         # MCP serverInfo said "1.0" whatever MARKETING_VERSION was.

@@ -14,6 +14,32 @@ nonisolated enum SpeechMetric: String, Codable, CaseIterable, Identifiable, Send
 
     var title: String {
         switch self {
+        case .talkShare: return String(localized: "Talk share", comment: "Speech metric: share of the words spoken in a meeting")
+        case .pace: return String(localized: "Pace", comment: "Speech metric: words per minute")
+        case .longestTurn: return String(localized: "Longest turn", comment: "Speech metric: longest stretch of speaking")
+        case .interruptions: return String(localized: "Cutting in", comment: "Speech metric: starting to speak while someone else talks")
+        case .questions: return String(localized: "Questions", comment: "Speech metric: questions asked")
+        case .fillers: return String(localized: "Fillers", comment: "Speech metric: filler words like um and uh")
+        case .hedges: return String(localized: "Hedges", comment: "Speech metric: hedging phrases like I think, maybe")
+        }
+    }
+
+    var unit: String {
+        switch self {
+        case .talkShare: return String(localized: "% of a fair share, by words", comment: "Speech metric unit")
+        case .pace: return String(localized: "words/min", comment: "Speech metric unit")
+        case .longestTurn: return String(localized: "s", comment: "Speech metric unit: seconds")
+        case .interruptions: return String(localized: "per 10 min", comment: "Speech metric unit")
+        case .questions: return String(localized: "per 10 min of speaking", comment: "Speech metric unit")
+        case .fillers, .hedges: return String(localized: "per min", comment: "Speech metric unit")
+        }
+    }
+
+    /// English wording for the coaching prompt the text model reads
+    /// (`SpeechCoach.userMessage`); `title`, `unit` and `explanation` are
+    /// the localized ones the screen shows.
+    var promptTitle: String {
+        switch self {
         case .talkShare: return "Talk share"
         case .pace: return "Pace"
         case .longestTurn: return "Longest turn"
@@ -24,7 +50,7 @@ nonisolated enum SpeechMetric: String, Codable, CaseIterable, Identifiable, Send
         }
     }
 
-    var unit: String {
+    var promptUnit: String {
         switch self {
         case .talkShare: return "% of a fair share, by words"
         case .pace: return "words/min"
@@ -35,21 +61,7 @@ nonisolated enum SpeechMetric: String, Codable, CaseIterable, Identifiable, Send
         }
     }
 
-    /// What one chart point is, in words ("your fillers per minute of
-    /// speaking").
-    var unitPhrase: String {
-        switch self {
-        case .talkShare: return "your share of the words, as a % of a fair share"
-        case .pace: return "your words per minute"
-        case .longestTurn: return "your longest turn, in seconds"
-        case .interruptions: return "how often you started while someone was talking, per 10 minutes"
-        case .questions: return "your questions per 10 minutes of speaking"
-        case .fillers: return "your fillers per minute of speaking"
-        case .hedges: return "your hedges per minute of speaking"
-        }
-    }
-
-    var explanation: String {
+    var promptExplanation: String {
         switch self {
         case .talkShare: return "Share of the words spoken, against one person's fair share: 100 is exactly fair, 200 twice as much. A 1:1 and a group of six are judged alike."
         case .pace: return "Words per minute, from lines short enough to time well."
@@ -58,6 +70,32 @@ nonisolated enum SpeechMetric: String, Codable, CaseIterable, Identifiable, Send
         case .questions: return "Questions asked, per 10 minutes of speaking."
         case .fillers: return "Um, uh, ну, типу and the like. Speech engines leave many out, so this reads low."
         case .hedges: return "I think, maybe, kind of, мабуть, можливо and the like."
+        }
+    }
+
+    /// What one chart point is, in words ("your fillers per minute of
+    /// speaking").
+    var unitPhrase: String {
+        switch self {
+        case .talkShare: return String(localized: "your share of the words, as a % of a fair share")
+        case .pace: return String(localized: "your words per minute")
+        case .longestTurn: return String(localized: "your longest turn, in seconds")
+        case .interruptions: return String(localized: "how often you started while someone was talking, per 10 minutes")
+        case .questions: return String(localized: "your questions per 10 minutes of speaking")
+        case .fillers: return String(localized: "your fillers per minute of speaking")
+        case .hedges: return String(localized: "your hedges per minute of speaking")
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .talkShare: return String(localized: "Share of the words spoken, against one person's fair share: 100 is exactly fair, 200 twice as much. A 1:1 and a group of six are judged alike.")
+        case .pace: return String(localized: "Words per minute, from lines short enough to time well.")
+        case .longestTurn: return String(localized: "The longest stretch without anyone else speaking.")
+        case .interruptions: return String(localized: "Starting while someone else is still talking, where the transcript's timing is tight enough to tell.")
+        case .questions: return String(localized: "Questions asked, per 10 minutes of speaking.")
+        case .fillers: return String(localized: "Um, uh, ну, типу and the like. Speech engines leave many out, so this reads low.")
+        case .hedges: return String(localized: "I think, maybe, kind of, мабуть, можливо and the like.")
         }
     }
 

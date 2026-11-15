@@ -8,11 +8,11 @@ enum DomainVocabulary {
 
         var displayName: String {
             switch self {
-            case .medical:      return "Medical"
-            case .it:           return "IT / Software"
-            case .construction: return "Construction"
-            case .legal:        return "Legal"
-            case .finance:      return "Finance"
+            case .medical:      return String(localized: "Medical", comment: "Vocabulary pack")
+            case .it:           return String(localized: "IT / Software", comment: "Vocabulary pack")
+            case .construction: return String(localized: "Construction", comment: "Vocabulary pack")
+            case .legal:        return String(localized: "Legal", comment: "Vocabulary pack")
+            case .finance:      return String(localized: "Finance", comment: "Vocabulary pack")
             }
         }
     }

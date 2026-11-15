@@ -26,7 +26,7 @@ struct DictationView: View {
                     InkRule()
                     Spacer().frame(height: AppMetric.l)
 
-                    SectionIndex(4, "Dictate", summary: summary(controller))
+                    SectionIndex(4, String(localized: "Dictate", comment: "Dictation screen section title"), summary: summary(controller))
                         .padding(.horizontal, AppMetric.sheetPadding)
 
                     Spacer().frame(height: AppMetric.l)
@@ -84,7 +84,7 @@ struct DictationView: View {
         case .listening:
             HStack(spacing: 8) {
                 PulseDot(diameter: 6)
-                Text(c.micOpen ? "Listening" : "Opening mic").uiLabel(10, color: AppColor.accentOnLight)
+                (c.micOpen ? Text("Listening") : Text("Opening mic")).uiLabel(10, color: AppColor.accentOnLight)
             }
         case .transcribing, .inserting:
             Text("Recognizing").uiLabel(10, color: AppColor.ink2)
@@ -93,7 +93,7 @@ struct DictationView: View {
                 TapButton { showSetup.toggle() } label: {
                     Text("Setup").uiLabel(10, color: AppColor.ink3)
                 }
-                Text(c.hotkeyArmed ? "Hotkey · \(c.settings.hotkey.glyph)" : "Hotkey · off")
+                (c.hotkeyArmed ? Text("Hotkey · \(c.settings.hotkey.glyph)") : Text("Hotkey · off"))
                     .uiLabel(10, color: c.hotkeyArmed ? AppColor.ink : AppColor.ink3)
             }
         }
@@ -102,14 +102,18 @@ struct DictationView: View {
     private func summary(_ c: DictationController) -> String {
         let s = c.settings
         let engine = s.engine.displayName
-        let lang = s.languages.isEmpty ? "auto-detect" : s.languages.sorted().joined(separator: ", ")
+        let lang = s.languages.isEmpty
+            ? String(localized: "auto-detect", comment: "Dictation summary: spoken language not set")
+            : s.languages.sorted().map(SettingsLanguageNames.name).joined(separator: ", ")
         let how: String
+        let key = s.hotkey.label
         switch (s.hotkey, s.mode) {
-        case (.off, _):     how = "No global hotkey — use the button below or the menu bar."
-        case (_, .hold):    how = "Hold \(s.hotkey.label) in any app, speak, release."
-        case (_, .toggle):  how = "Tap \(s.hotkey.label) in any app to start, tap again to stop."
+        case (.off, _):     how = String(localized: "No global hotkey — use the button below or the menu bar.")
+        case (_, .hold):    how = String(localized: "Hold \(key) in any app, speak, release.")
+        case (_, .toggle):  how = String(localized: "Tap \(key) in any app to start, tap again to stop.")
         }
-        return "\(how) Engine: \(engine). Language: \(lang)."
+        return String(localized: "\(how) Engine: \(engine). Language: \(lang).",
+                      comment: "Dictation summary; the first argument is a whole sentence on how to use the hotkey")
     }
 
     // MARK: - Setup (first run)
@@ -121,19 +125,20 @@ struct DictationView: View {
         let allDone = micOK && c.accessibilityTrusted && c.inputMonitoringGranted
         VStack(alignment: .leading, spacing: AppMetric.s) {
             HStack {
-                Text("Setup · \(allDone ? "all set" : "three permissions, once")")
+                (allDone ? Text("Setup · all set") : Text("Setup · three permissions, once"))
                     .uiLabel(10, color: allDone ? AppColor.ink : AppColor.accentOnLight)
                 Spacer()
                 if allDone || s.onboarded {
                     TapButton {
                         s.onboarded = true
                         showSetup = false
-                    } label: { Text(allDone ? "Done" : "Hide").uiLabel(10, color: AppColor.ink2) }
+                    } label: { (allDone ? Text("Done") : Text("Hide")).uiLabel(10, color: AppColor.ink2) }
                 }
             }
-            setupRow(1, "Microphone", done: micOK,
-                     detail: micOK ? "Granted." : "Needed to hear you. Nothing is recorded until you press the key.",
-                     action: micOK ? nil : ("Allow", {
+            setupRow(1, String(localized: "Microphone"), done: micOK,
+                     detail: micOK ? String(localized: "Granted.")
+                        : String(localized: "Needed to hear you. Nothing is recorded until you press the key."),
+                     action: micOK ? nil : (String(localized: "Allow", comment: "Dictation setup: allow microphone access"), {
                         // The completion form calls back on a private queue; a
                         // main-actor closure there traps in Swift 6.
                         // `_ =`: a bare `Task {}` as the closure's only expression
@@ -144,21 +149,33 @@ struct DictationView: View {
                             micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
                         }
                      }))
-            setupRow(2, "Accessibility", done: c.accessibilityTrusted,
-                     detail: c.accessibilityTrusted ? "Granted." : "Lets the app see the hotkey in other apps and paste the text at the cursor.",
-                     action: c.accessibilityTrusted ? nil : ("Grant", { c.requestAccessibility() }))
-            setupRow(3, "Input monitoring", done: c.inputMonitoringGranted,
-                     detail: c.inputMonitoringGranted ? "Granted." : "Lets the app receive the key press itself. Usually ticked together with Accessibility.",
-                     action: c.inputMonitoringGranted ? nil : ("Grant", { c.requestInputMonitoring() }))
-            setupRow(4, "Try it", done: !c.lastHotkeyEvent.isEmpty,
-                     detail: c.lastHotkeyEvent.isEmpty
-                        ? "Press \(s.hotkey.label) once. This line changes the moment the key is seen."
-                        : "Seen: \(c.lastHotkeyEvent). \(s.mode == .hold ? "Hold it and talk." : "Tap to start, tap to stop — or hold to talk.")",
+            setupRow(2, String(localized: "Accessibility", comment: "macOS privacy permission name"), done: c.accessibilityTrusted,
+                     detail: c.accessibilityTrusted ? String(localized: "Granted.")
+                        : String(localized: "Lets the app see the hotkey in other apps and paste the text at the cursor."),
+                     action: c.accessibilityTrusted ? nil
+                        : (String(localized: "Grant", comment: "Dictation setup: grant a permission"), { c.requestAccessibility() }))
+            setupRow(3, String(localized: "Input monitoring", comment: "macOS privacy permission name"), done: c.inputMonitoringGranted,
+                     detail: c.inputMonitoringGranted ? String(localized: "Granted.")
+                        : String(localized: "Lets the app receive the key press itself. Usually ticked together with Accessibility."),
+                     action: c.inputMonitoringGranted ? nil
+                        : (String(localized: "Grant", comment: "Dictation setup: grant a permission"), { c.requestInputMonitoring() }))
+            setupRow(4, String(localized: "Try it"), done: !c.lastHotkeyEvent.isEmpty,
+                     detail: tryItDetail(c),
                      action: nil)
         }
         .padding(AppMetric.m)
         .overlay(Rectangle().stroke(allDone ? AppColor.hair : AppColor.accent, lineWidth: 1))
         .onAppear { micStatus = AVCaptureDevice.authorizationStatus(for: .audio) }
+    }
+
+    private func tryItDetail(_ c: DictationController) -> String {
+        let seen = c.lastHotkeyEvent
+        if seen.isEmpty {
+            return String(localized: "Press \(c.settings.hotkey.label) once. This line changes the moment the key is seen.")
+        }
+        return c.settings.mode == .hold
+            ? String(localized: "Seen: \(seen). Hold it and talk.")
+            : String(localized: "Seen: \(seen). Tap to start, tap to stop — or hold to talk.")
     }
 
     @ViewBuilder
@@ -193,24 +210,43 @@ struct DictationView: View {
             // Wraps: the row needs ~1000 pt, the pane has ~740 at the
             // minimum window.
             FlowLayout(spacing: AppMetric.l) {
-                option("Hotkey", s.hotkey.glyph, active: s.hotkey != .off,
-                       hint: "modifier key that\nstarts dictation") { cycleHotkey(s) }
-                option("Mode", s.mode == .hold ? "Hold" : "Toggle", active: s.mode == .toggle,
-                       hint: s.mode == .hold ? "hold to talk,\nrelease to insert" : "tap to start, tap to\nstop · or hold to talk") {
+                option(String(localized: "Hotkey", comment: "Dictation option: the key that starts dictation"),
+                       s.hotkey.glyph, active: s.hotkey != .off,
+                       hint: String(localized: "modifier key that\nstarts dictation")) { cycleHotkey(s) }
+                option(String(localized: "Mode", comment: "Dictation option: hold or toggle the hotkey"),
+                       s.mode == .hold
+                           ? String(localized: "Hold", comment: "Dictation mode value: hold the key while speaking")
+                           : String(localized: "Toggle", comment: "Dictation mode value: tap to start, tap to stop"),
+                       active: s.mode == .toggle,
+                       hint: s.mode == .hold ? String(localized: "hold to talk,\nrelease to insert")
+                           : String(localized: "tap to start, tap to\nstop · or hold to talk")) {
                     s.mode = s.mode == .hold ? .toggle : .hold
                 }
-                option("Mode · default", s.defaultMode == .smart ? "Smart" : s.defaultMode == .verbatim ? "Verbatim" : "Clean",
+                option(String(localized: "Mode · default", comment: "Dictation option: default text formatting"),
+                       defaultModeValue(s.defaultMode),
                        active: s.defaultMode == .smart,
-                       hint: "apps without a rule ·\nsmart = text model, context-aware") { cycleMode(s) }
-                option("History", s.keepHistory ? "On" : "Off", active: s.keepHistory,
-                       hint: "save each passage to\nthe Dictation folder") { s.keepHistory.toggle() }
-                option("Lang", s.languages.isEmpty ? "Auto" : s.languages.sorted().joined(separator: ", "),
+                       hint: String(localized: "apps without a rule ·\nsmart = text model, context-aware")) { cycleMode(s) }
+                option(String(localized: "History", comment: "Dictation option: keep dictated passages in the Library"),
+                       s.keepHistory ? String(localized: "On", comment: "Option value: switched on")
+                           : String(localized: "Off", comment: "Option value: switched off"),
+                       active: s.keepHistory,
+                       hint: String(localized: "save each passage to\nthe Dictation folder")) { s.keepHistory.toggle() }
+                option(String(localized: "Lang", comment: "Dictation option, short for spoken language"),
+                       s.languages.isEmpty
+                           ? String(localized: "Auto", comment: "Option value: language detected automatically")
+                           : s.languages.sorted().map(SettingsLanguageNames.name).joined(separator: ", "),
                        active: !s.languages.isEmpty,
-                       hint: "spoken language") { cycleLanguage(s) }
-                option("Engine", s.engine.displayName, active: false,
-                       hint: "speech engine for\nsingle passages") { cycleEngine(s) }
-                option("Mic", s.voiceProcessing ? "Filtered" : "Raw", active: s.voiceProcessing,
-                       hint: s.voiceProcessing ? "Apple echo/noise filter ·\n~1 s slower start" : "instant start · filter\nturns other apps down") {
+                       hint: String(localized: "spoken language")) { cycleLanguage(s) }
+                option(String(localized: "Engine", comment: "Dictation option: speech engine"),
+                       s.engine.displayName, active: false,
+                       hint: String(localized: "speech engine for\nsingle passages")) { cycleEngine(s) }
+                option(String(localized: "Mic", comment: "Dictation option: microphone processing"),
+                       s.voiceProcessing
+                           ? String(localized: "Filtered", comment: "Dictation mic value: Apple echo and noise filter on")
+                           : String(localized: "Raw", comment: "Dictation mic value: no filter"),
+                       active: s.voiceProcessing,
+                       hint: s.voiceProcessing ? String(localized: "Apple echo/noise filter ·\n~1 s slower start")
+                           : String(localized: "instant start · filter\nturns other apps down")) {
                     s.voiceProcessing.toggle()
                 }
             }
@@ -228,6 +264,14 @@ struct DictationView: View {
                 .uiLabel(8, color: AppColor.ink2.opacity(0.75))
                 .lineSpacing(1)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func defaultModeValue(_ mode: DictationSettings.FormatMode) -> String {
+        switch mode {
+        case .smart:    return String(localized: "Smart", comment: "Dictation formatting: the text model formats, context-aware")
+        case .verbatim: return String(localized: "Verbatim", comment: "Dictation formatting: exactly as spoken")
+        case .clean:    return String(localized: "Clean", comment: "Dictation formatting: text with fillers removed")
         }
     }
 
@@ -277,12 +321,12 @@ struct DictationView: View {
                     Rectangle()
                         .fill(c.accessibilityTrusted ? AppColor.accent : AppColor.ink4)
                         .frame(width: 8, height: 8)
-                    Text("Accessibility · \(c.accessibilityTrusted ? "granted" : "not granted")")
+                    (c.accessibilityTrusted ? Text("Accessibility · granted") : Text("Accessibility · not granted"))
                         .uiLabel(10, color: c.accessibilityTrusted ? AppColor.ink : AppColor.ink2)
                 }
-                Text(c.accessibilityTrusted
-                     ? "The global hotkey works in every app and text is inserted at the cursor."
-                     : "Needed for the global hotkey and for inserting text into other apps. Without it, dictation still works here and copies to the clipboard.")
+                (c.accessibilityTrusted
+                     ? Text("The global hotkey works in every app and text is inserted at the cursor.")
+                     : Text("Needed for the global hotkey and for inserting text into other apps. Without it, dictation still works here and copies to the clipboard."))
                     .font(AppFont.text(12))
                     .foregroundStyle(AppColor.ink2)
                     .frame(maxWidth: 520, alignment: .leading)
@@ -296,9 +340,7 @@ struct DictationView: View {
                     }
                 }
                 if c.accessibilityTrusted, c.settings.hotkey != .off {
-                    Text(c.hotkeyArmed
-                         ? "Hotkey \(c.settings.hotkey.glyph) · \(c.hotkeyMechanism) · last event: \(c.lastHotkeyEvent.isEmpty ? "none yet — press it" : c.lastHotkeyEvent)"
-                         : "Hotkey not armed — relaunch Transcriberr")
+                    hotkeyStatus(c)
                         .uiLabel(9, color: c.hotkeyArmed && !c.lastHotkeyEvent.isEmpty ? AppColor.ink : AppColor.ink2)
                         .lineLimit(2)
                 }
@@ -325,6 +367,16 @@ struct DictationView: View {
                 }
             }
         }
+    }
+
+    private func hotkeyStatus(_ c: DictationController) -> Text {
+        guard c.hotkeyArmed else { return Text("Hotkey not armed — relaunch Transcriberr") }
+        let glyph = c.settings.hotkey.glyph
+        let mechanism = c.hotkeyMechanism
+        let event = c.lastHotkeyEvent
+        return event.isEmpty
+            ? Text("Hotkey \(glyph) · \(mechanism) · last event: none yet — press it")
+            : Text("Hotkey \(glyph) · \(mechanism) · last event: \(event)")
     }
 
     // MARK: - Meter
@@ -366,12 +418,12 @@ struct DictationView: View {
 
     private func phaseLabel(_ c: DictationController) -> String {
         switch c.phase {
-        case .idle:          return "Ready"
+        case .idle:          return String(localized: "Ready", comment: "Dictation state")
         case .listening:
-            guard c.micOpen else { return "Opening mic" }
-            return c.pendingPasses > 0 ? "Listening · writing…" : "Listening"
-        case .transcribing:  return "Recognizing"
-        case .inserting:     return "Inserting"
+            guard c.micOpen else { return String(localized: "Opening mic") }
+            return c.pendingPasses > 0 ? String(localized: "Listening · writing…") : String(localized: "Listening")
+        case .transcribing:  return String(localized: "Recognizing")
+        case .inserting:     return String(localized: "Inserting")
         case .message(let m): return m
         }
     }
@@ -381,14 +433,14 @@ struct DictationView: View {
     @ViewBuilder
     private func editorBlock(_ c: DictationController, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            EyebrowRow("Scratch pad · text dictated while this screen is open lands here") {
+            EyebrowRow(String(localized: "Scratch pad · text dictated while this screen is open lands here")) {
                 EmptyView()
             } right: {
                 HStack(spacing: AppMetric.m) {
                     Group {
-                        LitChip(label: "Copy") { copyAll(text.wrappedValue) }
-                        LitChip(label: "Save to library") { saveToLibrary(c, text.wrappedValue) }
-                        LitChip(label: "Clear") { text.wrappedValue = "" }
+                        LitChip(label: String(localized: "Copy")) { copyAll(text.wrappedValue) }
+                        LitChip(label: String(localized: "Save to library")) { saveToLibrary(c, text.wrappedValue) }
+                        LitChip(label: String(localized: "Clear", comment: "Empty the scratch pad")) { text.wrappedValue = "" }
                     }
                     .disabled(text.wrappedValue.isEmpty)
                     .opacity(text.wrappedValue.isEmpty ? 0.45 : 1)
@@ -416,11 +468,7 @@ struct DictationView: View {
             }
             ZStack(alignment: .topLeading) {
                 if text.wrappedValue.isEmpty {
-                    Text(c.phase == .listening && !c.previewText.isEmpty
-                         ? c.previewText + " …"
-                         : c.settings.hotkey == .off
-                         ? "Press Dictate below and start talking."
-                         : "\(c.settings.mode == .hold ? "Hold" : "Tap") \(c.settings.hotkey.label) and start talking — or press Dictate below.")
+                    Text(placeholder(c))
                         .font(AppFont.text(20))
                         .foregroundStyle(AppColor.ink2)
                         .padding(.horizontal, 10)
@@ -440,6 +488,16 @@ struct DictationView: View {
         }
     }
 
+    /// The live preview while listening, otherwise how to start.
+    private func placeholder(_ c: DictationController) -> String {
+        if c.phase == .listening && !c.previewText.isEmpty { return c.previewText + " …" }
+        if c.settings.hotkey == .off { return String(localized: "Press Dictate below and start talking.") }
+        let key = c.settings.hotkey.label
+        return c.settings.mode == .hold
+            ? String(localized: "Hold \(key) and start talking — or press Dictate below.")
+            : String(localized: "Tap \(key) and start talking — or press Dictate below.")
+    }
+
     private func copyAll(_ text: String) {
         guard !text.isEmpty else { return }
         TextInserter.copyOnly(text)
@@ -451,11 +509,24 @@ struct DictationView: View {
 
     // MARK: - Footer
 
+    private func footerSubtitle(_ c: DictationController) -> String {
+        guard c.hotkeyArmed else {
+            return c.settings.hotkey == .off ? String(localized: "Global hotkey off")
+                : String(localized: "Grant Accessibility for the global hotkey")
+        }
+        let glyph = c.settings.hotkey.glyph
+        return c.settings.mode == .hold
+            ? String(localized: "or hold \(glyph) in any app")
+            : String(localized: "or tap \(glyph) in any app")
+    }
+
     @ViewBuilder
     private func footer(_ c: DictationController) -> some View {
         switch c.phase {
         case .listening:
-            InverseFooter("Stop & insert", subtitle: c.settings.mode == .toggle ? "Flushes on pauses · tap to finish" : "Release the key or tap here",
+            InverseFooter(String(localized: "Stop & insert"),
+                          subtitle: c.settings.mode == .toggle ? String(localized: "Flushes on pauses · tap to finish")
+                              : String(localized: "Release the key or tap here"),
                           action: { c.finish() }) {
                 PulseDot()
             } right: {
@@ -467,13 +538,14 @@ struct DictationView: View {
                 }
             }
         case .transcribing, .inserting:
-            InverseFooter("Recognizing…", subtitle: c.activeMode == .smart ? "Speech, then the text model formats" : "On the Neural Engine", left: {
+            InverseFooter(String(localized: "Recognizing…"),
+                          subtitle: c.activeMode == .smart ? String(localized: "Speech, then the text model formats")
+                              : String(localized: "On the Neural Engine"), left: {
                 ProgressView().controlSize(.small).tint(AppColor.onNight)
             })
         default:
-            InverseFooter("Dictate", subtitle: c.hotkeyArmed
-                            ? "or \(c.settings.mode == .hold ? "hold" : "tap") \(c.settings.hotkey.glyph) in any app"
-                            : (c.settings.hotkey == .off ? "Global hotkey off" : "Grant Accessibility for the global hotkey"),
+            InverseFooter(String(localized: "Dictate", comment: "Dictation footer button: start dictating"),
+                          subtitle: footerSubtitle(c),
                           action: { c.begin(target: .pane) }) {
                 PulseDot(animated: false)
             } right: {

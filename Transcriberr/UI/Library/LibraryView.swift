@@ -178,7 +178,7 @@ struct LibraryView: View {
                         InkRule()
                         Spacer().frame(height: AppMetric.l)
 
-                        SectionIndex(1, "Library", summary: countSummary())
+                        SectionIndex(1, String(localized: "Library"), summary: countSummary())
                             .padding(.horizontal, AppMetric.sheetPadding)
 
                         Spacer().frame(height: AppMetric.l)
@@ -197,7 +197,7 @@ struct LibraryView: View {
 
                         Spacer().frame(height: AppMetric.sheetVerticalPadding)
 
-                        EyebrowRow("Recordings") {
+                        EyebrowRow(String(localized: "Recordings")) {
                             EmptyView()
                         } right: {
                             TapButton {
@@ -235,12 +235,12 @@ struct LibraryView: View {
     private var metricStrip: some View {
         let recs = library
         return HStack(spacing: 0) {
-            metricCell(value: "\(recs.count)", label: "Recs")
+            metricCell(value: "\(recs.count)", label: String(localized: "Recs", comment: "Library metric: number of recordings, abbreviated"))
             VRule().frame(height: 60)
-            metricCell(value: formatHM(recs.reduce(0) { $0 + $1.durationSeconds }), label: "Total")
+            metricCell(value: formatHM(recs.reduce(0) { $0 + $1.durationSeconds }), label: String(localized: "Total", comment: "Library metric: total recorded time"))
             VRule().frame(height: 60)
             let langs = Set(recs.compactMap { $0.sourceLanguage }).count
-            metricCell(value: "\(langs)", label: "Langs")
+            metricCell(value: "\(langs)", label: String(localized: "Langs", comment: "Library metric: number of languages, abbreviated"))
         }
         .frame(height: 72)
         .padding(.horizontal, AppMetric.sheetPadding)
@@ -289,9 +289,9 @@ struct LibraryView: View {
         // bought nothing and cost stability.
         return VStack(spacing: 0) {
             if rows.isEmpty {
-                Text(!appliedQuery.isEmpty ? "No matches for “\(appliedQuery)”"
-                     : (selectedFolderID != nil || selectedTagID != nil) ? "Nothing here yet"
-                     : "No recordings yet · tap + Import")
+                Text(!appliedQuery.isEmpty ? String(localized: "No matches for “\(appliedQuery)”")
+                     : (selectedFolderID != nil || selectedTagID != nil) ? String(localized: "Nothing here yet")
+                     : String(localized: "No recordings yet · tap + Import"))
                     .uiLabel(10, color: AppColor.ink3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(AppMetric.l)
@@ -322,7 +322,7 @@ struct LibraryView: View {
                         // Dictation history is the dictation's own; filing a
                         // recording there hid it from All.
                         ForEach(allFolders.filter { $0.id != rec.folder?.id && !$0.isDictation }, id: \.id) { folder in
-                            Button(folder.name) {
+                            Button(folder.shownName) {
                                 try? container.repository.move(rec, to: folder)
                             }
                         }
@@ -397,7 +397,7 @@ struct LibraryView: View {
             } catch {
                 AppLog.error("library", "merge failed: \(error.localizedDescription)")
                 let alert = NSAlert()
-                alert.messageText = "Merge failed"
+                alert.messageText = String(localized: "Merge failed")
                 alert.informativeText = error.localizedDescription
                 alert.runModal()
             }
@@ -445,7 +445,7 @@ struct LibraryView: View {
                     .multilineTextAlignment(.leading)
                 HStack(spacing: 6) {
                     if let lang = rec.sourceLanguage, !lang.isEmpty {
-                        Text(lang).uiLabel(9, color: AppColor.ink2)
+                        Text(SettingsLanguageNames.name(lang)).uiLabel(9, color: AppColor.ink2)
                         Text("·").uiLabel(9, color: AppColor.ink3)
                     }
                     if rec.translateToEnglish {
@@ -457,7 +457,7 @@ struct LibraryView: View {
                         Text("Today").uiLabel(9, color: AppColor.accentOnLight)
                     }
                     if let folder = rec.folder {
-                        Text("▸ \(folder.name)").uiLabel(9, color: AppColor.ink2)
+                        Text("▸ \(folder.shownName)").uiLabel(9, color: AppColor.ink2)
                     }
                     ForEach(rec.tags.sorted { $0.name < $1.name }, id: \.id) { tag in
                         Text("#\(tag.name)").uiLabel(9, color: AppColor.ink3)
@@ -538,9 +538,8 @@ struct LibraryView: View {
 
     private func countSummary() -> String {
         switch library.count {
-        case 0: return "No recordings yet. Tap + Import or open the Record tab."
-        case 1: return "1 recording on disk."
-        default: return "\(library.count) recordings on disk."
+        case 0: return String(localized: "No recordings yet. Tap + Import or open the Record tab.")
+        default: return String(localized: "\(library.count) recordings on disk.")
         }
     }
 
@@ -558,7 +557,7 @@ struct LibraryView: View {
             // Video: only the sound is imported, as .m4a.
             .movie, .mpeg4Movie, .quickTimeMovie,
         ]
-        panel.prompt = "Import"
+        panel.prompt = String(localized: "Import", comment: "Open panel button: import audio files")
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         let picked = panel.urls
         // One at a time: each import reads the folder to pick a free name.
@@ -571,12 +570,12 @@ struct LibraryView: View {
         let asset = AVURLAsset(url: src)
         guard try await !asset.loadTracks(withMediaType: .audio).isEmpty else {
             throw CocoaError(.fileReadCorruptFile, userInfo: [
-                NSLocalizedDescriptionKey: "\(src.lastPathComponent) has no sound to transcribe.",
+                NSLocalizedDescriptionKey: String(localized: "\(src.lastPathComponent) has no sound to transcribe."),
             ])
         }
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
             throw CocoaError(.fileReadUnsupportedScheme, userInfo: [
-                NSLocalizedDescriptionKey: "The sound of \(src.lastPathComponent) cannot be extracted.",
+                NSLocalizedDescriptionKey: String(localized: "The sound of \(src.lastPathComponent) cannot be extracted."),
             ])
         }
         try await export.export(to: dest, as: .m4a)
@@ -679,8 +678,8 @@ struct LibraryView: View {
         let total = Int(s)
         let h = total / 3600
         let m = (total % 3600) / 60
-        if h > 0 { return "\(h)h\(m)m" }
-        return "\(m)m"
+        if h > 0 { return String(localized: "\(h)h\(m)m", comment: "Library metric: hours and minutes, abbreviated") }
+        return String(localized: "\(m)m", comment: "Library metric: minutes, abbreviated")
     }
 
     private static let timeF: DateFormatter = {

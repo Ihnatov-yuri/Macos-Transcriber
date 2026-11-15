@@ -37,7 +37,7 @@ actor GenerationQueue {
 
     /// The model stayed busy for longer than the caller's `patience`.
     struct Busy: Error, LocalizedError {
-        var errorDescription: String? { "the text model is busy with another job" }
+        var errorDescription: String? { String(localized: "the text model is busy with another job") }
     }
 
     private struct Waiter {

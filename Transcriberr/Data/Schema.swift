@@ -247,6 +247,9 @@ final class Folder {
     /// passages are many and short, and drown the recordings.
     static let dictationName = "Dictation"
     var isDictation: Bool { name.caseInsensitiveCompare(Self.dictationName) == .orderedSame }
+    /// The name on screen: the dictation folder in the interface language
+    /// (its stored name stays "Dictation", which is how it is found).
+    var shownName: String { isDictation ? String(localized: "Dictation", comment: "Library folder that holds dictation history") : name }
 }
 
 /// Free-form tag; many-to-many with Recording. Same repository-enforced

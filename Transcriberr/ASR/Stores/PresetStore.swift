@@ -4,6 +4,23 @@ import Observation
 /// Mirror of `asr/PresetStore.kt` and `asr/PostProcessingPresets.kt`.
 /// Editable templates for the built-in post-processing presets, plus any
 /// presets the user adds. Each preset is one tab in Detail, in this order.
+extension PostProcessingPreset {
+    /// The name on screen. A built-in preset still under its original
+    /// English name shows in the interface language; a name the user gave
+    /// it shows as typed. The stored name never changes.
+    var shownName: String {
+        switch (id, name) {
+        case ("summary", "Summary"): String(localized: "Summary", comment: "Built-in preset")
+        case ("minutes", "Minutes"): String(localized: "Minutes", comment: "Built-in preset: minutes of a meeting")
+        case ("clean", "Clean"): String(localized: "Clean", comment: "Built-in preset: transcript without fillers")
+        case ("context_rewrite", "Context-aware rewrite"): String(localized: "Context-aware rewrite", comment: "Built-in preset")
+        case ("translate_polish", "Translate & polish"): String(localized: "Translate & polish", comment: "Built-in preset")
+        case (_, ""): String(localized: "Untitled", comment: "A preset with no name")
+        default: name
+        }
+    }
+}
+
 nonisolated struct PostProcessingPreset: Sendable, Identifiable, Codable, Equatable {
     var id: String
     var name: String
@@ -73,11 +90,11 @@ struct PresetRevision: Codable, Identifiable, Equatable, Sendable {
 
     var label: String {
         switch reason {
-        case .run: return "Used for a run"
-        case .saved: return "Saved by you"
-        case .beforeReset: return "Before reset"
-        case .beforeRestore: return "Before restore"
-        case .beforeDelete: return "Before delete"
+        case .run: return String(localized: "Used for a run", comment: "Preset history: why this version was saved")
+        case .saved: return String(localized: "Saved by you", comment: "Preset history: why this version was saved")
+        case .beforeReset: return String(localized: "Before reset", comment: "Preset history: why this version was saved")
+        case .beforeRestore: return String(localized: "Before restore", comment: "Preset history: why this version was saved")
+        case .beforeDelete: return String(localized: "Before delete", comment: "Preset history: why this version was saved")
         }
     }
 }
@@ -187,7 +204,7 @@ nonisolated final class PresetStore: @unchecked Sendable {
     /// A new preset at the end; returns its id. The default prompts ask
     /// for something short so a first try on a local model comes back quickly.
     @discardableResult
-    func add(name: String = "New preset") -> String {
+    func add(name: String = String(localized: "New preset")) -> String {
         let preset = PostProcessingPreset(
             id: Self.newId(),
             name: uniqueName(name),
@@ -215,7 +232,7 @@ nonisolated final class PresetStore: @unchecked Sendable {
         guard let idx = presets.firstIndex(where: { $0.id == id }) else { return nil }
         var copy = presets[idx]
         copy.id = Self.newId()
-        copy.name = uniqueName(copy.name + " copy")
+        copy.name = uniqueName(String(localized: "\(copy.name) copy", comment: "Name of a duplicated preset; the original's name comes first"))
         copy.outputTitle = copy.name
         presets.insert(copy, at: idx + 1)
         return copy.id

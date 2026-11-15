@@ -31,7 +31,7 @@ struct DictationSettingsTab: View {
                         HStack {
                             Text("Accessibility")
                             Spacer()
-                            Text(c.accessibilityTrusted ? "Granted" : "Not granted")
+                            (c.accessibilityTrusted ? Text("Granted", comment: "Accessibility permission state") : Text("Not granted", comment: "Accessibility permission state"))
                                 .foregroundStyle(c.accessibilityTrusted ? .primary : .secondary)
                             if !c.accessibilityTrusted {
                                 TapButton { c.openAccessibilitySettings() } label: {
@@ -69,7 +69,7 @@ struct DictationSettingsTab: View {
                             set: { s.languages = $0.isEmpty ? [] : [$0] }
                         )) {
                             Text("Auto-detect").tag("")
-                            ForEach(DictationSettings.languageOptions, id: \.self) { Text($0).tag($0) }
+                            ForEach(DictationSettings.languageOptions, id: \.self) { Text(SettingsLanguageNames.name($0)).tag($0) }
                         }
                     }
                     if filter.shows(.dictationCleanup) {

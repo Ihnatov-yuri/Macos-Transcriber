@@ -60,15 +60,18 @@ final class LibraryPeopleScan {
                 // A run in flight rewrites the segments under the match.
                 if container.jobManager.isActive(id) { continue }
                 guard let rec = try? container.repository.get(id: id), !rec.isDeleted else { continue }
-                progress = "Listening to \(i + 1) of \(ids.count): \(rec.title)"
+                progress = String(localized: "Listening to \(i + 1) of \(ids.count): \(rec.title)")
                 let n = await PeopleNamer.apply(to: rec, repository: container.repository)
                 if n > 0, !rec.isDeleted { try? TranscriptExporter.export(recording: rec) }
                 named += n
                 scanned += 1
             }
             let waiting = PeopleStore.shared.load().map { $0.candidates?.count ?? 0 }.reduce(0, +)
-            lastResult = "Listened to \(scanned) recordings, named \(named) \(named == 1 ? "speaker" : "speakers")"
-                + (waiting > 0 ? ", \(waiting) waiting for you to confirm." : ".")
+            lastResult = waiting > 0
+                // One count per string, so each takes its own plural form.
+                ? String(localized: "Listened to \(scanned) recordings.") + " " + String(localized: "Named \(named) speakers.")
+                    + " " + String(localized: "\(waiting) waiting for you to confirm.")
+                : String(localized: "Listened to \(scanned) recordings.") + " " + String(localized: "Named \(named) speakers.")
             AppLog.info("people", "library scan: \(scanned) recordings, \(named) named, \(waiting) candidates")
         }
     }
@@ -117,13 +120,13 @@ final class PeopleSuggestionRunner {
     /// one voice (VoiceGate), and only then names and saves: a group or a
     /// typed name is a guess until the voices agree.
     private func run(name: String, steps: [(UUID, Set<String>)], nameSpeakers: Bool, container: AppContainer) {
-        busy = "Listening to 1 of \(steps.count)…"
+        busy = String(localized: "Listening to 1 of \(steps.count)…")
         note = nil
         Task { @MainActor in
             defer { busy = nil }
             var learnedPrints: [(id: UUID, keys: [String], print: Voiceprint, signature: String)] = []
             for (i, step) in steps.enumerated() {
-                busy = "Listening to \(i + 1) of \(steps.count)…"
+                busy = String(localized: "Listening to \(i + 1) of \(steps.count)…")
                 guard let rec = try? container.repository.get(id: step.0), !rec.isDeleted else { continue }
                 let keys = step.1.filter { k in rec.segments.contains { $0.speaker == k } }.sorted()
                 let before = PeopleVoice.signature(rec)
@@ -180,11 +183,15 @@ final class PeopleSuggestionRunner {
             if learned > 0, let person = store.load().first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
                 for step in steps where !heard.contains(step.0) { try? store.tried(step.0, for: person.id) }
             }
-            let refusedText = refused == 0 ? "" : " \(refused) \(refused == 1 ? "recording was" : "recordings were") left out: the voice there did not clearly match the others."
-            let namedText = nameSpeakers ? "Named in \(named) \(named == 1 ? "recording" : "recordings"). " : ""
+            let refusedText = refused == 0 ? ""
+                : " " + String(localized: "\(refused) recordings were left out: the voice there did not clearly match the others.")
+            let namedText = nameSpeakers ? String(localized: "Named in \(named) recordings.") + " " : ""
+            let nothingSaved = learnedPrints.isEmpty
+                ? String(localized: "Nothing saved. No recording had enough clean speech of \(name) to learn the voice.")
+                : String(localized: "Nothing saved. The recordings did not clearly sound like one person, so none was used.")
             note = learned == 0
-                ? ("Nothing saved. \(learnedPrints.isEmpty ? "No recording had enough clean speech of \(name) to learn the voice." : "The recordings did not clearly sound like one person, so none was used.")\(refusedText)", true)
-                : ("\(namedText)Saved \(name)'s voice from \(learned) \(learned == 1 ? "recording" : "recordings"), \(Int(seconds)) s.\(refusedText)", false)
+                ? (nothingSaved + refusedText, true)
+                : (namedText + String(localized: "Saved \(name)'s voice from \(learned) recordings, \("\(Int(seconds)) s").") + refusedText, false)
         }
     }
 }
@@ -226,7 +233,7 @@ enum VoiceImprover {
         typealias Item = (recordingId: UUID?, earlier: Bool?, date: Date, print: Voiceprint, speakers: String?)
         var fresh: [Item] = []
         for (i, m) in meetings.enumerated() {
-            progress("Listening to \(i + 1) of \(meetings.count)…")
+            progress(String(localized: "Listening to \(i + 1) of \(meetings.count)…"))
             guard let rec = try? container.repository.get(id: m.id), rec.modelContext != nil,
                   let key = m.keys.sorted(by: { a, b in
                       // A diarized speaker over a hand-tagged one: it has more speech.
@@ -273,7 +280,7 @@ enum VoiceImprover {
 
         guard !chosen.isEmpty else {
             return Outcome(before: before, after: nil, applied: false, used: 0, leftOut: leftOut,
-                           message: "Nothing usable came out of the recordings, so \(person.name)'s voice is unchanged.")
+                           message: String(localized: "Nothing usable came out of the recordings, so \(person.name)'s voice is unchanged."))
         }
 
         // Scored on the same scale before anything is written.
@@ -291,7 +298,7 @@ enum VoiceImprover {
         let after = PeopleConfidence.assess(trial, others: others, unmatched: ["you"])
         guard after.score > before.score + 0.005 else {
             return Outcome(before: before, after: after, applied: false, used: chosen.count, leftOut: leftOut,
-                           message: "Rebuilt from \(fresh.count) \(fresh.count == 1 ? "recording" : "recordings"), but it scored \(after.percent)% against \(before.percent)% now, so the current voice stays. A reading at this Mac, or more meetings with \(person.name), is what would help.")
+                           message: String(localized: "Rebuilt from \(fresh.count) recordings, but it scored \("\(after.percent)%") against \("\(before.percent)%") now, so the current voice stays. A reading at this Mac, or more meetings with \(person.name), is what would help."))
         }
         do {
             try PeopleStore.shared.replaceVoice(of: person.id, samples: chosen, basedOn: person)
@@ -299,9 +306,10 @@ enum VoiceImprover {
             return Outcome(before: before, after: after, applied: false, used: 0, leftOut: leftOut,
                            message: error.localizedDescription)
         }
-        let left = leftOut == 0 ? "" : " \(leftOut) \(leftOut == 1 ? "sample did" : "samples did") not agree with the rest and \(leftOut == 1 ? "was" : "were") left out."
+        let left = leftOut == 0 ? ""
+            : " " + String(localized: "\(leftOut) samples did not agree with the rest and were left out.")
         return Outcome(before: before, after: after, applied: true, used: chosen.count, leftOut: leftOut,
-                       message: "Improved from \(before.percent)% to \(after.percent)%, rebuilt from \(chosen.count) \(chosen.count == 1 ? "sample" : "samples").\(left)")
+                       message: String(localized: "Improved from \(before.percent)% to \(after.percent)%, rebuilt from \(chosen.count) samples.") + left)
     }
 }
 
@@ -326,7 +334,8 @@ final class VoiceModelSwitcher {
         failed = false
         note = nil
         busy = model == .simam && !SimAMModel.isInstalled()
-            ? "Downloading the model (\(SimAMModel.totalBytes / 1_000_000) MB)…" : "Switching…"
+            ? String(localized: "Downloading the model (\(Int(SimAMModel.totalBytes / 1_000_000)) MB)…")
+            : String(localized: "Switching…", comment: "Changing the voice model")
         task = Task { @MainActor in
             defer { busy = nil; progress = nil; task = nil }
             do {
@@ -334,7 +343,7 @@ final class VoiceModelSwitcher {
                     try await SimAMModel.ensureDownloaded { p in Task { @MainActor in VoiceModelSwitcher.shared.progress = p } }
                     progress = nil
                 }
-                busy = "Learning your voice in the new model…"
+                busy = String(localized: "Learning your voice in the new model…")
                 do { try await PeopleEmbedder.buildMyVoice(model) } catch {
                     AppLog.warn("voice", "own voice not rebuilt for \(model.rawValue): \(error.localizedDescription)")
                 }
@@ -353,18 +362,21 @@ final class VoiceModelSwitcher {
                 var without: [String] = []
                 for (i, p) in pending.enumerated() {
                     try Task.checkCancellation()
-                    busy = "Rebuilding \(p.name)'s voice (\(i + 1) of \(pending.count))…"
+                    busy = String(localized: "Rebuilding \(p.name)'s voice (\(i + 1) of \(pending.count))…")
                     let parts = await Self.rebuild(p, model: model, container: container)
                     guard VoiceModel.current == model else { return }
                     if parts.isEmpty { without.append(p.name); continue }
                     try PeopleStore.shared.setRebuilt(p.id, parts: parts)
                 }
-                note = "Now using \(model.title.lowercased())."
-                    + (pending.isEmpty ? "" : " Rebuilt \(pending.count - without.count) of \(pending.count) voices from their recordings.")
-                    + (without.isEmpty ? "" : " No recording to rebuild \(without.joined(separator: ", ")) from: add them again on their page.")
+                let missing = without.joined(separator: ", ")
+                note = String(localized: "Now using \(model.title.lowercased()).", comment: "The argument is the voice model name")
+                    + (pending.isEmpty ? ""
+                        : " " + String(localized: "Rebuilt \(pending.count - without.count) of \(pending.count) voices from their recordings."))
+                    + (without.isEmpty ? ""
+                        : " " + String(localized: "No recording to rebuild \(missing) from: add them again on their page.", comment: "The argument is a list of people's names"))
                 AppLog.info("voice", "people now on \(model.rawValue); \(pending.count) rebuilt, \(without.count) without a source")
             } catch is CancellationError {
-                note = "Stopped. Voices not rebuilt yet are rebuilt the next time you switch."
+                note = String(localized: "Stopped. Voices not rebuilt yet are rebuilt the next time you switch.")
             } catch {
                 failed = true
                 note = error.localizedDescription

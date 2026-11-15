@@ -208,11 +208,16 @@ struct PersonPage: View {
     }
 
     private var summary: String {
-        guard let last = meetings.first else { return loaded ? "Not heard in a recording yet." : "Reading their recordings\u{2026}" }
+        guard let last = meetings.first else {
+            return loaded ? String(localized: "Not heard in a recording yet.") : String(localized: "Reading their recordings\u{2026}")
+        }
         let shown = statsMeetings
-        let count = shown.count == 1 ? "1 recording" : "\(shown.count) recordings"
-        let scope = confirmedOnly ? " confirmed (of \(meetings.count))" : ""
-        return "Heard in \(count)\(scope), \(PersonMeetings.talk(shown)) in all. Last heard \(last.date.formatted(date: .abbreviated, time: .omitted))."
+        let n = shown.count, all = meetings.count
+        let talk = PersonMeetings.talk(shown)
+        let lastHeard = last.date.formatted(date: .abbreviated, time: .omitted)
+        return confirmedOnly
+            ? String(localized: "Heard in \(n) recordings confirmed (of \(all)), \(talk) in all. Last heard \(lastHeard).")
+            : String(localized: "Heard in \(n) recordings, \(talk) in all. Last heard \(lastHeard).")
     }
 
     // MARK: Confidence and training
@@ -233,9 +238,10 @@ struct PersonPage: View {
                 .font(AppFont.text(13)).foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
             if !person.hasVoice {
-                Text(VoiceModelSwitcher.shared.busy != nil
-                     ? "Their voice is being rebuilt for the \(VoiceModel.current.title.lowercased()) voice model."
-                     : "No voice in the \(VoiceModel.current.title.lowercased()) voice model yet. Improve from my recordings learns it from the meetings they are named in.")
+                let model = VoiceModel.current.title.lowercased()
+                (VoiceModelSwitcher.shared.busy != nil
+                     ? Text("Their voice is being rebuilt for the \(model) voice model.")
+                     : Text("No voice in the \(model) voice model yet. Improve from my recordings learns it from the meetings they are named in."))
                     .font(AppFont.text(12)).foregroundStyle(AppColor.statusWarning)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let held = c.heldBack {
@@ -247,7 +253,8 @@ struct PersonPage: View {
             // The one thing to press, and what it will do.
             VStack(alignment: .leading, spacing: 6) {
                 if !weak.isEmpty {
-                    Text("Holding it back: " + weak.map { $0.title.lowercased() }.joined(separator: ", ") + ".")
+                    let factors = weak.map { $0.title.lowercased() }.joined(separator: ", ")
+                    Text("Holding it back: \(factors).", comment: "The argument is a list of confidence factors")
                         .font(AppFont.text(13, weight: .bold)).foregroundStyle(AppColor.ink)
                 }
                 HStack(spacing: AppMetric.s) {
@@ -256,16 +263,16 @@ struct PersonPage: View {
                     }
                     .disabled(busy != nil || meetings.isEmpty)
                     .help(meetings.isEmpty
-                          ? "\(person.name) is not named in any recording yet."
-                          : "Re-learns \(person.name)'s voice from the meetings they speak in, using their clearest stretches, drops samples that don't agree, and keeps the result only if it scores higher.")
+                          ? Text("\(person.name) is not named in any recording yet.")
+                          : Text("Re-learns \(person.name)'s voice from the meetings they speak in, using their clearest stretches, drops samples that don't agree, and keeps the result only if it scores higher."))
                     if let busy {
                         ProgressView().controlSize(.small)
                         Text(busy).font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
                     }
                 }
-                Text(meetings.isEmpty
-                     ? "Name \(person.name) in a recording first (Find people on the overview, or a speaker in Library)."
-                     : "Uses the \(min(meetings.count, VoiceImprover.maxRecordings)) meetings with the most of \(person.name)'s speech. Nothing changes unless the result is better.")
+                (meetings.isEmpty
+                     ? Text("Name \(person.name) in a recording first (Find people on the overview, or a speaker in Library).")
+                     : Text("Uses the \(min(meetings.count, VoiceImprover.maxRecordings)) meetings with the most of \(person.name)'s speech. Nothing changes unless the result is better."))
                     .font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -291,7 +298,7 @@ struct PersonPage: View {
                         if !todo.isEmpty {
                             TapButton { learnNamed(todo) } label: {
                                 LitButtonChrome(.secondary, compact: true) {
-                                    Text(todo.count == 1 ? "Add 1 named recording" : "Add \(todo.count) named recordings")
+                                    Text("Add \(todo.count) named recordings")
                                 }
                             }
                             .disabled(busy != nil)
@@ -300,7 +307,7 @@ struct PersonPage: View {
                 }
                 .padding(.top, AppMetric.s)
             } label: {
-                Text(showDetail ? "Hide the details" : "Why \(c.percent)%? Details and more ways to train")
+                (showDetail ? Text("Hide the details") : Text("Why \(c.percent)%? Details and more ways to train"))
                     .uiLabel(10, color: AppColor.ink2)
             }
         }
@@ -312,7 +319,7 @@ struct PersonPage: View {
         guard busy == nil else { return }
         let id = person.id
         let snapshot = person
-        training.busy[id] = "Listening…"
+        training.busy[id] = String(localized: "Listening…")
         Task { @MainActor in
             defer { training.busy[id] = nil }
             let outcome = await VoiceImprover.improve(snapshot, others: others, container: container) { text in
@@ -357,7 +364,7 @@ struct PersonPage: View {
                         LitButtonChrome(.ghost, compact: true) { Text("Forget…") }
                     }
                     .disabled(samples.count < 2 || busy != nil)
-                    .help(samples.count < 2 ? "The only sample: delete the person instead." : "Remove this sample from their voice.")
+                    .help(samples.count < 2 ? Text("The only sample: delete the person instead.") : Text("Remove this sample from their voice."))
                 }
                 HairlineSoft()
             }
@@ -367,11 +374,11 @@ struct PersonPage: View {
     }
 
     private func sampleTitle(_ s: Person.Sample) -> String {
-        if s.earlier == true { return "Learned before 5.0 (source not kept)" }
-        guard let id = s.recordingId else { return "Reading at this Mac" }
+        if s.earlier == true { return String(localized: "Learned before 5.0 (source not kept)") }
+        guard let id = s.recordingId else { return String(localized: "Reading at this Mac") }
         return meetings.first { $0.id == id }?.title
             ?? (try? container.repository.get(id: id))?.title
-            ?? "A recording since deleted"
+            ?? String(localized: "A recording since deleted")
     }
 
     private var candidatesCard: some View {
@@ -416,18 +423,20 @@ struct PersonPage: View {
         let window = min(speech.count, SpeechMeasure.window)
         return VStack(alignment: .leading, spacing: AppMetric.m) {
             Text("How they speak").cardTitle()
-            Text("Each number is the average of their last \(window == 1 ? "meeting" : "\(window) meetings")\(confirmedOnly ? " you confirmed" : ""), from the transcripts only. Talk share counts words, not seconds.")
+            (confirmedOnly
+                ? Text("Each number is the average of their last \(window) meetings you confirmed, from the transcripts only. Talk share counts words, not seconds.")
+                : Text("Each number is the average of their last \(window) meetings, from the transcripts only. Talk share counts words, not seconds."))
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 .fixedSize(horizontal: false, vertical: true)
             if let t = together {
                 let joint = speech.filter { s in
                     s.others.keys.contains { $0.caseInsensitiveCompare(TranscriptionRunner.meName(UserDefaults.standard.string(forKey: "ui.myName"))) == .orderedSame }
                 }.count
-                Text("Share of the words, in all \(joint == 1 ? "1 meeting" : "\(joint) meetings") with you").uiLabel(11, color: AppColor.ink2)
+                Text("Share of the words, in all \(joint) meetings with you").uiLabel(11, color: AppColor.ink2)
                 // The accent is the user's own figure (Lit Field §10).
-                ShareBar(parts: [("You", t.you, AppColor.accent),
+                ShareBar(parts: [(String(localized: "You", comment: "Talk share: the user"), t.you, AppColor.accent),
                                  (person.name, t.them, AppColor.ink),
-                                 ("Others", t.rest, AppColor.ink4)])
+                                 (String(localized: "Others", comment: "Talk share: everyone else in the meetings"), t.rest, AppColor.ink4)])
             }
             TileGrid {
                 ForEach([SpeechMetric.talkShare, .pace, .longestTurn, .questions, .interruptions]) { m in
@@ -455,14 +464,16 @@ struct PersonPage: View {
                         RoundedRectangle(cornerRadius: 3)
                             .fill(counts[i] > 0 ? AppColor.ink2 : AppColor.hair)
                             .frame(width: 26, height: max(3, 36 * Double(counts[i]) / most))
-                        Text(i == weeks.count - 1 ? "now" : weeks[i].formatted(.dateTime.day().month(.abbreviated)))
+                        Text(i == weeks.count - 1
+                             ? String(localized: "now", comment: "Meetings per week chart: the current week")
+                             : weeks[i].formatted(.dateTime.day().month(.abbreviated)))
                             .uiLabel(8, color: AppColor.ink4).lineLimit(1).fixedSize()
                     }
                 }
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Meetings per week, last eight weeks: \(counts.map(String.init).joined(separator: ", "))")
+        .accessibilityLabel(Text("Meetings per week, last eight weeks: \(counts.map(String.init).joined(separator: ", "))"))
     }
 
     // MARK: Brief
@@ -489,13 +500,13 @@ struct PersonPage: View {
                     let neverRead = brief.readMeetings == 0 && brief.isEmpty
                     TapButton { runner.build(person: person, meetings: meetings, container: container) } label: {
                         LitButtonChrome(neverRead || brief.unread > 0 ? .primary : .secondary, compact: true) {
-                            Text(neverRead ? "Read their meetings" : "Refresh")
+                            neverRead ? Text("Read their meetings") : Text("Refresh", comment: "Read a person's meetings again")
                         }
                     }
                     .disabled(runner.running != nil)
                     .help(engine.isLocal
-                          ? "Read \(person.name)'s meetings from the last month, and their latest one, on this Mac. Meetings read before are skipped."
-                          : "Read \(person.name)'s meetings from the last month, and their latest one. Your text engine is a cloud service: their lines are sent to it.")
+                          ? Text("Read \(person.name)'s meetings from the last month, and their latest one, on this Mac. Meetings read before are skipped.")
+                          : Text("Read \(person.name)'s meetings from the last month, and their latest one. Your text engine is a cloud service: their lines are sent to it."))
                 }
             }
             if !meetings.isEmpty {
@@ -536,22 +547,25 @@ struct PersonPage: View {
     @ViewBuilder
     private func briefBody(_ period: PersonBriefView.Period) -> some View {
         if meetings.isEmpty {
-            briefNote("Once \(person.name) is named in a recording, what they said there, what they committed to and the questions they left open can be read from it.")
+            briefNote(String(localized: "Once \(person.name) is named in a recording, what they said there, what they committed to and the questions they left open can be read from it."))
         } else if brief.meetings.isEmpty, let last = meetings.first {
-            briefNote("No meetings with \(person.name) \(period.phrase). The last one was “\(last.title)” on \(last.date.formatted(date: .abbreviated, time: .omitted)).")
+            briefNote(noMeetingsNote(period, last: last))
         } else {
             briefScope(period)
             if brief.readMeetings == 0 {
                 briefNote(brief.meetings.count == 1
-                          ? "This meeting hasn't been read yet. Read it to see what \(person.name) said, committed to and left open."
-                          : "These meetings haven't been read yet. Read them to see what \(person.name) said, committed to and left open.")
+                          ? String(localized: "This meeting hasn't been read yet. Read it to see what \(person.name) said, committed to and left open.")
+                          : String(localized: "These meetings haven't been read yet. Read them to see what \(person.name) said, committed to and left open."))
             } else {
                 briefGists(period)
-                briefList("Committed to", brief.commitments, closable: true, period: period)
-                briefList("Open questions", brief.questions, closable: true, period: period)
-                briefList("Last said on", brief.topics, closable: false, period: period)
+                briefList(String(localized: "Committed to", comment: "Person brief section: what they promised to do"),
+                          brief.commitments, closable: true, period: period)
+                briefList(String(localized: "Open questions", comment: "Person brief section"),
+                          brief.questions, closable: true, period: period)
+                briefList(String(localized: "Last said on", comment: "Person brief section: topics and what they last said about each"),
+                          brief.topics, closable: false, period: period)
                 if brief.isEmpty {
-                    briefNote("Nothing to note from \(person.name) \(period.phrase).")
+                    briefNote(nothingToNote(period))
                 }
                 if !brief.closedRows.isEmpty {
                     doneList
@@ -581,8 +595,42 @@ struct PersonPage: View {
             }
             .padding(.top, 4)
         } label: {
-            Text(brief.closedCount == 1 ? "1 done" : "\(brief.closedCount) done").uiLabel(10, color: AppColor.ink2)
+            Text("\(brief.closedCount) done", comment: "Person brief: items marked done").uiLabel(10, color: AppColor.ink2)
         }
+    }
+
+    private func noMeetingsNote(_ period: PersonBriefView.Period, last: PersonMeeting) -> String {
+        let name = person.name, title = last.title
+        let day = last.date.formatted(date: .abbreviated, time: .omitted)
+        switch period {
+        case .lastMeeting:
+            return String(localized: "No meetings with \(name) in the last meeting. The last one was “\(title)” on \(day).")
+        case .week:
+            return String(localized: "No meetings with \(name) in the last week. The last one was “\(title)” on \(day).")
+        case .month:
+            return String(localized: "No meetings with \(name) in the last month. The last one was “\(title)” on \(day).")
+        }
+    }
+
+    private func nothingToNote(_ period: PersonBriefView.Period) -> String {
+        let name = person.name
+        switch period {
+        case .lastMeeting: return String(localized: "Nothing to note from \(name) in the last meeting.")
+        case .week:        return String(localized: "Nothing to note from \(name) in the last week.")
+        case .month:       return String(localized: "Nothing to note from \(name) in the last month.")
+        }
+    }
+
+    /// "3 meetings in the last week, newest first." and what is unread.
+    private func scopeLine(_ period: PersonBriefView.Period, meetings n: Int, unread: Int) -> String {
+        let scope: String
+        switch period {
+        case .lastMeeting: scope = String(localized: "\(n) meetings in the last meeting, newest first.")
+        case .week:        scope = String(localized: "\(n) meetings in the last week, newest first.")
+        case .month:       scope = String(localized: "\(n) meetings in the last month, newest first.")
+        }
+        guard unread > 0, brief.readMeetings > 0 else { return scope }
+        return scope + " " + String(localized: "\(unread) not read yet: Refresh reads them.")
     }
 
     private func briefNote(_ text: String) -> some View {
@@ -606,8 +654,7 @@ struct PersonPage: View {
             .help("Open “\(m.title)”.")
         } else {
             let n = brief.meetings.count
-            Text((n == 1 ? "1 meeting" : "\(n) meetings") + " \(period.phrase), newest first."
-                 + (unread > 0 && brief.readMeetings > 0 ? " \(unread) not read yet: Refresh reads \(unread == 1 ? "it" : "them")." : ""))
+            Text(scopeLine(period, meetings: n, unread: unread))
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -645,9 +692,9 @@ struct PersonPage: View {
             }
         }
         if brief.gists.count < brief.readMeetings, brief.readMeetings > 0 {
-            Text(period == .lastMeeting && brief.gists.isEmpty
-                 ? "Read before summaries were added: Refresh adds one."
-                 : "Some meetings were read before summaries were added: Refresh adds them.")
+            (period == .lastMeeting && brief.gists.isEmpty
+                 ? Text("Read before summaries were added: Refresh adds one.")
+                 : Text("Some meetings were read before summaries were added: Refresh adds them."))
                 .font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
         }
     }
@@ -697,8 +744,8 @@ struct PersonPage: View {
                 Text("Meetings").cardTitle()
                 Spacer()
                 if meetings.contains(where: { !provenance($0).isConfirmed }) {
-                    LitChip(label: "All", active: !confirmedOnly) { confirmedOnly = false }
-                    LitChip(label: "Confirmed only", active: confirmedOnly) { confirmedOnly = true }
+                    LitChip(label: String(localized: "All", comment: "Meetings filter: every meeting"), active: !confirmedOnly) { confirmedOnly = false }
+                    LitChip(label: String(localized: "Confirmed only", comment: "Meetings filter"), active: confirmedOnly) { confirmedOnly = true }
                         .help("Count only meetings where you named or confirmed \(person.name), not ones a voice match or a calendar invite named. Applies on every person page and the overview.")
                 }
             }
@@ -792,7 +839,7 @@ struct PersonPage: View {
 
     private func openRecording(_ id: UUID, at seconds: Double? = nil) {
         guard let rec = try? container.repository.get(id: id), !rec.isDeleted else {
-            pageError = "That recording was deleted."
+            pageError = String(localized: "That recording was deleted.")
             return
         }
         let at = seconds ?? rec.segments.filter { $0.speakerName?.caseInsensitiveCompare(person.name) == .orderedSame }
@@ -819,11 +866,11 @@ struct PersonPage: View {
               rec.segments.contains(where: { $0.speaker == h.speaker }) else {
             // Re-run since: that speaker is gone.
             try? PeopleStore.shared.resolve(h, for: id, wasThem: false)
-            done("That speaker is no longer in the recording; it was transcribed again.", for: id)
+            done(String(localized: "That speaker is no longer in the recording; it was transcribed again."), for: id)
             return
         }
         let recId = rec.id, title = rec.title
-        training.busy[id] = "Learning from “\(title)”…"
+        training.busy[id] = String(localized: "Learning from “\(title)”…")
         Task { @MainActor in
             defer { training.busy[id] = nil }
             do {
@@ -834,9 +881,9 @@ struct PersonPage: View {
                 do {
                     let print = try await PeopleVoice.learn(speaker: h.speaker, in: rec)
                     try PeopleStore.shared.add(print, to: id, from: recId, speakers: Person.Sample.speakers([h.speaker]))
-                    done("Named in “\(title)” and added \(Int(print.seconds)) s to \(name)'s voice.", for: id)
+                    done(String(localized: "Named in “\(title)” and added \(Int(print.seconds)) s to \(name)'s voice."), for: id)
                 } catch {
-                    done("Named in “\(title)”. Their voice was not added: \(error.localizedDescription)", for: id)
+                    done(String(localized: "Named in “\(title)”. Their voice was not added: \(error.localizedDescription)"), for: id)
                 }
             } catch {
                 show(error, for: id)
@@ -849,13 +896,13 @@ struct PersonPage: View {
     private func learnNamed(_ todo: [PersonMeeting]) {
         let id = person.id, name = person.name
         guard !todo.isEmpty, busy == nil else { return }
-        training.busy[id] = "Listening to 1 of \(todo.count)…"
+        training.busy[id] = String(localized: "Listening to 1 of \(todo.count)…")
         Task { @MainActor in
             defer { training.busy[id] = nil }
             var added = 0, seconds = 0.0, skipped = 0, failed = 0, unlike = 0
             var lastFailure = ""
             for (i, m) in todo.enumerated() {
-                training.busy[id] = "Listening to \(i + 1) of \(todo.count)…"
+                training.busy[id] = String(localized: "Listening to \(i + 1) of \(todo.count)…")
                 guard let rec = try? container.repository.get(id: m.id), !rec.isDeleted else { continue }
                 // One learn per meeting: it reads every key carrying their
                 // name as one speaker, so learning each key again read the
@@ -914,21 +961,25 @@ struct PersonPage: View {
                     return
                 }
             }
-            let tail = skipped == 0 ? "" : skipped == 1
-                ? " 1 had no clean speech of \(name) to learn and will not be offered again."
-                : " \(skipped) had no clean speech of \(name) to learn and will not be offered again."
-            let failTail = (failed == 0 ? "" : " \(failed) could not be read (\(lastFailure)); they stay offered.")
-                + (unlike == 0 ? "" : " \(unlike) \(unlike == 1 ? "speaker" : "speakers") named \(name) did not sound like \(name)'s voice and \(unlike == 1 ? "was" : "were") left out.")
-            done(added == 0
-                 ? "Nothing added.\(tail)\(failTail)"
-                 : "Added \(Int(seconds)) s of speech from \(added == 1 ? "1 recording" : "\(added) recordings").\(tail)\(failTail)", for: id)
+            let tail = skipped == 0 ? ""
+                : " " + String(localized: "\(skipped) had no clean speech of \(name) to learn and will not be offered again.",
+                               comment: "The count is of recordings")
+            let failTail = (failed == 0 ? ""
+                    : " " + String(localized: "\(failed) could not be read (\(lastFailure)); they stay offered.",
+                                   comment: "The count is of recordings; the second argument is the error"))
+                + (unlike == 0 ? ""
+                    : " " + String(localized: "\(unlike) speakers named \(name) did not sound like \(name)'s voice and were left out."))
+            let head = added == 0
+                ? String(localized: "Nothing added.")
+                : String(localized: "Added \("\(Int(seconds)) s") of speech from \(added) recordings.")
+            done(head + tail + failTail, for: id)
         }
     }
 
     private func forget(_ s: Person.Sample) {
         do {
             try PeopleStore.shared.forget(sample: s.id, of: person.id)
-            done("Forgot \(Int(s.seconds)) s of \(person.name)'s voice. That recording is not offered for learning again. Names already given in recordings stay; rename a wrong one there.", for: person.id)
+            done(String(localized: "Forgot \(Int(s.seconds)) s of \(person.name)'s voice. That recording is not offered for learning again. Names already given in recordings stay; rename a wrong one there."), for: person.id)
         } catch { show(error, for: person.id) }
     }
 
@@ -1019,8 +1070,15 @@ struct FactorRow: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(factor.title): \(factor.value.map { "\(Int(($0 * 100).rounded())) percent" } ?? "not judged yet"). \(factor.detail)")
+        .accessibilityLabel(Text(spokenSummary))
     }
+    /// What VoiceOver reads for the factor.
+    private var spokenSummary: String {
+        let title = factor.title, detail = factor.detail
+        guard let v = factor.value else { return String(localized: "\(title): not judged yet. \(detail)") }
+        return String(localized: "\(title): \(Int((v * 100).rounded())) percent. \(detail)")
+    }
+
     /// Ink for a factor that holds up, the accent fill only for the weak
     /// one the advice is about: status green and red on every bar read as
     /// alarms (Lit Field §9: status colours signal state, never decorate).

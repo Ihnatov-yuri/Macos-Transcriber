@@ -74,7 +74,7 @@ nonisolated enum MeetingAsk {
     enum Failure: LocalizedError, Equatable {
         case tookTooLong
         var errorDescription: String? {
-            "It took longer than three minutes, so the question was dropped. Try again, or use Find."
+            String(localized: "It took longer than three minutes, so the question was dropped. Try again, or use Find.", comment: "Find is a button name")
         }
     }
 
@@ -96,7 +96,7 @@ nonisolated enum MeetingAsk {
         for r in recordings where r.folder?.isDictation != true {
             let date = Date(timeIntervalSince1970: TimeInterval(r.createdAtMillis) / 1000)
             for s in r.segments {
-                let who = s.speaker.map { SpeakerLabel.display(s.speakerName, key: $0) } ?? s.speakerName
+                let who = s.speaker.map { SpeakerLabel.english(s.speakerName, key: $0) } ?? s.speakerName
                 out.append(Line(recordingID: r.id, title: r.title, date: date, start: s.startSeconds,
                                 speaker: who, text: s.text))
             }

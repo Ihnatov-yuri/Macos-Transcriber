@@ -15,14 +15,14 @@ struct AssistantsSettingsSection: View {
                     .font(AppFont.text(13, weight: .bold))
             }
             .toggleStyle(.switch)
-            Text(allowed
-                 ? "Claude and other assistants connected to Transcriberr can list, search and read your transcripts, outputs, folders and tags. They can never change or delete anything."
-                 : "Off: assistants see no Transcriberr tools, and one that is already connected gets a refusal on its next request. Nothing in the library can be read.")
+            (allowed
+                 ? Text("Claude and other assistants connected to Transcriberr can list, search and read your transcripts, outputs, folders and tags. They can never change or delete anything.")
+                 : Text("Off: assistants see no Transcriberr tools, and one that is already connected gets a refusal on its next request. Nothing in the library can be read."))
                 .font(AppFont.text(11)).foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 520, alignment: .leading)
-            Text(lastRead.map { "Last read by an assistant \($0.formatted(.relative(presentation: .named)))." }
-                 ?? "No assistant has read the library yet.")
+            Text(lastRead.map { String(localized: "Last read by an assistant \($0.formatted(.relative(presentation: .named))).") }
+                 ?? String(localized: "No assistant has read the library yet."))
                 .font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

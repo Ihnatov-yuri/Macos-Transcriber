@@ -72,9 +72,9 @@ struct PeopleSection: View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
             Text("People")
                 .font(AppFont.text(13, weight: .bold))
-            Text(people.isEmpty
-                 ? "No one saved yet. Add person records someone reading at this Mac, or learns them from a speaker in a recording. Later recordings then name that person on their own."
-                 : "Later recordings name these people on their own. Adding the same name again, from another recording or a new reading, makes their voice easier to find.")
+            (people.isEmpty
+                 ? Text("No one saved yet. Add person records someone reading at this Mac, or learns them from a speaker in a recording. Later recordings then name that person on their own.")
+                 : Text("Later recordings name these people on their own. Adding the same name again, from another recording or a new reading, makes their voice easier to find."))
                 .font(AppFont.text(11))
                 .foregroundStyle(AppColor.ink2)
                 .frame(maxWidth: 520, alignment: .leading)
@@ -167,8 +167,7 @@ struct PeopleSection: View {
     }
 
     private func detail(_ p: Person) -> String {
-        let from = p.sources == 1 ? "1 recording" : "\(p.sources) recordings"
-        return "\(Int(p.print.seconds)) s from \(from)"
+        String(localized: "\("\(Int(p.print.seconds)) s") from \(p.sources) recordings")
     }
 
     private func commitRename(_ person: Person) {
@@ -199,7 +198,16 @@ struct AddPersonSheet: View {
 
     /// Their meetings first: most people are already in the user's
     /// recordings, and a reading needs them at this Mac.
-    enum Source: String, CaseIterable { case recording = "From their recordings", reading = "Record a reading" }
+    enum Source: String, CaseIterable {
+        case recording = "From their recordings", reading = "Record a reading"
+
+        var title: String {
+            switch self {
+            case .recording: String(localized: "From their recordings")
+            case .reading: String(localized: "Record a reading")
+            }
+        }
+    }
     enum Phase: Equatable { case idle, starting, recording, learning }
 
     @State private var name = ""
@@ -232,7 +240,7 @@ struct AddPersonSheet: View {
     var body: some View {
         Sheet {
             VStack(alignment: .leading, spacing: AppMetric.l) {
-                Text(myVoice ? "Add a reading of your voice" : "Add a person").uiLabel(11)
+                (myVoice ? Text("Add a reading of your voice") : Text("Add a person")).uiLabel(11)
                 Hairline()
                 if personId != nil {
                     Text("Adds a reading to \(initialName)'s voice.").font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
@@ -244,7 +252,7 @@ struct AddPersonSheet: View {
                             .disabled(phase != .idle)
                     }
                     Picker("", selection: $source) {
-                        ForEach(Source.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        ForEach(Source.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -267,7 +275,7 @@ struct AddPersonSheet: View {
                 HStack {
                     Spacer()
                     TapButton { close() } label: {
-                        LitButtonChrome(.ghost) { Text(failed || note == nil ? "Close" : "Done") }
+                        LitButtonChrome(.ghost) { failed || note == nil ? Text("Close") : Text("Done") }
                     }
                 }
             }
@@ -294,9 +302,9 @@ struct AddPersonSheet: View {
 
     @ViewBuilder private var readingPane: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
-            Text(myVoice
-                 ? "Read this aloud, about 30 seconds. Another day, room or microphone than your first reading helps most. It stops by itself."
-                 : "Ask them to read this aloud at this Mac, about 30 seconds, in any language. It stops by itself.")
+            (myVoice
+                 ? Text("Read this aloud, about 30 seconds. Another day, room or microphone than your first reading helps most. It stops by itself.")
+                 : Text("Ask them to read this aloud at this Mac, about 30 seconds, in any language. It stops by itself."))
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
             Text(VoiceprintSection.passage)
@@ -324,8 +332,8 @@ struct AddPersonSheet: View {
                 case .recording:
                     TapButton { finishReading() } label: {
                         LitButtonChrome(.accent, compact: true) {
-                            Text(elapsed >= VoiceprintSection.minimumSeconds ? "Done"
-                                 : "Keep reading… \(Int(VoiceprintSection.minimumSeconds - elapsed)) s")
+                            elapsed >= VoiceprintSection.minimumSeconds ? Text("Done")
+                                 : Text("Keep reading… \(Int(VoiceprintSection.minimumSeconds - elapsed)) s")
                         }
                     }
                     .disabled(elapsed < VoiceprintSection.minimumSeconds)
@@ -385,7 +393,7 @@ struct AddPersonSheet: View {
                     let print = try await VoiceEmbedder.shared.enroll(samples)
                     try VoiceprintStore.add(print, audio: samples)
                     failed = false
-                    note = "Added \(Int(print.seconds)) s to your voice."
+                    note = String(localized: "Added \(Int(print.seconds)) s to your voice.")
                     phase = .idle
                     return
                 }
@@ -418,7 +426,12 @@ struct AddPersonSheet: View {
             // name in, the best few learned from (most of their speech).
             if !found.isEmpty {
                 let best = found.sorted { $0.seconds > $1.seconds }.prefix(PeopleSuggestionRunner.bestRecordings)
-                Text("Found \(trimmedName) in \(found.count == 1 ? "1 recording" : "\(found.count) recordings"), \(PersonPage.duration(found.map(\.seconds).reduce(0, +))) of speech. Transcriberr learns from the best \(best.count == 1 ? "one" : "\(best.count)"), using their longest clean stretches, and keeps only what clearly sounds like one person.")
+                let foundCount = found.count
+                let bestCount = best.count
+                let speech = PersonPage.duration(found.map(\.seconds).reduce(0, +))
+                (bestCount == 1
+                    ? Text("Found \(trimmedName) in \(foundCount) recordings, \(speech) of speech. Transcriberr learns from the best one, using their longest clean stretches, and keeps only what clearly sounds like one person.")
+                    : Text("Found \(trimmedName) in \(foundCount) recordings, \(speech) of speech. Transcriberr learns from the best \(bestCount), using their longest clean stretches, and keeps only what clearly sounds like one person."))
                     .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
                     .fixedSize(horizontal: false, vertical: true)
                 ForEach(Array(best)) { m in
@@ -470,7 +483,7 @@ struct AddPersonSheet: View {
                 HStack(spacing: AppMetric.s) {
                     TapButton { learnFromRecording() } label: {
                         LitButtonChrome(.primary, compact: true) {
-                            Text(phase == .learning ? "Listening…" : "Learn this voice")
+                            phase == .learning ? Text("Listening…") : Text("Learn this voice")
                         }
                     }
                     .disabled(phase != .idle || chosen == nil || speakerKey == nil)
@@ -516,7 +529,7 @@ struct AddPersonSheet: View {
     private func checkName() -> Bool {
         guard !trimmedName.isEmpty else {
             failed = true
-            note = "Type the person's name first."
+            note = String(localized: "Type the person's name first.")
             return false
         }
         return true
@@ -525,8 +538,8 @@ struct AddPersonSheet: View {
     private func saved(_ person: Person, seconds: Double) {
         failed = false
         note = person.sources == 1
-            ? "Saved \(person.name)'s voice (\(Int(seconds)) s of speech). Recordings from now on name them on their own; Find people names older ones."
-            : "Added to \(person.name)'s voice, now learned from \(person.sources) recordings."
+            ? String(localized: "Saved \(person.name)'s voice (\(Int(seconds)) s of speech). Recordings from now on name them on their own; Find people names older ones.")
+            : String(localized: "Added to \(person.name)'s voice, now learned from \(person.sources) recordings.")
     }
 
     private func show(_ error: Error) {

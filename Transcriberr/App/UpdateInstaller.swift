@@ -86,12 +86,12 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
         do {
             stage = try Self.makeStagingDirectory()
         } catch {
-            await setPhase(.failed("Couldn't prepare the download"))
+            await setPhase(.failed(String(localized: "Couldn't prepare the download")))
             return
         }
         do {
-            guard release.installable else { throw Failure("This release can't be installed from the app") }
-            guard UpdateChecker.isNewer(release.version, than: currentVersion) else { throw Failure("Already up to date") }
+            guard release.installable else { throw Failure(String(localized: "This release can't be installed from the app")) }
+            guard UpdateChecker.isNewer(release.version, than: currentVersion) else { throw Failure(String(localized: "Already up to date")) }
             let target = Bundle.main.bundleURL
             try Self.checkCanReplace(target)
 
@@ -101,7 +101,7 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
             await setPhase(.verifying)
             guard UpdateSignature.isValid(signature: sig, version: release.version,
                                           sha256Hex: try UpdateSignature.sha256Hex(of: zip)) else {
-                throw Failure("The download failed its signature check")
+                throw Failure(String(localized: "The download failed its signature check"))
             }
             let app = try Self.unpack(zip, into: stage)
             try Self.checkBundle(app, version: release.version)
@@ -116,10 +116,10 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
             // delegate can refuse it). The helper gives up on its own; the
             // Update button must work again.
             AppLog.info("update", "quit was cancelled; \(release.version) not installed")
-            await setPhase(.failed("The update was cancelled because Transcriberr did not quit"))
+            await setPhase(.failed(String(localized: "The update was cancelled because Transcriberr did not quit")))
         } catch {
             try? FileManager.default.removeItem(at: stage)
-            let text = (error as? Failure)?.message ?? "The update couldn't be downloaded"
+            let text = (error as? Failure)?.message ?? String(localized: "The update couldn't be downloaded")
             AppLog.info("update", "install failed: \(error.localizedDescription)")
             await setPhase(.failed(text))
         }
@@ -150,7 +150,7 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
         guard target.pathExtension == "app",
               FileManager.default.isWritableFile(atPath: target.deletingLastPathComponent().path),
               !target.path.contains("/AppTranslocation/")
-        else { throw Failure("Move Transcriberr to Applications to update it from here") }
+        else { throw Failure(String(localized: "Move Transcriberr to Applications to update it from here")) }
     }
 
     private static func fetchSignature(_ url: URL) async throws -> Data {
@@ -159,7 +159,7 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
               let sig = Data(base64Encoded: String(decoding: data, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)),
               sig.count == 64
-        else { throw Failure("The release has no valid signature") }
+        else { throw Failure(String(localized: "The release has no valid signature")) }
         return sig
     }
 
@@ -217,14 +217,14 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                         completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                failure = Failure("The download failed"); completionHandler(.cancel); return
+                failure = Failure(String(localized: "The download failed")); completionHandler(.cancel); return
             }
             guard UpdateInstaller.declaredSizeAllowed(response.expectedContentLength) else {
-                failure = Failure("The download has the wrong size"); completionHandler(.cancel); return
+                failure = Failure(String(localized: "The download has the wrong size")); completionHandler(.cancel); return
             }
             guard FileManager.default.createFile(atPath: dest.path, contents: nil),
                   let h = try? FileHandle(forWritingTo: dest) else {
-                failure = Failure("The download failed"); completionHandler(.cancel); return
+                failure = Failure(String(localized: "The download failed")); completionHandler(.cancel); return
             }
             handle = h
             completionHandler(.allow)
@@ -234,7 +234,7 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
             guard failure == nil else { return }
             total += data.count
             guard total < cap else {
-                failure = Failure("The download has the wrong size")
+                failure = Failure(String(localized: "The download has the wrong size"))
                 dataTask.cancel()
                 return
             }
@@ -251,7 +251,7 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
             continuation = nil
             if let failure { c?.resume(throwing: failure) }
             else if let error { c?.resume(throwing: error) }
-            else if total == 0 { c?.resume(throwing: Failure("The download has the wrong size")) }
+            else if total == 0 { c?.resume(throwing: Failure(String(localized: "The download has the wrong size"))) }
             else { c?.resume() }
         }
     }
@@ -273,7 +273,7 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
         p.waitUntilExit()
         let items = (try? FileManager.default.contentsOfDirectory(atPath: out.path)) ?? []
         guard p.terminationStatus == 0, items == ["Transcriberr.app"] else {
-            throw Failure("The download isn't a Transcriberr app")
+            throw Failure(String(localized: "The download isn't a Transcriberr app"))
         }
         return out.appendingPathComponent("Transcriberr.app", isDirectory: true)
     }
@@ -284,21 +284,21 @@ nonisolated final class UpdateInstaller: @unchecked Sendable {
         guard let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
               let id = info["CFBundleIdentifier"] as? String, id == Bundle.main.bundleIdentifier,
               info["CFBundleShortVersionString"] as? String == version
-        else { throw Failure("The download isn't the expected version") }
+        else { throw Failure(String(localized: "The download isn't the expected version")) }
         // A release can need a newer macOS (uzu needs 26.4): swapping it in
         // on an older macOS would leave a bundle that does not launch, and no app.
         if let minimum = info["LSMinimumSystemVersion"] as? String, !runs(minimum: minimum) {
-            throw Failure("Version \(version) needs macOS \(minimum) or later. Update macOS first; this version stays installed.")
+            throw Failure(String(localized: "Version \(version) needs macOS \(minimum) or later. Update macOS first; this version stays installed."))
         }
 
         var code: SecStaticCode?
         var requirement: SecRequirement?
         guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code,
               SecRequirementCreateWithString("identifier \"\(id)\"" as CFString, [], &requirement) == errSecSuccess
-        else { throw Failure("The download's code signature can't be read") }
+        else { throw Failure(String(localized: "The download's code signature can't be read")) }
         let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode)
         guard SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess else {
-            throw Failure("The download's code signature is broken")
+            throw Failure(String(localized: "The download's code signature is broken"))
         }
     }
 

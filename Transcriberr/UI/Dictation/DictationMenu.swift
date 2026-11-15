@@ -27,7 +27,7 @@ struct DictationMenu: View {
         let s = container.dictationSettings
         Text(statusLine(c))
         Divider()
-        Button(c.phase == .listening ? "Stop & Insert" : "Start Dictation") {
+        Button(c.phase == .listening ? String(localized: "Stop & Insert") : String(localized: "Start Dictation")) {
             c.toggle(target: .frontmostApp)
         }
         .keyboardShortcut("d", modifiers: [.command, .shift])
@@ -43,7 +43,7 @@ struct DictationMenu: View {
             set: { s.languages = $0.isEmpty ? [] : [$0] }
         )) {
             Text("Auto-detect").tag("")
-            ForEach(DictationSettings.languageOptions, id: \.self) { Text($0).tag($0) }
+            ForEach(DictationSettings.languageOptions, id: \.self) { Text(SettingsLanguageNames.name($0)).tag($0) }
         }
         Picker("Default formatting", selection: Binding(get: { s.defaultMode }, set: { s.defaultMode = $0 })) {
             ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
@@ -65,15 +65,17 @@ struct DictationMenu: View {
 
     private func statusLine(_ c: DictationController) -> String {
         switch c.phase {
-        case .listening:      return "Listening…"
-        case .transcribing:   return "Recognizing…"
-        case .inserting:      return "Inserting…"
+        case .listening:      return String(localized: "Listening…")
+        case .transcribing:   return String(localized: "Recognizing…")
+        case .inserting:      return String(localized: "Inserting…")
         case .message(let m): return m
         case .idle:
-            if c.settings.hotkey == .off { return "Hotkey off" }
-            return c.hotkeyArmed
-                ? "\(c.settings.mode == .hold ? "Hold" : "Tap") \(c.settings.hotkey.label) to dictate"
-                : "Hotkey needs Accessibility access"
+            if c.settings.hotkey == .off { return String(localized: "Hotkey off") }
+            let key = c.settings.hotkey.label
+            guard c.hotkeyArmed else { return String(localized: "Hotkey needs Accessibility access") }
+            return c.settings.mode == .hold
+                ? String(localized: "Hold \(key) to dictate", comment: "Menu bar status; the argument is the hotkey name")
+                : String(localized: "Tap \(key) to dictate", comment: "Menu bar status; the argument is the hotkey name")
         }
     }
 }
@@ -96,10 +98,11 @@ struct MicrophonePicker: View {
             get: { chosen ?? "" },
             set: { settings.inputDeviceUID = $0.isEmpty ? nil : $0 }
         )) {
-            Text(AudioInputDevices.systemDefault().map { "System default — \($0.name)" } ?? "System default")
+            Text(AudioInputDevices.systemDefault().map { String(localized: "System default — \($0.name)") }
+                 ?? String(localized: "System default", comment: "Microphone menu: follow the macOS input device"))
                 .tag("")
             ForEach(mics) { mic in
-                Text(mic.isBluetooth ? "\(mic.name) (Bluetooth)" : mic.name).tag(mic.uid)
+                Text(mic.isBluetooth ? String(localized: "\(mic.name) (Bluetooth)") : mic.name).tag(mic.uid)
             }
             if let extra {
                 Text("\(extra.name) (loopback)").tag(extra.uid)

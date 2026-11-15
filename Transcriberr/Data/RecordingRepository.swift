@@ -186,7 +186,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         // after a stop): reading a deleted model crashes SwiftData.
         guard !a.isDeleted, a.modelContext != nil, !b.isDeleted, b.modelContext != nil else {
             throw NSError(domain: "Merge", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "One of the recordings was deleted while the merge waited."])
+                          userInfo: [NSLocalizedDescriptionKey: String(localized: "One of the recordings was deleted while the merge waited.")])
         }
         let pathA = a.audioPath, pathB = b.audioPath
         let decoder = AudioDecoder()
@@ -194,7 +194,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         let sb = try await decoder.decodeAll(file: URL(fileURLWithPath: pathB))
         guard !a.isDeleted, a.modelContext != nil, !b.isDeleted, b.modelContext != nil else {
             throw NSError(domain: "Merge", code: -2,
-                          userInfo: [NSLocalizedDescriptionKey: "One of the recordings was deleted while the merge read it."])
+                          userInfo: [NSLocalizedDescriptionKey: String(localized: "One of the recordings was deleted while the merge read it.")])
         }
         // Everything still needed from the sources, as values, now: the
         // awaits below take seconds and the Library stays usable, so a
@@ -213,7 +213,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
                                       sampleRate: AudioDecoder.sampleRate,
                                       channels: 1, interleaved: false) else {
             throw NSError(domain: "Merge", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "Audio format setup failed."])
+                          userInfo: [NSLocalizedDescriptionKey: String(localized: "Audio format setup failed.")])
         }
         let dir = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -327,7 +327,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         // been deleted there: segments inserted into a deleted model crash.
         guard merged.modelContext != nil, !merged.isDeleted else {
             throw NSError(domain: "Merge", code: -3, userInfo: [NSLocalizedDescriptionKey:
-                "The merged recording was deleted before its transcript was copied."])
+                String(localized: "The merged recording was deleted before its transcript was copied.")])
         }
 
         // Remap b's SPEAKER_NN keys past a's highest index.
@@ -436,7 +436,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
     enum SplitError: LocalizedError {
         case pointOutsideRecording
         var errorDescription: String? {
-            "Split point must be inside the recording, away from either end."
+            String(localized: "Split point must be inside the recording, away from either end.")
         }
     }
 
@@ -457,7 +457,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         let samples = try await decoder.decodeAll(file: URL(fileURLWithPath: recording.audioPath))
         guard recording.modelContext != nil, !recording.isDeleted else {
             throw NSError(domain: "Split", code: -3, userInfo: [
-                NSLocalizedDescriptionKey: "The recording was deleted while it was being split."])
+                NSLocalizedDescriptionKey: String(localized: "The recording was deleted while it was being split.")])
         }
         let totalSeconds = Double(samples.count) / AudioDecoder.sampleRate
         // Keep both halves non-trivial — also rules out a point outside the
@@ -473,7 +473,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
                                       sampleRate: AudioDecoder.sampleRate,
                                       channels: 1, interleaved: false) else {
             throw NSError(domain: "Split", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "Audio format setup failed."])
+                          userInfo: [NSLocalizedDescriptionKey: String(localized: "Audio format setup failed.")])
         }
         let dir = FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -542,7 +542,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         // with no text to lose — an exact clip is lossless.
         guard recording.modelContext != nil, !recording.isDeleted else {
             throw NSError(domain: "Split", code: -3, userInfo: [
-                NSLocalizedDescriptionKey: "The recording was deleted while it was being split."])
+                NSLocalizedDescriptionKey: String(localized: "The recording was deleted while it was being split.")])
         }
         if let d = try? Data(contentsOf: sidecarPath(recording.audioPath, "me.json")),
            let iv = try? JSONDecoder().decode([[Double]].self, from: d) {
@@ -630,11 +630,11 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
 
             guard recording.modelContext != nil, !recording.isDeleted else {
                 throw NSError(domain: "Split", code: -3, userInfo: [
-                    NSLocalizedDescriptionKey: "The recording was deleted while it was being split."])
+                    NSLocalizedDescriptionKey: String(localized: "The recording was deleted while it was being split.")])
             }
             guard recording.segments.count == sourceSegmentCount else {
                 throw NSError(domain: "Split", code: -2, userInfo: [
-                    NSLocalizedDescriptionKey: "The recording changed while splitting (a transcription may still be running) — try again."
+                    NSLocalizedDescriptionKey: String(localized: "The recording changed while splitting (a transcription may still be running) — try again.")
                 ])
             }
             // Segments: whichever half contains an utterance's MIDPOINT gets
@@ -1542,8 +1542,8 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
 
         var errorDescription: String? {
             switch self {
-            case .emptyName: return "Name cannot be empty."
-            case .duplicateName(let n): return "'\(n)' already exists."
+            case .emptyName: return String(localized: "Name cannot be empty.")
+            case .duplicateName(let n): return String(localized: "'\(n)' already exists.", comment: "A folder or tag name that is taken")
             }
         }
     }

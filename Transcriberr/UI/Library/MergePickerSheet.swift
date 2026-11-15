@@ -42,14 +42,14 @@ nonisolated enum MergePicker {
     /// "Starts 3 min after", "Ended 2 h before", "Overlaps".
     static func relation(_ c: MergeCandidate, to source: MergeCandidate) -> String {
         let g = c.gap(from: source)
-        if g == 0 { return "Overlaps this one" }
+        if g == 0 { return String(localized: "Overlaps this one") }
         let span = abs(g)
         let amount: String
-        if span < 60 { amount = "\(Int(span.rounded())) s" }
-        else if span < 3600 { amount = "\(Int((span / 60).rounded())) min" }
-        else if span < 86_400 * 2 { amount = "\(Int((span / 3600).rounded())) h" }
-        else { amount = "\(Int((span / 86_400).rounded())) days" }
-        return g > 0 ? "Starts \(amount) after this one" : "Ended \(amount) before this one"
+        if span < 60 { amount = String(localized: "\(Int(span.rounded())) s", comment: "Seconds, abbreviated") }
+        else if span < 3600 { amount = String(localized: "\(Int((span / 60).rounded())) min", comment: "Minutes, abbreviated") }
+        else if span < 86_400 * 2 { amount = String(localized: "\(Int((span / 3600).rounded())) h", comment: "Hours, abbreviated") }
+        else { amount = String(localized: "\(Int((span / 86_400).rounded())) days") }
+        return g > 0 ? String(localized: "Starts \(amount) after this one") : String(localized: "Ended \(amount) before this one")
     }
 }
 
@@ -97,7 +97,7 @@ struct MergePickerSheet: View {
                             HairlineSoft()
                         }
                         if shown.isEmpty {
-                            Text(query.isEmpty ? "No other recordings." : "No recording matches “\(query)”.")
+                            Text(query.isEmpty ? String(localized: "No other recordings.") : String(localized: "No recording matches “\(query)”."))
                                 .font(AppFont.text(12))
                                 .foregroundStyle(AppColor.ink3)
                                 .padding(.vertical, AppMetric.m)

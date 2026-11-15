@@ -107,11 +107,14 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
 
     enum CaptureError: LocalizedError {
         case permission, noInput(String)
+        /// The tap or the engine start failed: often a format change nobody
+        /// announced, so `start()` retries once with a fresh engine.
+        case engineStart(String)
         var errorDescription: String? {
             switch self {
             case .permission:
-                return "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone."
-            case .noInput(let r):
+                return String(localized: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone.")
+            case .noInput(let r), .engineStart(let r):
                 return r
             }
         }
@@ -164,9 +167,9 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         do {
             try ExceptionTrap.run { grabbedInput = self.engine.inputNode }
         } catch {
-            throw CaptureError.noInput("Audio input unavailable: \(error.localizedDescription)")
+            throw CaptureError.noInput(String(localized: "Audio input unavailable: \(error.localizedDescription)"))
         }
-        guard let input = grabbedInput else { throw CaptureError.noInput("No audio input device.") }
+        guard let input = grabbedInput else { throw CaptureError.noInput(String(localized: "No audio input device.")) }
         if configObserver == nil {
             configObserver = NotificationCenter.default.addObserver(
                 forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
@@ -289,8 +292,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         }
         do {
             try await startOnce()
-        } catch CaptureError.noInput(let reason)
-                    where reason.hasPrefix("Couldn't install audio tap") || reason.hasPrefix("Audio engine failed to start") {
+        } catch CaptureError.engineStart(let reason) {
             // A format change nobody announced (no configuration-change
             // notification reached us) looks exactly like this. A fresh
             // engine reads the device as it is now. Once — a second failure
@@ -355,16 +357,16 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         do {
             try ExceptionTrap.run { nativeFormat = input.outputFormat(forBus: 0) }
         } catch {
-            throw CaptureError.noInput("Couldn't read input format: \(error.localizedDescription)")
+            throw CaptureError.noInput(String(localized: "Couldn't read input format: \(error.localizedDescription)"))
         }
         guard let nativeFormat, nativeFormat.channelCount > 0, nativeFormat.sampleRate > 0 else {
-            throw CaptureError.noInput("No microphone available (check System Settings → Privacy & Security → Microphone).")
+            throw CaptureError.noInput(String(localized: "No microphone available (check System Settings → Privacy & Security → Microphone)."))
         }
         guard let monoFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32, sampleRate: nativeFormat.sampleRate,
             channels: 1, interleaved: false
         ), let converter = AVAudioConverter(from: monoFormat, to: targetFormat) else {
-            throw CaptureError.noInput("Cannot build audio converter.")
+            throw CaptureError.noInput(String(localized: "Cannot build audio converter."))
         }
         converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Normal
         converter.sampleRateConverterQuality = AVAudioQuality.high.rawValue
@@ -378,7 +380,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
                 }
             }
         } catch {
-            throw CaptureError.noInput("Couldn't install audio tap: \(error.localizedDescription)")
+            throw CaptureError.engineStart(String(localized: "Couldn't install audio tap: \(error.localizedDescription)"))
         }
         do {
             try ExceptionTrap.run { self.engine.prepare() }
@@ -390,7 +392,7 @@ nonisolated final class UtteranceCapture: @unchecked Sendable {
         } catch {
             try? ExceptionTrap.run { input.removeTap(onBus: 0) }
             ioQueue.sync { io.converter = nil }
-            throw CaptureError.noInput("Audio engine failed to start: \(error.localizedDescription)")
+            throw CaptureError.engineStart(String(localized: "Audio engine failed to start: \(error.localizedDescription)"))
         }
 
         startedAt = Date()

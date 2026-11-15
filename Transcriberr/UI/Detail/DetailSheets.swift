@@ -147,8 +147,8 @@ struct SpeakerRenameSheet: View {
                     }
                 }
                 Toggle(isOn: $learnVoice) {
-                    Text(savedMatch.map { "Add this meeting to \($0.name)'s voice" }
-                         ?? "Remember their voice, so later recordings name them on their own")
+                    Text(savedMatch.map { String(localized: "Add this meeting to \($0.name)'s voice") }
+                         ?? String(localized: "Remember their voice, so later recordings name them on their own"))
                         .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
                 }
                 .toggleStyle(.checkbox)
@@ -192,9 +192,9 @@ struct SpeakerRenameSheet: View {
                     TapButton { (onCancel ?? onClose)() } label: { LitButtonChrome(.ghost) { Text("Cancel") } }
                     TapButton { save() } label: {
                         LitButtonChrome(.primary) {
-                            Text(working ? "Learning…" : named ? (hasNext ? "Next" : "Done")
-                                 : trimmed.isEmpty ? (hasNext ? "Skip" : "Close")
-                                 : hasNext ? "Save & next" : "Save")
+                            Text(working ? String(localized: "Learning…") : named ? (hasNext ? String(localized: "Next", comment: "Speaker naming: go to the next speaker") : String(localized: "Done", comment: "Speaker naming: finish"))
+                                 : trimmed.isEmpty ? (hasNext ? String(localized: "Skip", comment: "Speaker naming: leave this speaker unnamed") : String(localized: "Close"))
+                                 : hasNext ? String(localized: "Save & next") : String(localized: "Save"))
                         }
                     }
                     .disabled(working)
@@ -220,8 +220,8 @@ struct SpeakerRenameSheet: View {
             $0.speaker != speakerKey && $0.speakerName?.caseInsensitiveCompare(p.name) == .orderedSame
         }
         return alsoHere
-            ? "This speaker doesn't sound like \(p.name), who already speaks in this meeting. Saving joins the two into one. Listen first if you're not sure."
-            : "This speaker doesn't sound like \(p.name)'s saved voice. Listen first if you're not sure."
+            ? String(localized: "This speaker doesn't sound like \(p.name), who already speaks in this meeting. Saving joins the two into one. Listen first if you're not sure.")
+            : String(localized: "This speaker doesn't sound like \(p.name)'s saved voice. Listen first if you're not sure.")
     }
 
     /// Ranks saved people by how much this speaker sounds like them, on
@@ -306,7 +306,7 @@ struct SpeakerRenameSheet: View {
             guard recording.modelContext != nil else { onClose(); return }
             guard PeopleVoice.signature(recording) == before else {
                 failed = true
-                note = "The transcript changed while the voice was read. Nothing was changed; try again."
+                note = String(localized: "The transcript changed while the voice was read. Nothing was changed; try again.")
                 return
             }
             name()
@@ -317,7 +317,7 @@ struct SpeakerRenameSheet: View {
                 onClose()
             } catch {
                 failed = true
-                note = "Named \(value). The voice was not added: \(error.localizedDescription)"
+                note = String(localized: "Named \(value). The voice was not added: \(error.localizedDescription)")
             }
         }
     }
@@ -443,23 +443,22 @@ struct SegmentEditSheet: View {
 
         let alert = NSAlert()
         if others.isEmpty {
-            alert.messageText = "Add “\(change.new)” to your vocabulary?"
-            alert.informativeText = "The speech engines and the presets will spell it this way from now on."
-            alert.addButton(withTitle: "Add to Vocabulary")
-            alert.addButton(withTitle: "Not Now")
+            alert.messageText = String(localized: "Add “\(change.new)” to your vocabulary?")
+            alert.informativeText = String(localized: "The speech engines and the presets will spell it this way from now on.")
+            alert.addButton(withTitle: String(localized: "Add to Vocabulary"))
+            alert.addButton(withTitle: String(localized: "Not Now"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             container.promptStore.learnTerm(change.new, language: language)
             AppLog.info("detail", "correction: learned \"\(change.new)\"")
             return
         }
-        let lines = others.count == 1 ? "1 more line" : "\(others.count) more lines"
-        alert.messageText = "Change “\(change.old)” to “\(change.new)” everywhere?"
-        alert.informativeText = "\(lines) in this recording \(others.count == 1 ? "says" : "say") “\(change.old)”."
-        alert.addButton(withTitle: others.count == 1 ? "Change 1 More" : "Change \(others.count) More")
-        alert.addButton(withTitle: "Only This Line")
+        alert.messageText = String(localized: "Change “\(change.old)” to “\(change.new)” everywhere?")
+        alert.informativeText = String(localized: "\(others.count) more lines in this recording say “\(change.old)”.")
+        alert.addButton(withTitle: String(localized: "Change \(others.count) More"))
+        alert.addButton(withTitle: String(localized: "Only This Line"))
         if isTerm {
             alert.showsSuppressionButton = true
-            alert.suppressionButton?.title = "Also add “\(change.new)” to the vocabulary"
+            alert.suppressionButton?.title = String(localized: "Also add “\(change.new)” to the vocabulary")
             alert.suppressionButton?.state = .on
         }
         let everywhere = alert.runModal() == .alertFirstButtonReturn
@@ -475,7 +474,7 @@ struct SegmentEditSheet: View {
             AppLog.info("detail", "correction: \"\(change.old)\" → \"\(change.new)\" in \(changed.count) more line(s)")
         } catch {
             let failure = NSAlert()
-            failure.messageText = "Couldn't change the other lines"
+            failure.messageText = String(localized: "Couldn't change the other lines")
             failure.informativeText = error.localizedDescription
             failure.runModal()
         }
@@ -552,7 +551,7 @@ struct SplitRecordingSheet: View {
                     .opacity(isWorking ? 0.4 : 1)
                     Spacer()
                     TapButton { split() } label: {
-                        LitButtonChrome(.primary) { Text(isWorking ? "Splitting…" : "Split") }
+                        LitButtonChrome(.primary) { Text(isWorking ? String(localized: "Splitting…") : String(localized: "Split", comment: "Button: split the recording in two")) }
                     }
                     .disabled(isWorking)
                 }
@@ -568,7 +567,7 @@ struct SplitRecordingSheet: View {
     private func split() {
         guard !isWorking else { return }
         guard let secs = Self.parse(timeText) else {
-            error = "Enter a time as mm:ss."
+            error = String(localized: "Enter a time as mm:ss.")
             return
         }
         error = nil
@@ -587,12 +586,11 @@ struct SplitRecordingSheet: View {
 
     private func confirmDeleteOriginal(first: Recording) {
         let alert = NSAlert()
-        alert.messageText = "Split into two recordings"
-        alert.informativeText = "“\(recording.title)” became “\(first.title)” and a second recording. "
-            + "Delete the original, or keep all three?"
+        alert.messageText = String(localized: "Split into two recordings")
+        alert.informativeText = String(localized: "“\(recording.title)” became “\(first.title)” and a second recording. Delete the original, or keep all three?")
         // Keep is the default: Return must never delete anything.
-        alert.addButton(withTitle: "Keep Original")
-        let delete = alert.addButton(withTitle: "Delete Original")
+        alert.addButton(withTitle: String(localized: "Keep Original"))
+        let delete = alert.addButton(withTitle: String(localized: "Delete Original"))
         delete.hasDestructiveAction = true
         guard alert.runModal() == .alertSecondButtonReturn else {
             onDone(false)
@@ -607,7 +605,7 @@ struct SplitRecordingSheet: View {
             // tell the caller to close its view on the original as if it
             // were gone, when it's still sitting right there in the library.
             let failure = NSAlert()
-            failure.messageText = "Couldn't delete the original"
+            failure.messageText = String(localized: "Couldn't delete the original")
             failure.informativeText = error.localizedDescription
             failure.runModal()
             onDone(false)

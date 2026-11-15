@@ -152,12 +152,12 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         case .notDetermined:
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             if !granted {
-                await setState(.failed(reason: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone, then try again."))
+                await setState(.failed(reason: String(localized: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone, then try again.")))
                 AppLog.error("recorder", "microphone permission denied")
                 throw RecorderError.noInput
             }
         case .denied, .restricted:
-            await setState(.failed(reason: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone, then try again."))
+            await setState(.failed(reason: String(localized: "Microphone access denied. Grant it in System Settings → Privacy & Security → Microphone, then try again.")))
             AppLog.error("recorder", "microphone permission denied/restricted")
             throw RecorderError.noInput
         @unknown default:
@@ -200,12 +200,12 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         do {
             try ExceptionTrap.run { grabbedInput = self.engine.inputNode }
         } catch {
-            await setState(.failed(reason: "Audio input unavailable: \(error.localizedDescription)"))
+            await setState(.failed(reason: String(localized: "Audio input unavailable: \(error.localizedDescription)")))
             AppLog.error("recorder", "engine.inputNode threw: \(error.localizedDescription)")
             throw RecorderError.noInput
         }
         guard let input = grabbedInput else {
-            await setState(.failed(reason: "No audio input device."))
+            await setState(.failed(reason: String(localized: "No audio input device.")))
             throw RecorderError.noInput
         }
 
@@ -261,16 +261,16 @@ nonisolated final class WavRecorder: @unchecked Sendable {
                 nativeFormat = input.outputFormat(forBus: 0)
             }
         } catch {
-            await setState(.failed(reason: "Couldn't read input format: \(error.localizedDescription)"))
+            await setState(.failed(reason: String(localized: "Couldn't read input format: \(error.localizedDescription)")))
             AppLog.error("recorder", "outputFormat threw: \(error.localizedDescription)")
             throw RecorderError.noInput
         }
         guard let nativeFormat else {
-            await setState(.failed(reason: "Input format unavailable."))
+            await setState(.failed(reason: String(localized: "Input format unavailable.")))
             throw RecorderError.noInput
         }
         guard nativeFormat.channelCount > 0, nativeFormat.sampleRate > 0 else {
-            await setState(.failed(reason: "No microphone available (check System Settings → Privacy & Security → Microphone)."))
+            await setState(.failed(reason: String(localized: "No microphone available (check System Settings → Privacy & Security → Microphone).")))
             AppLog.error("recorder", "input has no channels: channelCount=\(nativeFormat.channelCount) sampleRate=\(nativeFormat.sampleRate)")
             throw RecorderError.noInput
         }
@@ -288,11 +288,11 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             channels: 1,
             interleaved: false
         ) else {
-            await setState(.failed(reason: "Cannot build mono input format."))
+            await setState(.failed(reason: String(localized: "Cannot build mono input format.")))
             throw RecorderError.noInput
         }
         guard let converter = AVAudioConverter(from: nativeMonoFormat, to: targetFormat) else {
-            await setState(.failed(reason: "Cannot build audio converter."))
+            await setState(.failed(reason: String(localized: "Cannot build audio converter.")))
             throw RecorderError.noInput
         }
         // Normal (not Mastering): Mastering is an offline algorithm with huge
@@ -308,7 +308,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             file = try AVAudioFile(forWriting: url, settings: targetFormat.settings,
                                    commonFormat: .pcmFormatFloat32, interleaved: false)
         } catch {
-            let reason = "Cannot open output file (\(error.localizedDescription)). Try recording again."
+            let reason = String(localized: "Cannot open output file (\(error.localizedDescription)). Try recording again.")
             await setState(.failed(reason: reason))
             AppLog.error("recorder", "AVAudioFile.init failed: \(error.localizedDescription)")
             throw RecorderError.io(reason)
@@ -330,7 +330,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             }
         } catch {
             discardPartialFile(url)
-            await setState(.failed(reason: "Couldn't install audio tap: \(error.localizedDescription)"))
+            await setState(.failed(reason: String(localized: "Couldn't install audio tap: \(error.localizedDescription)")))
             AppLog.error("recorder", "installTap threw: \(error.localizedDescription)")
             throw RecorderError.noInput
         }
@@ -344,7 +344,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         } catch {
             try? ExceptionTrap.run { input.removeTap(onBus: 0) }
             discardPartialFile(url)
-            await setState(.failed(reason: "Audio engine failed to prepare: \(error.localizedDescription)"))
+            await setState(.failed(reason: String(localized: "Audio engine failed to prepare: \(error.localizedDescription)")))
             AppLog.error("recorder", "engine.prepare threw: \(error.localizedDescription)")
             throw RecorderError.noInput
         }
@@ -367,7 +367,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         if let startError {
             try? ExceptionTrap.run { input.removeTap(onBus: 0) }
             discardPartialFile(url)
-            await setState(.failed(reason: "AVAudioEngine.start failed: \(startError.localizedDescription)"))
+            await setState(.failed(reason: String(localized: "AVAudioEngine.start failed: \(startError.localizedDescription)")))
             AppLog.error("recorder", "engine.start failed: \(startError.localizedDescription)")
             throw startError
         }
@@ -429,7 +429,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         func fail(_ reason: String) {
             AppLog.error("recorder", reason)
             // Stop still salvages the file from a failed state (`openFileURL`).
-            state = .failed(reason: "The microphone changed and recording could not continue (\(reason)). Press Stop to keep what was recorded.")
+            state = .failed(reason: String(localized: "The microphone changed and recording could not continue (\(reason)). Press Stop to keep what was recorded."))
         }
 
         let input = engine.inputNode
@@ -505,7 +505,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
             startError = error
         }
         if let startError {
-            state = .failed(reason: "Resume failed: \(startError.localizedDescription)")
+            state = .failed(reason: String(localized: "Resume failed: \(startError.localizedDescription)"))
         } else {
             state = .recording(file: file)
             // The ticker stopped itself on pause — bring it back.
@@ -878,7 +878,7 @@ nonisolated final class WavRecorder: @unchecked Sendable {
         case io(String)
         var errorDescription: String? {
             switch self {
-            case .noInput: return "No audio input available."
+            case .noInput: return String(localized: "No audio input available.")
             case .io(let reason): return reason
             }
         }

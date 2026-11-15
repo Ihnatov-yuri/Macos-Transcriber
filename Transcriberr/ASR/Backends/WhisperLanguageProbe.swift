@@ -134,19 +134,28 @@ nonisolated enum LanguageOverrideLog {
         heard.sort { $0.1 > $1.1 }
         var targets: [String] = []
         for e in entries where !targets.contains(e.to) { targets.append(e.to) }
-        let heardText = list(heard.map { "\(name($0.0)) in \($0.1) \($0.1 == 1 ? "part" : "parts")" })
-        return "Whisper first heard \(heardText), and transcribed them as \(list(targets.map(name)))."
+        let heardText = list(heard.map { (code, count) in
+            let language = name(code)
+            return String(localized: "\(language) in \(count) parts",
+                          comment: "Run note: a language Whisper first heard, and in how many parts of the recording")
+        })
+        let targetText = list(targets.map(name))
+        return String(localized: "Whisper first heard \(heardText), and transcribed them as \(targetText).",
+                      comment: "Run note: the first is a list like “Turkish in 2 parts and Dutch in 1 part”, the second a list of languages")
+    }
+
+    /// In the interface language, like the note it goes into.
+    private static var interfaceLocale: Locale {
+        Locale(identifier: Bundle.main.preferredLocalizations.first ?? "en")
     }
 
     private static func name(_ code: String) -> String {
-        Locale(identifier: "en").localizedString(forLanguageCode: code) ?? code
+        interfaceLocale.localizedString(forLanguageCode: code) ?? code
     }
 
     private static func list(_ items: [String]) -> String {
-        switch items.count {
-        case 0: return ""
-        case 1: return items[0]
-        default: return items.dropLast().joined(separator: ", ") + " and " + items.last!
-        }
+        let formatter = ListFormatter()
+        formatter.locale = interfaceLocale
+        return formatter.string(from: items) ?? items.joined(separator: ", ")
     }
 }

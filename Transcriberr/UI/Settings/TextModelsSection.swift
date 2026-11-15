@@ -94,9 +94,9 @@ struct TextModelsSection: View {
         let downloader = container.modelDownloader
         if let pick = ModelCatalog.entry(id: id), !downloader.isCached(pick) {
             let running = ModelCatalog.selected(role)
-            Text(downloader.isCached(running)
-                 ? "\(pick.name) is not downloaded yet: \(running.name) does this until it is."
-                 : "\(pick.name) is not downloaded yet, and no text model is: download one below. Until then summaries, titles, briefs and Super's rulings are off.")
+            (downloader.isCached(running)
+                 ? Text("\(pick.name) is not downloaded yet: \(running.name) does this until it is.")
+                 : Text("\(pick.name) is not downloaded yet, and no text model is: download one below. Until then summaries, titles, briefs and Super's rulings are off."))
                 .font(AppFont.text(12, weight: .semibold))
                 .foregroundStyle(downloader.isCached(running) ? AppColor.statusWarning : AppColor.statusError)
                 .fixedSize(horizontal: false, vertical: true)
@@ -106,15 +106,19 @@ struct TextModelsSection: View {
     private func roles(of entry: ModelEntry) -> [String] {
         var roles: [String] = []
         if container.uiPrefs.superTextModelID == entry.id { roles.append("Super") }
-        if container.uiPrefs.textModelID == entry.id { roles.append("Everything else") }
+        if container.uiPrefs.textModelID == entry.id { roles.append(String(localized: "Everything else", comment: "The text model role for everything but Super merge")) }
         return roles
     }
 
     private func choiceLabel(_ entry: ModelEntry) -> String {
-        var label = entry.name
-        if !container.modelDownloader.isCached(entry) { label += " · not downloaded" }
-        if Self.ramGB < entry.minRAMGB { label += " · needs a \(entry.minRAMGB) GB Mac" }
-        return label
+        let name = entry.name
+        let minRAM = entry.minRAMGB
+        switch (container.modelDownloader.isCached(entry), Self.ramGB < minRAM) {
+        case (true, false): return name
+        case (false, false): return String(localized: "\(name) · not downloaded")
+        case (true, true): return String(localized: "\(name) · needs a \(minRAM) GB Mac")
+        case (false, true): return String(localized: "\(name) · not downloaded · needs a \(minRAM) GB Mac")
+        }
     }
 }
 
@@ -155,16 +159,16 @@ private struct ModelComparison: View {
     private var measures: [Measure] {
         let speedMax = ModelCatalog.entries.map { Swift.max($0.measured.cleanupTokensPerSecond, $0.measured.summaryTokensPerSecond) }.max() ?? 1
         return [
-            Measure(title: "Quality in Ukrainian", note: "blind test, 1 to 5", higherIsBetter: true, max: 5,
+            Measure(title: String(localized: "Quality in Ukrainian"), note: String(localized: "blind test, 1 to 5"), higherIsBetter: true, max: 5,
                     value: { $0.measured.ukrainianScore }, text: { String(format: "%.1f", $0.measured.ukrainianScore) }),
-            Measure(title: "Quality in English", note: "blind test, 1 to 5", higherIsBetter: true, max: 5,
+            Measure(title: String(localized: "Quality in English"), note: String(localized: "blind test, 1 to 5"), higherIsBetter: true, max: 5,
                     value: { $0.measured.englishScore }, text: { String(format: "%.1f", $0.measured.englishScore) }),
-            Measure(title: "Cleanup and dictation speed", note: "tokens per second", higherIsBetter: true, max: speedMax,
+            Measure(title: String(localized: "Cleanup and dictation speed"), note: String(localized: "tokens per second"), higherIsBetter: true, max: speedMax,
                     value: { $0.measured.cleanupTokensPerSecond }, text: { "\(Int($0.measured.cleanupTokensPerSecond))" }),
-            Measure(title: "Summary speed", note: "long meetings, tokens per second", higherIsBetter: true, max: speedMax,
+            Measure(title: String(localized: "Summary speed"), note: String(localized: "long meetings, tokens per second"), higherIsBetter: true, max: speedMax,
                     value: { $0.measured.summaryTokensPerSecond }, text: { "\(Int($0.measured.summaryTokensPerSecond))" }),
-            Measure(title: "Memory while working", note: "GB of this Mac's \(ramGB) GB, less is better", higherIsBetter: false,
-                    max: Double(ramGB), value: { Double($0.peakMemoryGB) }, text: { "\($0.peakMemoryGB) GB" }),
+            Measure(title: String(localized: "Memory while working"), note: String(localized: "GB of this Mac's \(ramGB) GB, less is better"), higherIsBetter: false,
+                    max: Double(ramGB), value: { Double($0.peakMemoryGB) }, text: { String(localized: "\($0.peakMemoryGB) GB") }),
         ]
     }
 
@@ -194,7 +198,7 @@ private struct ModelComparison: View {
               }
               .contentShape(Rectangle())
             }
-            .accessibilityLabel(isOpen ? "Hide how the models compare" : "Show how the models compare")
+            .accessibilityLabel(isOpen ? Text("Hide how the models compare") : Text("Show how the models compare"))
             if isOpen {
             ForEach(measures, id: \.title) { m in
                 let best = m.higherIsBetter
@@ -248,7 +252,7 @@ private struct ComparisonBar: View {
                     .monospacedDigit()
                     .foregroundStyle(best ? AppColor.ink : AppColor.ink3)
                 if best {
-                    Text("best")
+                    Text("best", comment: "Marks the model that leads a measure")
                         .font(AppFont.display(10, weight: .semibold))
                         .foregroundStyle(AppColor.ink)
                         .padding(.horizontal, 6).padding(.vertical, 1)
@@ -258,7 +262,7 @@ private struct ComparisonBar: View {
             .frame(width: 90, alignment: .leading)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(name): \(text)\(best ? ", best" : "")")
+        .accessibilityLabel(best ? Text("\(name): \(text), best") : Text(verbatim: "\(name): \(text)"))
     }
 }
 
@@ -295,7 +299,7 @@ private struct TextModelCard: View {
                 }
                 Spacer(minLength: AppMetric.m)
                 VStack(alignment: .trailing, spacing: 6) {
-                    Text(Self.gigabytes(entry.sizeBytes) + " download").uiLabel(10, color: AppColor.ink3)
+                    Text("\(Self.gigabytes(entry.sizeBytes)) download").uiLabel(10, color: AppColor.ink3)
                     action
                 }
                 .frame(minWidth: 120, alignment: .trailing)
@@ -316,7 +320,9 @@ private struct TextModelCard: View {
             } else if let info = container.modelDownloader.progress[entry.id], info.status.hasPrefix("Failed") {
                 Text(info.status).font(AppFont.text(12)).foregroundStyle(AppColor.statusError)
             }
-            Text("\(entry.runtime == .mlx ? "Runs on MLX" : "Runs on uzu") · huggingface.co/\(entry.huggingFaceID)")
+            (entry.runtime == .mlx
+                ? Text("Runs on MLX · huggingface.co/\(entry.huggingFaceID)")
+                : Text("Runs on uzu · huggingface.co/\(entry.huggingFaceID)"))
                 .uiLabel(10, color: AppColor.ink3)
         }
         .padding(AppMetric.m)
@@ -352,12 +358,18 @@ private struct TextModelCard: View {
 
     /// Says what the delete changes when the model is in use.
     private var deleteMessage: String {
-        let base = "Frees \(Self.gigabytes(entry.sizeBytes)). You can download it again any time."
-        guard !roles.isEmpty else { return base }
+        let base = String(localized: "Frees \(Self.gigabytes(entry.sizeBytes)). You can download it again any time.")
+        let forSuper = container.uiPrefs.superTextModelID == entry.id
+        let forElse = container.uiPrefs.textModelID == entry.id
+        guard forSuper || forElse else { return base }
+        // Whole sentences, so each one translates.
+        let pick = forSuper && forElse ? String(localized: "It is your pick for Super and for everything else.")
+            : forSuper ? String(localized: "It is your pick for Super.")
+            : String(localized: "It is your pick for everything else.")
         let others = ModelCatalog.preference.filter { $0.id != entry.id && container.modelDownloader.isCached($0) }
-        let instead = others.first.map { "\($0.name) will be used instead" }
-            ?? "no other model is downloaded, so summaries, titles, briefs and Super's rulings stop"
-        return "It is your pick for \(roles.joined(separator: " and ")): \(instead). " + base
+        let instead = others.first.map { String(localized: "\($0.name) will be used instead.") }
+            ?? String(localized: "No other model is downloaded, so summaries, titles, briefs and Super's rulings stop.")
+        return [pick, instead, base].joined(separator: " ")
     }
 
     static func gigabytes(_ bytes: Int64) -> String {
@@ -388,13 +400,13 @@ private struct TextModelsInfo: View {
         .frame(width: 440, height: 520)
     }
 
-    private func heading(_ text: String) -> some View {
+    private func heading(_ text: LocalizedStringKey) -> some View {
         Text(text)
             .font(AppFont.display(16, weight: .semibold))
             .foregroundStyle(AppColor.ink)
     }
 
-    private func point(_ title: String, _ body: String) -> some View {
+    private func point(_ title: LocalizedStringKey, _ body: LocalizedStringKey) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(AppFont.display(13, weight: .semibold)).foregroundStyle(AppColor.ink)
             Text(body).font(AppFont.text(13)).foregroundStyle(AppColor.ink2)

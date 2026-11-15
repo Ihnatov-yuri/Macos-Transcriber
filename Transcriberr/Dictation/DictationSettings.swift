@@ -19,12 +19,12 @@ nonisolated final class DictationSettings: @unchecked Sendable {
 
         var label: String {
             switch self {
-            case .rightOption:  return "Right ⌥ Option"
-            case .rightCommand: return "Right ⌘ Command"
-            case .rightControl: return "Right ⌃ Control"
-            case .rightShift:   return "Right ⇧ Shift"
-            case .fn:           return "fn / 🌐 Globe"
-            case .off:          return "Off"
+            case .rightOption:  return String(localized: "Right ⌥ Option", comment: "Dictation hotkey: the Option key on the right side")
+            case .rightCommand: return String(localized: "Right ⌘ Command", comment: "Dictation hotkey: the Command key on the right side")
+            case .rightControl: return String(localized: "Right ⌃ Control", comment: "Dictation hotkey: the Control key on the right side")
+            case .rightShift:   return String(localized: "Right ⇧ Shift", comment: "Dictation hotkey: the Shift key on the right side")
+            case .fn:           return String(localized: "fn / 🌐 Globe", comment: "Dictation hotkey: the fn / Globe key")
+            case .off:          return String(localized: "Off", comment: "Dictation hotkey: no hotkey")
             }
         }
 
@@ -63,8 +63,8 @@ nonisolated final class DictationSettings: @unchecked Sendable {
 
         var label: String {
             switch self {
-            case .hold:   return "Hold to talk"
-            case .toggle: return "Tap to start / stop (hold also works)"
+            case .hold:   return String(localized: "Hold to talk")
+            case .toggle: return String(localized: "Tap to start / stop (hold also works)")
             }
         }
     }
@@ -82,10 +82,10 @@ nonisolated final class DictationSettings: @unchecked Sendable {
 
         var label: String {
             switch self {
-            case .auto:          return "Automatic (reads the text around the cursor)"
-            case .trailingSpace: return "Add a space after"
-            case .leadingSpace:  return "Add a space before"
-            case .none:          return "No extra spacing"
+            case .auto:          return String(localized: "Automatic (reads the text around the cursor)", comment: "Dictation spacing option")
+            case .trailingSpace: return String(localized: "Add a space after")
+            case .leadingSpace:  return String(localized: "Add a space before")
+            case .none:          return String(localized: "No extra spacing")
             }
         }
     }
@@ -103,9 +103,9 @@ nonisolated final class DictationSettings: @unchecked Sendable {
 
         var label: String {
             switch self {
-            case .verbatim: return "Verbatim"
-            case .clean:    return "Clean (deterministic)"
-            case .smart:    return "Smart (context-aware)"
+            case .verbatim: return String(localized: "Verbatim", comment: "Dictation format mode: text exactly as recognized")
+            case .clean:    return String(localized: "Clean (deterministic)", comment: "Dictation format mode: fillers removed by rules")
+            case .smart:    return String(localized: "Smart (context-aware)", comment: "Dictation format mode: the text model formats it")
             }
         }
     }
@@ -114,10 +114,10 @@ nonisolated final class DictationSettings: @unchecked Sendable {
         case auto, casual, neutral, formal
         var label: String {
             switch self {
-            case .auto:    return "Match the app"
-            case .casual:  return "Casual"
-            case .neutral: return "Neutral"
-            case .formal:  return "Formal"
+            case .auto:    return String(localized: "Match the app", comment: "Dictation tone: follow the app the text goes into")
+            case .casual:  return String(localized: "Casual", comment: "Dictation tone")
+            case .neutral: return String(localized: "Neutral", comment: "Dictation tone")
+            case .formal:  return String(localized: "Formal", comment: "Dictation tone")
             }
         }
     }

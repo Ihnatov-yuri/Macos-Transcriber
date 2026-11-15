@@ -297,17 +297,21 @@ nonisolated enum Provenance: Equatable, Sendable {
     var tag: String? {
         switch self {
         case .confirmed, .typed: return nil
-        case .auto(let score): return score.map { String(format: "auto %.2f", $0) } ?? "auto"
-        case .invite: return "from invite"
+        case .auto(let score):
+            return score.map { s in
+                let value = String(format: "%.2f", s)
+                return String(localized: "auto \(value)", comment: "Speaker tag: named by a voice match; the value is the match score")
+            } ?? String(localized: "auto", comment: "Speaker tag: named by a voice match")
+        case .invite: return String(localized: "from invite", comment: "Speaker tag: named from the calendar invite")
         }
     }
 
     var help: String {
         switch self {
-        case .confirmed: return "You confirmed this speaker."
-        case .typed: return "Named by hand."
-        case .auto: return "Named by a voice match, not confirmed by you."
-        case .invite: return "Named only because the calendar invite left them as the one person unaccounted for."
+        case .confirmed: return String(localized: "You confirmed this speaker.")
+        case .typed: return String(localized: "Named by hand.")
+        case .auto: return String(localized: "Named by a voice match, not confirmed by you.")
+        case .invite: return String(localized: "Named only because the calendar invite left them as the one person unaccounted for.")
         }
     }
 }
@@ -337,15 +341,19 @@ nonisolated struct PeopleStore {
         case notSamePerson(name: String, score: Float, closer: String?)
         var errorDescription: String? {
             switch self {
-            case .emptyName: return "Enter a name for this person."
-            case .missing: return "That person is no longer saved."
-            case .lastSample: return "This is the only sample of their voice. Delete the person instead."
-            case .nameTaken(let n): return "\(n) is already saved. Use Merge into to make them one person."
+            case .emptyName: return String(localized: "Enter a name for this person.")
+            case .missing: return String(localized: "That person is no longer saved.")
+            case .lastSample: return String(localized: "This is the only sample of their voice. Delete the person instead.")
+            case .nameTaken(let n): return String(localized: "\(n) is already saved. Use Merge into to make them one person.", comment: "Merge into is a button name")
             case .notSamePerson(let name, let score, let closer):
-                return closer.map { String(format: "This voice sounds more like %@ than like %@ (%.2f), so it was not added to %@.", $0, name, score, name) }
-                    ?? String(format: "This voice does not sound like %@'s saved voice (%.2f, at least %.2f needed), so it was not added.", name, score, VoiceGate.sameMin)
-            case .unreadable: return "The saved people file cannot be read. It was left as it is."
-            case .otherModel: return "The voice model was changed while this voice was read. Nothing was saved; try again."
+                let value = String(format: "%.2f", score)
+                if let closer {
+                    return String(localized: "This voice sounds more like \(closer) than like \(name) (\(value)), so it was not added to \(name).")
+                }
+                let needed = String(format: "%.2f", VoiceGate.sameMin)
+                return String(localized: "This voice does not sound like \(name)'s saved voice (\(value), at least \(needed) needed), so it was not added.")
+            case .unreadable: return String(localized: "The saved people file cannot be read. It was left as it is.")
+            case .otherModel: return String(localized: "The voice model was changed while this voice was read. Nothing was saved; try again.")
             }
         }
     }
@@ -945,7 +953,8 @@ nonisolated enum PeopleVoice {
         var errorDescription: String? {
             switch self {
             case .tooLittleSpeech(let s):
-                return "This speaker has \(Int(s)) s of speech without anyone talking over them; at least \(Int(PeopleVoice.minLearnSeconds)) s are needed to learn a voice."
+                let needed = Int(PeopleVoice.minLearnSeconds)
+                return String(localized: "This speaker has \(Int(s)) s of speech without anyone talking over them; at least \(needed) s are needed to learn a voice.")
             }
         }
     }

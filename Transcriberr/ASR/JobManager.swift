@@ -156,7 +156,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
         // An explicit run replaces any refinement still waiting for this one.
         followUps[recording.id] = followUp
         statuses[recording.id] = Status(
-            id: recording.id, stage: params.keepVisibleUntilDone ? "Super refinement queued…" : "Queued…",
+            id: recording.id, stage: params.keepVisibleUntilDone
+                ? String(localized: "Super refinement queued…") : String(localized: "Queued…"),
             fraction: 0, failed: false, failureReason: nil, background: params.keepVisibleUntilDone
         )
         queue.append((recording, params, onSourceConsumed))
@@ -381,7 +382,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
             // was made by the retired Gemma audio engine.
             let prevLabel = prevId == BackendFactory.Kind.localText.rawValue
                 ? "Gemma 4 audio (LiteRT)"
-                : BackendFactory.Kind(rawValue: prevId)?.displayName ?? "Earlier run (\(prevId))"
+                : BackendFactory.Kind(rawValue: prevId)?.storedName ?? "Earlier run (\(prevId))"
             try? repository.snapshotVersion(of: recording, engineId: prevId, engineLabel: prevLabel)
         }
         // Stamped when the run first PRODUCES something, not up front: a run
@@ -431,7 +432,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 case .stage(let text, let fraction):
                     statuses[recording.id] = Status(
                         id: recording.id,
-                        stage: params.keepVisibleUntilDone ? "Super: \(text)" : text,
+                        stage: params.keepVisibleUntilDone
+                            ? String(localized: "Super: \(text)", comment: "Run progress of a background Super refinement; the stage follows") : text,
                         fraction: fraction >= 0 ? fraction : (statuses[recording.id]?.fraction ?? 0),
                         failed: false,
                         failureReason: nil,
@@ -518,8 +520,8 @@ final class TranscriptionJobManager: @unchecked Sendable {
                         // A background refinement never touched the draft on
                         // screen, so that draft is still the transcript.
                         let stage = params.keepVisibleUntilDone
-                            ? "Failed: Super transcribed no speech — draft kept"
-                            : "Failed: no speech transcribed"
+                            ? String(localized: "Failed: Super transcribed no speech — draft kept")
+                            : String(localized: "Failed: no speech transcribed")
                         AppLog.warn("job", params.keepVisibleUntilDone
                             ? "background run produced no segments — keeping the draft"
                             : "run finished with no transcript at all — reporting failure")
@@ -581,7 +583,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     // carries their names. Never fails the run.
                     if !PeopleStore.shared.load().isEmpty {
                         let id = recording.id
-                        statuses[id]?.stage = "Finding people…"
+                        statuses[id]?.stage = String(localized: "Finding people…")
                         await PeopleNamer.apply(to: recording, repository: repository)
                         // Seconds to minutes went by: the recording may have
                         // been deleted (isDeleted resets after a save, so the
@@ -615,7 +617,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                     let note: String? = notes.isEmpty ? nil : notes
                     if let note { AppLog.info("job", "run note: \(note)") }
                     statuses[recording.id] = Status(
-                        id: recording.id, stage: "Done.", fraction: 1.0, failed: false, failureReason: nil,
+                        id: recording.id, stage: String(localized: "Done.", comment: "Run progress: finished"), fraction: 1.0, failed: false, failureReason: nil,
                         note: note
                     )
                     // Auto-title: only if the title still looks like a default.
@@ -627,7 +629,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
                 case .failed(let reason):
                     AppLog.error("job", "stream emitted .failed: \(reason)")
                     statuses[recording.id] = Status(
-                        id: recording.id, stage: "Failed: \(reason)",
+                        id: recording.id, stage: String(localized: "Failed: \(reason)"),
                         fraction: 1.0, failed: true, failureReason: reason
                     )
                 }
@@ -638,12 +640,12 @@ final class TranscriptionJobManager: @unchecked Sendable {
         } catch is CancellationError {
             AppLog.warn("job", "cancelled")
             statuses[recording.id] = Status(
-                id: recording.id, stage: "Cancelled.", fraction: 1.0, failed: true, failureReason: "cancelled"
+                id: recording.id, stage: String(localized: "Cancelled.", comment: "Run progress: the user cancelled the run"), fraction: 1.0, failed: true, failureReason: "cancelled"
             )
         } catch {
             AppLog.error("job", "threw: \(error.localizedDescription)")
             statuses[recording.id] = Status(
-                id: recording.id, stage: "Failed: \(error.localizedDescription)",
+                id: recording.id, stage: String(localized: "Failed: \(error.localizedDescription)"),
                 fraction: 1.0, failed: true, failureReason: error.localizedDescription
             )
         }

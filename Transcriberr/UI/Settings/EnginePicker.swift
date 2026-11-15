@@ -37,6 +37,11 @@ struct WhisperModelPickers: View {
     }
 
     private func label(_ m: WhisperModel) -> String {
-        "\(m.name)\(m.englishOnly ? " (English only)" : "")\(m.isDownloaded ? "" : " · not downloaded")"
+        switch (m.englishOnly, m.isDownloaded) {
+        case (false, true): m.name
+        case (true, true): String(localized: "\(m.name) (English only)")
+        case (false, false): String(localized: "\(m.name) · not downloaded")
+        case (true, false): String(localized: "\(m.name) (English only) · not downloaded")
+        }
     }
 }

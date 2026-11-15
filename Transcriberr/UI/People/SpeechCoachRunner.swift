@@ -147,7 +147,7 @@ final class SpeechCoachRunner {
                     return
                 } catch {
                     // The goals still come from the same gaps, in plain words.
-                    lastError = "The text engine could not write the coaching (\(error.localizedDescription)). Goals use plain wording."
+                    lastError = String(localized: "The text engine could not write the coaching (\(error.localizedDescription)). Goals use plain wording.")
                 }
             }
             if Task.isCancelled { return }

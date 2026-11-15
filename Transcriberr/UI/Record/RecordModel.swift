@@ -167,7 +167,7 @@ final class RecordModel {
     static func sleepNotice(from: Date, to: Date) -> String {
         let f = DateFormatter()
         f.dateFormat = "HH:mm"
-        return "Paused while your Mac slept · \(f.string(from: from))–\(f.string(from: to))"
+        return String(localized: "Paused while your Mac slept · \(f.string(from: from))–\(f.string(from: to))")
     }
 
     var elapsedMs: Int64 { activeMeeting ? container.meetingRecorder.elapsedMs : container.recorder.elapsedMs }
@@ -242,7 +242,7 @@ final class RecordModel {
         // dictation session would open a second engine — and a second
         // voice-processing unit — on the same input device.
         if container.dictation.phase == .listening {
-            lastError = "DICTATION IS LISTENING · FINISH IT FIRST"
+            lastError = String(localized: "Dictation is listening · finish it first").uppercased()
             return
         }
         do {
@@ -272,8 +272,10 @@ final class RecordModel {
             RecordingActivity.shared.begin()
             if let next {
                 continuing = next
-                notice = "Continuing the \(next.isMeeting ? "meeting" : "recording") cut short at "
-                    + "\(DateFormatter.time.string(from: next.endedAt)). Stop joins the two parts."
+                let cutAt = DateFormatter.time.string(from: next.endedAt)
+                notice = next.isMeeting
+                    ? String(localized: "Continuing the meeting cut short at \(cutAt). Stop joins the two parts.")
+                    : String(localized: "Continuing the recording cut short at \(cutAt). Stop joins the two parts.")
             }
 
             liveWorker.clear()
@@ -349,7 +351,7 @@ final class RecordModel {
                 if !wasMeeting, case .failed(let reason) = container.recorder.state {
                     lastError = reason
                 } else if lastError == nil {
-                    lastError = "Recording could not be saved."
+                    lastError = String(localized: "Recording could not be saved.")
                 }
                 activeMeeting = false
                 uiState = .idle
@@ -421,7 +423,7 @@ final class RecordModel {
                         if transcribe { Self.transcribe(joined, container: container, languages: languages, isMeeting: wasMeeting) }
                         if let self, self.uiState == .finished(url) {
                             self.uiState = .finished(URL(fileURLWithPath: joined.audioPath))
-                            self.notice = "Joined into “\(joined.title)”."
+                            self.notice = String(localized: "Joined into “\(joined.title)”.")
                         }
                     } catch {
                         AppLog.error("record", "could not join the part to the recording cut short: \(error.localizedDescription)")
@@ -430,7 +432,7 @@ final class RecordModel {
                         }
                         if let self, self.uiState == .finished(url) {
                             self.uiState = .finished(partURL)
-                            self.lastError = "The new part could not be joined to the one cut short, so it is in the Library on its own. \(error.localizedDescription)"
+                            self.lastError = String(localized: "The new part could not be joined to the one cut short, so it is in the Library on its own. \(error.localizedDescription)")
                         }
                     }
                 }
@@ -545,7 +547,7 @@ extension RecordModel {
         defer { container.joiningIDs.subtract([r.id, later.id]) }
         guard let earlier = try repository.get(id: r.id) else {
             throw NSError(domain: "Resume", code: 1, userInfo: [NSLocalizedDescriptionKey:
-                "The recording cut short is no longer in the Library."])
+                String(localized: "The recording cut short is no longer in the Library.")])
         }
         if URL(fileURLWithPath: earlier.audioPath).pathExtension.lowercased() == "wav" {
             await container.audioPostProcessTracker.markPending(earlier.id)

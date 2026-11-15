@@ -46,7 +46,7 @@ enum RecordingFolderExporter {
         // Saved transcript versions.
         guard let context = recording.modelContext else {
             throw NSError(domain: "Export", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "The recording is no longer in the library."])
+                          userInfo: [NSLocalizedDescriptionKey: String(localized: "The recording is no longer in the library.")])
         }
         let repo = RecordingRepository(context: context)
         let versions = recording.versions.sorted { $0.createdAtMillis < $1.createdAtMillis }

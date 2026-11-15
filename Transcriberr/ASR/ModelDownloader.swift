@@ -55,10 +55,10 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
             defer { self.activeTasks.removeValue(forKey: entry.id) }
             isDownloading.insert(entry.id)
             defer { isDownloading.remove(entry.id) }
-            progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: "Downloading…")
+            progress[entry.id] = ProgressInfo(bytesDownloaded: 0, totalBytes: entry.sizeBytes, status: String(localized: "Downloading…"))
             do {
                 let dir = try await self.downloadFiles(entry)
-                progress[entry.id] = ProgressInfo(bytesDownloaded: entry.sizeBytes, totalBytes: entry.sizeBytes, status: "Downloaded.")
+                progress[entry.id] = ProgressInfo(bytesDownloaded: entry.sizeBytes, totalBytes: entry.sizeBytes, status: String(localized: "Downloaded."))
                 AppLog.info("models", "\(entry.id) installed")
                 return dir
             } catch {
@@ -67,7 +67,9 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
                 let cancelled = error is CancellationError || (error as NSError).code == NSURLErrorCancelled
                 progress[entry.id] = ProgressInfo(
                     bytesDownloaded: 0, totalBytes: entry.sizeBytes,
-                    status: cancelled ? "Cancelled." : "Failed: \(error.localizedDescription)")
+                    status: cancelled ? String(localized: "Cancelled.", comment: "Model download status")
+                        // English on purpose: Settings → Models finds a failure by this prefix.
+                        : "Failed: \(error.localizedDescription)")
                 AppLog.error("models", "download failed for \(entry.id): \(error.localizedDescription)")
                 throw error
             }
@@ -96,7 +98,7 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
             try Task.checkCancellation()
             let target = dir.appendingPathComponent(file.path)
             if fm.fileExists(atPath: target.path) {
-                progress[entry.id]?.status = "Checking \(file.path)…"
+                progress[entry.id]?.status = String(localized: "Checking \(file.path)…", comment: "Model download status: checking a file already on disk; a file name follows")
                 if await Self.matchesDetached(file, at: target) { done += file.size; continue }
                 try? fm.removeItem(at: target)
             }
@@ -125,7 +127,7 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
                     guard reported.shouldReport(got, every: 16 << 20) else { return }
                     Task { @MainActor in
                         guard let self, self.streamingAttempt[entryID] == attempt else { return }
-                        self.progress[entryID] = ProgressInfo(bytesDownloaded: base + got, totalBytes: total, status: "Downloading…")
+                        self.progress[entryID] = ProgressInfo(bytesDownloaded: base + got, totalBytes: total, status: String(localized: "Downloading…"))
                     }
                 }.run(url: remote)
                 streamingAttempt[entry.id] = nil
@@ -140,12 +142,12 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
                 try? fm.removeItem(at: temp)
                 throw CancellationError()
             }
-            progress[entry.id] = ProgressInfo(bytesDownloaded: base + file.size, totalBytes: total, status: "Verifying \(file.path)…")
+            progress[entry.id] = ProgressInfo(bytesDownloaded: base + file.size, totalBytes: total, status: String(localized: "Verifying \(file.path)…", comment: "Model download status; a file name follows"))
             guard await Self.matchesDetached(file, at: temp) else {
                 try? fm.removeItem(at: temp)
                 AppLog.error("models", "checksum mismatch for \(entry.id)/\(file.path)")
                 throw NSError(domain: "Transcriberr.ModelDownloader", code: -6,
-                              userInfo: [NSLocalizedDescriptionKey: "\(entry.name): \(file.path) did not match its checksum — download discarded."])
+                              userInfo: [NSLocalizedDescriptionKey: String(localized: "\(entry.name): \(file.path) did not match its checksum — download discarded.")])
             }
             // The hash runs detached, so a cancel during it only shows here.
             if Task.isCancelled {
@@ -202,7 +204,7 @@ nonisolated final class ModelDownloader: @unchecked Sendable {
         activeTasks[id]?.cancel()
         streamingAttempt[id] = nil
         isDownloading.remove(id)
-        progress[id]?.status = "Cancelled."
+        progress[id]?.status = String(localized: "Cancelled.", comment: "Model download status")
     }
 
     func isCached(_ entry: ModelEntry) -> Bool { ModelCatalog.isInstalled(entry) }
@@ -278,7 +280,7 @@ nonisolated private final class StreamingDownload: NSObject, URLSessionDataDeleg
 
     private func tooLarge() -> NSError {
         NSError(domain: "Transcriberr.ModelDownloader", code: -7,
-                userInfo: [NSLocalizedDescriptionKey: "Download is larger than the model it should be — discarded."])
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "Download is larger than the model it should be — discarded.")])
     }
 
     func run(url: URL) async throws -> Int64 {
@@ -336,7 +338,7 @@ nonisolated private final class StreamingDownload: NSObject, URLSessionDataDeleg
             completionHandler(.cancel)
             settle(.failure(NSError(
                 domain: "Transcriberr.ModelDownloader", code: -4,
-                userInfo: [NSLocalizedDescriptionKey: "Download failed (HTTP \(code))"])))
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "Download failed (HTTP \(code))")])))
             return
         }
         expected = response.expectedContentLength

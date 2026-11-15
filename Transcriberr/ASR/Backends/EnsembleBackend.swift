@@ -1247,10 +1247,10 @@ actor EnsembleBackend: ASRBackend {
                 Output ONLY the merged transcript text.
                 """,
                 userMessage: vocabBlock + (brief?.promptBlock ?? "") + contextBlock + """
-                Transcript A (\(kindA.displayName)):
+                Transcript A (\(kindA.storedName)):
                 \(textA)
 
-                Transcript B (\(kindB.displayName)):
+                Transcript B (\(kindB.storedName)):
                 \(textB)
                 """,
                 // Bound output to ~1.3× the longer input (≈3 chars/token) so

@@ -25,7 +25,7 @@ struct BenchmarkSection: View {
                         Text("\(s.items) lines · \(minutes(s.seconds)) · \(s.words) words")
                             .font(.caption2).foregroundStyle(.secondary)
                         Spacer()
-                        Text(String(format: "engine vs you: %.1f%% WER", s.wer * 100))
+                        Text("engine vs you: \(s.wer.formatted(.percent.precision(.fractionLength(1)))) WER")
                             .font(.caption).foregroundStyle(AppColor.ink2)
                     }
                 }
@@ -62,6 +62,7 @@ struct BenchmarkSection: View {
     }
 
     private func minutes(_ s: Double) -> String {
-        s < 60 ? "\(Int(s)) s" : String(format: "%.1f min", s / 60)
+        s < 60 ? String(localized: "\(Int(s)) s", comment: "A duration in seconds")
+            : String(localized: "\((s / 60).formatted(.number.precision(.fractionLength(1)))) min", comment: "A duration in minutes")
     }
 }

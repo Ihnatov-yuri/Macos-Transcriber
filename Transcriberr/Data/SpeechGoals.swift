@@ -28,7 +28,10 @@ struct SpeechGoal: Codable, Equatable, Identifiable {
     func meets(_ v: Double) -> Bool { lowerIsBetter ? v <= target : v >= target }
 
     var targetText: String {
-        "\(lowerIsBetter ? "at most" : "at least") \(metric.format(target)) \(metric.unit)"
+        let value = metric.format(target), unit = metric.unit
+        return lowerIsBetter
+            ? String(localized: "at most \(value) \(unit)", comment: "Speech goal target, e.g. at most 2.0 per min")
+            : String(localized: "at least \(value) \(unit)", comment: "Speech goal target, e.g. at least 120 words/min")
     }
 }
 
@@ -175,7 +178,7 @@ enum SpeechCoach {
         var out = ["Goals asked for: \(want)", "", "GAPS (code: measured average → next target):"]
         for g in gaps {
             let lang = g.language.map { " in \($0 == "uk" ? "Ukrainian" : "English")" } ?? ""
-            out.append("\(code(g)): \(g.metric.title)\(lang) \(g.metric.format(g.average)) \(g.metric.unit) → \(g.lowerIsBetter ? "at most" : "at least") \(g.metric.format(g.target)). \(g.metric.explanation)")
+            out.append("\(code(g)): \(g.metric.promptTitle)\(lang) \(g.metric.format(g.average)) \(g.metric.promptUnit) → \(g.lowerIsBetter ? "at most" : "at least") \(g.metric.format(g.target)). \(g.metric.promptExplanation)")
         }
         if !achieved.isEmpty {
             out.append("")
@@ -230,7 +233,9 @@ enum SpeechCoach {
     }
 
     /// Plain wording for when the model is unavailable or answers nothing
-    /// usable: the goals still come from the same gaps.
+    /// usable: the goals still come from the same gaps. English, like the
+    /// goals the model writes: it is saved in coach.json and quoted back to
+    /// the model, so it is data, not interface text.
     static func fallbackTitle(_ g: SpeechTargets.Gap) -> (title: String, why: String, tip: String) {
         switch g.metric {
         case .talkShare where g.lowerIsBetter:

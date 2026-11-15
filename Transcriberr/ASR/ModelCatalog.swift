@@ -73,7 +73,7 @@ nonisolated enum ModelCatalog {
         sizeBytes: 5_179_238_033,
         peakMemoryGB: 6,
         minRAMGB: 8,
-        purpose: "The small one. Best at English dictation, weakest in Ukrainian: it often answers a Ukrainian meeting in English.",
+        purpose: String(localized: "The small one. Best at English dictation, weakest in Ukrainian: it often answers a Ukrainian meeting in English.", comment: "Settings → Models: what this text model is good at"),
         measured: .init(cleanupTokensPerSecond: 38, summaryTokensPerSecond: 34, ukrainianScore: 1.8, englishScore: 3.1)
     )
 
@@ -97,7 +97,7 @@ nonisolated enum ModelCatalog {
         sizeBytes: 15_641_258_838,
         peakMemoryGB: 16,
         minRAMGB: 32,
-        purpose: "The best of the three, in Ukrainian and on hour-long meetings. A 26B model that only wakes 4B per word, so it is as quick as E4B but needs 16 GB.",
+        purpose: String(localized: "The best of the three, in Ukrainian and on hour-long meetings. A 26B model that only wakes 4B per word, so it is as quick as E4B but needs 16 GB.", comment: "Settings → Models: what this text model is good at"),
         measured: .init(cleanupTokensPerSecond: 39, summaryTokensPerSecond: 35, ukrainianScore: 3.6, englishScore: 3.8)
     )
 
@@ -123,7 +123,7 @@ nonisolated enum ModelCatalog {
         sizeBytes: 5_964_431_460,
         peakMemoryGB: 7,
         minRAMGB: 16,
-        purpose: "The fast one. About twice as quick at cleanup and dictation, because a small helper model guesses ahead. Clearly better than E4B in Ukrainian, behind 26B.",
+        purpose: String(localized: "The fast one. About twice as quick at cleanup and dictation, because a small helper model guesses ahead. Clearly better than E4B in Ukrainian, behind 26B.", comment: "Settings → Models: what this text model is good at"),
         measured: .init(cleanupTokensPerSecond: 72, summaryTokensPerSecond: 24, ukrainianScore: 2.5, englishScore: 3.3)
     )
 

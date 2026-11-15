@@ -400,7 +400,7 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
         if remove {
             script = "/bin/rm -rf \(shellQuoted(installedURL.path)) && /usr/bin/killall coreaudiod"
         } else {
-            guard let source = bundledDriverURL?.path else { return "The plug-in is missing from this copy of Transcriberr." }
+            guard let source = bundledDriverURL?.path else { return String(localized: "The plug-in is missing from this copy of Transcriberr.") }
             script = installScript(source: source, dest: installedURL.path)
         }
         let apple = "do shell script \"\(appleScriptEscaped(script))\" with administrator privileges"
@@ -417,7 +417,9 @@ nonisolated final class VirtualMicrophone: @unchecked Sendable {
                 let text = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 // -128: the user pressed Cancel at the password prompt.
-                return text.contains("-128") ? "Cancelled." : (text.isEmpty ? "osascript failed" : text)
+                return text.contains("-128")
+                    ? String(localized: "Cancelled.", comment: "The user cancelled the administrator password prompt")
+                    : (text.isEmpty ? String(localized: "osascript failed", comment: "Virtual microphone install: the administrator script failed without a message") : text)
             }
             AppLog.info("virtual-mic", remove ? "driver removed" : "driver installed")
             return nil

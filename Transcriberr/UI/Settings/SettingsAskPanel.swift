@@ -54,7 +54,7 @@ struct SettingsAskPanel: View {
         case .applied(let changes, let snapshot):
             panel {
                 VStack(alignment: .leading, spacing: AppMetric.s) {
-                    Text(changes.count == 1 ? "Changed" : "Changed \(changes.count) settings")
+                    (changes.count == 1 ? Text("Changed", comment: "Ask panel heading after one setting was changed") : Text("Changed \(changes.count) settings"))
                         .uiLabel(9, color: AppColor.statusSuccess)
                     changeRows(changes)
                     HStack(spacing: AppMetric.s) {
@@ -70,9 +70,9 @@ struct SettingsAskPanel: View {
         case .undone(let changes):
             panel {
                 HStack(spacing: AppMetric.s) {
-                    Text(changes.count == 1
-                         ? "Put back: \(changes[0].label) is \(changes[0].fromName) again."
-                         : "Put back the \(changes.count) settings as they were.")
+                    (changes.count == 1
+                         ? Text("Put back: \(changes[0].label) is \(changes[0].fromName) again.")
+                         : Text("Put back the \(changes.count) settings as they were."))
                         .font(AppFont.text(13))
                         .foregroundStyle(AppColor.ink2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -95,7 +95,7 @@ struct SettingsAskPanel: View {
                         .font(AppFont.text(13, weight: .semibold))
                         .foregroundStyle(AppColor.ink)
                     noteList(notes.isEmpty
-                             ? ["The request didn't match a setting a request can change. Search for the setting instead, or name it, such as \u{201C}turn off the echo filter\u{201D}."]
+                             ? [String(localized: "The request didn't match a setting a request can change. Search for the setting instead, or name it, such as \u{201C}turn off the echo filter\u{201D}.")]
                              : notes)
                     TapButton(action: onDismiss) {
                         LitButtonChrome(.secondary, compact: true) { Text("Dismiss") }
@@ -105,7 +105,7 @@ struct SettingsAskPanel: View {
         } else {
             panel {
                 VStack(alignment: .leading, spacing: AppMetric.s) {
-                    Text(result.changes.count == 1 ? "Change this setting?" : "Change these \(result.changes.count) settings?")
+                    (result.changes.count == 1 ? Text("Change this setting?") : Text("Change these \(result.changes.count) settings?"))
                         .uiLabel(9, color: AppColor.ink2)
                     changeRows(result.changes)
                     if !notes.isEmpty {

@@ -11,11 +11,11 @@ struct AppShell: View {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .record:   return "Record"
-            case .library:  return "Library"
-            case .people:   return "People"
-            case .dictate:  return "Dictate"
-            case .settings: return "Settings"
+            case .record:   return String(localized: "Record", comment: "Sidebar section: start recordings")
+            case .library:  return String(localized: "Library")
+            case .people:   return String(localized: "People")
+            case .dictate:  return String(localized: "Dictate", comment: "Sidebar section: dictation")
+            case .settings: return String(localized: "Settings")
             }
         }
         var index: Int {
@@ -80,7 +80,7 @@ struct AppShell: View {
                 while askUpdateConsent || askTextModel { try? await Task.sleep(for: .seconds(1)) }
                 resumeOffer = offer
             }
-            .alert(resumeOffer?.isMeeting == true ? "Continue the meeting?" : "Continue the recording?",
+            .alert(resumeOffer?.isMeeting == true ? String(localized: "Continue the meeting?") : String(localized: "Continue the recording?"),
                    isPresented: Binding(get: { resumeOffer != nil },
                                         set: { if !$0 { resumeOffer = nil; container.interruptedRecording = nil } }),
                    presenting: resumeOffer) { offer in
@@ -215,14 +215,14 @@ struct AppShell: View {
             case .downloading, .verifying, .relaunching:
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(phase == .downloading ? "Downloading…" : phase == .verifying ? "Checking signature…" : "Reopening…")
+                    Text(phase == .downloading ? String(localized: "Downloading…") : phase == .verifying ? String(localized: "Checking signature…") : String(localized: "Reopening…"))
                         .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
                 }
             default:
                 HStack(spacing: 6) {
                     if release.installable {
                         TapButton { container.installUpdate(release) } label: {
-                            LitButtonChrome(.accent, compact: true) { Text("Update") }
+                            LitButtonChrome(.accent, compact: true) { Text("Update", comment: "Sidebar button: install the new version") }
                         }
                     }
                     TapButton { NSWorkspace.shared.open(release.pageURL) } label: {

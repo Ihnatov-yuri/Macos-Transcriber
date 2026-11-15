@@ -19,7 +19,17 @@ struct PeopleView: View {
     @State private var confidenceCache = ConfidenceCache()
 
     enum Selection: Hashable { case overview, you, person(UUID) }
-    enum Sort: String, CaseIterable { case name = "Name", confidence = "Confidence", toConfirm = "To confirm" }
+    enum Sort: String, CaseIterable {
+        case name = "Name", confidence = "Confidence", toConfirm = "To confirm"
+        /// On screen; the raw value is what People's sort setting stores.
+        var label: String {
+            switch self {
+            case .name: return String(localized: "Name", comment: "People list sort order")
+            case .confidence: return String(localized: "Confidence", comment: "People list sort order: voice recognition confidence")
+            case .toConfirm: return String(localized: "To confirm", comment: "People list sort order: most voices waiting first")
+            }
+        }
+    }
 
     private let listColumnWidth: CGFloat = 300
 
@@ -133,15 +143,17 @@ struct PeopleView: View {
                     .padding(.horizontal, AppMetric.sheetPadding)
                     .padding(.vertical, AppMetric.sheetVerticalPadding)
                     InkRule()
-                    fixedRow("Overview", detail: "Everyone at a glance", .overview)
+                    fixedRow(String(localized: "Overview", comment: "People list: page about everyone"),
+                             detail: String(localized: "Everyone at a glance"), .overview)
                     HairlineSoft()
-                    fixedRow("You", detail: "How you speak, your goals and voice", .you)
+                    fixedRow(String(localized: "You", comment: "People list: the user's own page"),
+                             detail: String(localized: "How you speak, your goals and voice"), .you)
                     InkRule()
                     if people.count > 3 {
                         HStack(spacing: AppMetric.s) {
                             TextField("Search", text: $query).textFieldStyle(.roundedBorder)
                             Picker("", selection: $sort) {
-                                ForEach(Sort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                                ForEach(Sort.allCases, id: \.self) { Text($0.label).tag($0) }
                             }
                             .labelsHidden()
                             .frame(width: 110)
@@ -191,7 +203,7 @@ struct PeopleView: View {
                         LevelMark(level: confidence.level)
                         if waiting > 0 {
                             Text("·").uiLabel(9, color: AppColor.ink3)
-                            Text(waiting == 1 ? "1 to confirm" : "\(waiting) to confirm")
+                            Text("\(waiting) to confirm", comment: "Count of voices waiting for an answer")
                                 .uiLabel(9, color: AppColor.accentOnLight)
                         }
                     }
@@ -211,8 +223,15 @@ struct PeopleView: View {
             }
             .contentShape(Rectangle())
         }
-        .accessibilityLabel("\(person.name), voice recognition \(confidence.level.rawValue), \(confidence.percent) percent\(waiting > 0 ? ", \(waiting) to confirm" : "")")
+        .accessibilityLabel(Text(Self.spokenRow(person.name, confidence, waiting: waiting)))
         .help("\(confidence.percent)%: how sure Transcriberr is to recognise \(person.name) in a new recording.")
+    }
+
+    private static func spokenRow(_ name: String, _ c: VoiceConfidence, waiting: Int) -> String {
+        let level = LevelMark.label(c.level), percent = c.percent
+        return waiting > 0
+            ? String(localized: "\(name), voice recognition \(level), \(percent) percent, \(waiting) to confirm")
+            : String(localized: "\(name), voice recognition \(level), \(percent) percent")
     }
 }
 
@@ -257,7 +276,15 @@ struct LevelMark: View {
     var body: some View {
         HStack(spacing: 5) {
             Rectangle().fill(color).frame(width: 6, height: 6)
-            Text(level.rawValue).uiLabel(9, color: color)
+            Text(Self.label(level)).uiLabel(9, color: color)
+        }
+    }
+    /// The level as a word on screen (its raw value is not translated).
+    static func label(_ level: VoiceConfidence.Level) -> String {
+        switch level {
+        case .learning: return String(localized: "Learning", comment: "Voice recognition level: still learning the voice")
+        case .good: return String(localized: "Good", comment: "Voice recognition level")
+        case .strong: return String(localized: "Strong", comment: "Voice recognition level")
         }
     }
     private var color: Color {
@@ -355,10 +382,11 @@ struct PeopleOverview: View {
 
     private var summary: String {
         let n = people.count
-        guard n > 0 else { return "No one saved yet." }
+        guard n > 0 else { return String(localized: "No one saved yet.") }
         let waiting = people.map { $0.candidates?.count ?? 0 }.reduce(0, +)
-        return "\(n == 1 ? "1 person" : "\(n) people") saved"
-            + (waiting > 0 ? ", \(waiting) \(waiting == 1 ? "voice" : "voices") waiting for you to confirm." : ".")
+        return waiting > 0
+            ? String(localized: "\(n) people saved.") + " " + String(localized: "\(waiting) voices waiting for you to confirm.")
+            : String(localized: "\(n) people saved.")
     }
 
     private var scanCard: some View {
@@ -371,7 +399,7 @@ struct PeopleOverview: View {
                 if scan.isRunning {
                     TapButton { scan.cancel() } label: { LitButtonChrome(.ghost, compact: true) { Text("Stop") } }
                     ProgressView().controlSize(.small)
-                    Text(scan.progress ?? "Starting…").font(AppFont.text(12)).foregroundStyle(AppColor.ink2).lineLimit(1)
+                    Text(scan.progress ?? String(localized: "Starting…")).font(AppFont.text(12)).foregroundStyle(AppColor.ink2).lineLimit(1)
                 } else {
                     TapButton { scan.start(container: container) } label: {
                         LitButtonChrome(.primary, compact: true) { Text("Find people") }
@@ -393,7 +421,8 @@ struct PeopleOverview: View {
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
             if named.isEmpty && groups.isEmpty {
-                Text(scanned ? "No one new stands out yet." : "Find people above also listens for voices you meet often. Run it, then come back.")
+                (scanned ? Text("No one new stands out yet.")
+                    : Text("Find people above also listens for voices you meet often. Run it, then come back."))
                     .font(AppFont.text(13)).foregroundStyle(AppColor.ink3)
             }
             ForEach(named.prefix(VoiceSuggestions.maxShown)) { n in
@@ -415,8 +444,10 @@ struct PeopleOverview: View {
                 HStack(spacing: AppMetric.m) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("A voice in \(g.members.count) of your meetings").font(AppFont.text(14)).foregroundStyle(AppColor.ink)
-                        Text("\(PersonPage.duration(g.seconds)) · last \(g.last.formatted(date: .abbreviated, time: .omitted)) · " +
-                             g.members.sorted { $0.date > $1.date }.prefix(2).compactMap { titles[$0.recordingId] }.joined(separator: ", "))
+                        let recent = g.members.sorted { $0.date > $1.date }.prefix(2).compactMap { titles[$0.recordingId] }
+                            .joined(separator: ", ")
+                        Text("\(PersonPage.duration(g.seconds)) · last \(g.last.formatted(date: .abbreviated, time: .omitted)) · \(recent)",
+                             comment: "Voice suggestion: speech time, last meeting date, recent meeting titles")
                             .uiLabel(9, color: AppColor.ink3).lineLimit(1)
                     }
                     Spacer()
@@ -463,7 +494,9 @@ struct PeopleOverview: View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
             Text("Most meetings with you, last \(Int(Self.recentDays)) days").cardTitle()
             let top = rows.filter { !$0.recent.isEmpty }.sorted { $0.recent.count > $1.recent.count }.prefix(8)
-            Text("Recordings you were in too (your microphone, or a line under your name)\(confirmedOnly ? ", where you named or confirmed them" : ""). Talk is the time their lines cover, at most what their words take at a slow pace, and their words.")
+            (confirmedOnly
+                ? Text("Recordings you were in too (your microphone, or a line under your name), where you named or confirmed them. Talk is the time their lines cover, at most what their words take at a slow pace, and their words.")
+                : Text("Recordings you were in too (your microphone, or a line under your name). Talk is the time their lines cover, at most what their words take at a slow pace, and their words."))
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 .fixedSize(horizontal: false, vertical: true)
             if top.isEmpty {
@@ -516,9 +549,9 @@ struct PeopleOverview: View {
                     Text(progress).font(AppFont.text(12)).foregroundStyle(AppColor.ink2).lineLimit(1)
                 }
             }
-            Text(commitments.isEmpty
-                 ? "Nothing open from the last month. Refresh all reads everyone's meetings to find what they committed to."
-                 : "What people committed to in the last month, newest first. Mark items done on their pages.")
+            (commitments.isEmpty
+                 ? Text("Nothing open from the last month. Refresh all reads everyone's meetings to find what they committed to.")
+                 : Text("What people committed to in the last month, newest first. Mark items done on their pages."))
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
             ForEach(commitments.prefix(10), id: \.id) { c in
                 TapButton { openMeeting(c.row.meeting, at: c.row.item.seconds ?? c.row.meeting.firstLine) } label: {

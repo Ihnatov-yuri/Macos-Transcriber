@@ -68,7 +68,7 @@ struct EnginesSettingsTab: View {
             if filter.showsAny(.defaultEngine, .liveEngine, .liveSpeechCheck, .followMeetingMute, .whisperModels) {
                 Section("Speech-to-text") {
                     if filter.shows(.defaultEngine) {
-                        EnginePicker(title: "Default engine", kinds: audioEngines, selection: Binding(
+                        EnginePicker(title: String(localized: "Default engine"), kinds: audioEngines, selection: Binding(
                             get: { container.uiPrefs.defaultBackend },
                             set: { container.uiPrefs.defaultBackend = $0 }
                         ))
@@ -107,7 +107,7 @@ struct EnginesSettingsTab: View {
             if filter.showsAny(.mergeEngines, .superMaxQuality, .meetingSuperFollowUp, .calendarContext, .recordingBrief, .textModelRulings) {
                 Section("Super · dual-engine merge") {
                     if filter.shows(.mergeEngines) {
-                        EnginePicker(title: "Merge engine A", kinds: mergeOptions, selection: Binding(
+                        EnginePicker(title: String(localized: "Merge engine A"), kinds: mergeOptions, selection: Binding(
                             get: { container.uiPrefs.ensembleEngineA },
                             set: { newValue in
                                 // Keep A ≠ B: picking B's engine swaps them.
@@ -117,7 +117,7 @@ struct EnginesSettingsTab: View {
                                 container.uiPrefs.ensembleEngineA = newValue
                             }
                         ))
-                        EnginePicker(title: "Merge engine B", kinds: mergeOptions, selection: Binding(
+                        EnginePicker(title: String(localized: "Merge engine B"), kinds: mergeOptions, selection: Binding(
                             get: { container.uiPrefs.ensembleEngineB },
                             set: { newValue in
                                 if newValue == container.uiPrefs.ensembleEngineA {
@@ -185,10 +185,10 @@ struct EnginesSettingsTab: View {
             }
             if filter.shows(.engineLanguages) {
                 Section("Languages by engine") {
-                    LabeledContent("Parakeet v3", value: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk… (no Arabic/Asian)")
-                    LabeledContent("Parakeet v2", value: "English only — best English accuracy")
-                    LabeledContent("Ihnatov Parakeet UK", value: "Parakeet v3 fine-tuned for Ukrainian — keeps v3's English")
-                    LabeledContent("Whisper", value: "~100 languages incl. Arabic, Korean, Japanese, Chinese (distil-large-v3: English only)")
+                    LabeledContent("Parakeet v3", value: String(localized: "25 European languages — en, de, nl, fr, es, it, pt, pl, uk… (no Arabic/Asian)"))
+                    LabeledContent("Parakeet v2", value: String(localized: "English only — best English accuracy"))
+                    LabeledContent("Ihnatov Parakeet UK", value: String(localized: "Parakeet v3 fine-tuned for Ukrainian — keeps v3's English"))
+                    LabeledContent("Whisper", value: String(localized: "~100 languages incl. Arabic, Korean, Japanese, Chinese (distil-large-v3: English only)"))
                     Text(SettingID.engineLanguages.help)
                         .font(AppFont.text(12)).foregroundStyle(AppColor.ink3)
                 }
@@ -276,11 +276,11 @@ struct RecorderSettingsTab: View {
                         get: { settings.inputDeviceUID ?? "" },
                         set: { settings.inputDeviceUID = $0.isEmpty ? nil : $0 }
                     )) {
-                        Text(systemDefault.map { "System default — \($0.name)" } ?? "System default")
+                        Text(systemDefault.map { String(localized: "System default — \($0.name)") } ?? String(localized: "System default"))
                             .tag("")
                         Divider()
                         ForEach(devices) { device in
-                            Text(device.isBluetooth ? "\(device.name) (Bluetooth)" : device.name)
+                            Text(device.isBluetooth ? String(localized: "\(device.name) (Bluetooth)") : device.name)
                                 .tag(device.uid)
                         }
                         // Loopback drivers expose input channels, so they show up
@@ -429,10 +429,10 @@ private struct VirtualMicrophoneSettings: View {
                 }
             }
             HStack(spacing: 10) {
-                Text(installed ? "Driver installed." : "Needs a small audio driver (administrator password; all sound stops for a second).")
+                (installed ? Text("Driver installed.") : Text("Needs a small audio driver (administrator password; all sound stops for a second)."))
                     .font(AppFont.text(11))
                     .foregroundStyle(AppColor.ink2)
-                Button(installed ? "Remove Driver" : "Install Driver") { run(remove: installed) }
+                Button(installed ? String(localized: "Remove Driver") : String(localized: "Install Driver")) { run(remove: installed) }
                     .disabled(working || (!installed && VirtualMicrophone.bundledDriverURL == nil))
                 if working { ProgressView().controlSize(.small) }
             }
@@ -456,7 +456,8 @@ private struct VirtualMicrophoneSettings: View {
             try? await Task.sleep(for: .seconds(3))
             installed = VirtualMicrophone.isInstalled
             working = false
-            message = error ?? (remove ? "Removed." : "Installed. Choose \u{201C}\(VirtualMicrophone.micName)\u{201D} as the microphone in your call app.")
+            message = error ?? (remove ? String(localized: "Removed.", comment: "The audio driver was removed")
+                : String(localized: "Installed. Choose \u{201C}\(VirtualMicrophone.micName)\u{201D} as the microphone in your call app."))
             VirtualMicrophone.shared.refresh()
         }
     }
@@ -537,7 +538,7 @@ struct PresetsSettingsTab: View {
                     editor(preset)
                 } label: {
                     HStack(spacing: AppMetric.s) {
-                        Text(preset.name.isEmpty ? "Untitled" : preset.name)
+                        Text(preset.shownName)
                             // The name opens it too, not only the small chevron.
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -584,9 +585,9 @@ struct PresetsSettingsTab: View {
                 expanded.remove(preset.id)
             }
         } message: { preset in
-            Text(preset.isBuiltin
-                 ? "Outputs it already made stay in their recordings. Restore built-in presets brings it back."
-                 : "Outputs it already made stay in their recordings.")
+            preset.isBuiltin
+                ? Text("Outputs it already made stay in their recordings. Restore built-in presets brings it back.")
+                : Text("Outputs it already made stay in their recordings.")
         }
     }
 
@@ -620,9 +621,9 @@ struct PresetsSettingsTab: View {
             TextEditor(text: binding(for: preset.id, \.userTemplate))
                 .font(AppFont.text(12))
                 .frame(minHeight: 110)
-            Text(preset.placesTranscript
-                 ? "{transcript_with_speakers} is the transcript with names; {transcript} is the text alone."
-                 : "No {transcript_with_speakers} in the template, so the transcript is added at the end.")
+            (preset.placesTranscript
+                 ? Text("{transcript_with_speakers} is the transcript with names; {transcript} is the text alone.")
+                 : Text("No {transcript_with_speakers} in the template, so the transcript is added at the end."))
                 .font(AppFont.text(11))
                 .foregroundStyle(preset.placesTranscript ? AppColor.ink3 : AppColor.accentOnLight)
             HStack(spacing: AppMetric.m) {
@@ -720,7 +721,7 @@ struct StyleSettingsTab: View {
                 set: { container.promptStore.tone = $0 }
             )) {
                 ForEach(PromptStore.Tone.allCases, id: \.self) { t in
-                    Text(t.rawValue.capitalized).tag(t)
+                    Text(t.settingsTitle).tag(t)
                 }
             }
             }
@@ -774,15 +775,36 @@ struct StyleSettingsTab: View {
     }
 }
 
+/// Language names that settings store as English words (vocabulary keys,
+/// dictation languages), as the screen shows them. The stored word stays.
+enum SettingsLanguageNames {
+    static func name(_ english: String) -> String {
+        switch english {
+        case "English": String(localized: "English")
+        case "Dutch": String(localized: "Dutch")
+        case "Ukrainian": String(localized: "Ukrainian")
+        case "German": String(localized: "German")
+        case "French": String(localized: "French")
+        case "Spanish": String(localized: "Spanish")
+        case "Italian": String(localized: "Italian")
+        case "Portuguese": String(localized: "Portuguese")
+        case "Polish": String(localized: "Polish")
+        case "Arabic": String(localized: "Arabic")
+        default: english
+        }
+    }
+}
+
 struct VocabularyByLanguageEditor: View {
     @Environment(AppContainer.self) private var container
     @State private var lang = "Ukrainian"
+    /// Dictionary keys of the per-language vocabulary: stored, never shown.
     private let langs = ["English", "Arabic", "Ukrainian", "Dutch"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("Language", selection: $lang) {
-                ForEach(langs, id: \.self) { Text($0).tag($0) }
+                ForEach(langs, id: \.self) { Text(SettingsLanguageNames.name($0)).tag($0) }
             }
             .pickerStyle(.segmented)
             TextEditor(text: Binding(

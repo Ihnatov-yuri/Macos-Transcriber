@@ -22,11 +22,11 @@ struct VoiceprintSection: View {
 
     /// Plain, varied sentences: every vowel and most consonants, spoken at
     /// a natural pace. Any language works; the voice is what is learned.
-    static let passage = """
+    static let passage = String(localized: """
     When the meeting starts, I usually say hello, ask how everyone is doing, and then we look at the plan for the week. \
     Some of it is quick: a date, a number, a decision. Some of it takes longer, because we have to think it through together. \
     Afterwards I like to read back what we agreed, so nobody has to guess who said what.
-    """
+    """, comment: "A passage the user reads aloud so the app learns their voice; any language works")
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
@@ -58,7 +58,7 @@ struct VoiceprintSection: View {
                 case .idle:
                     TapButton(action: startRecording) {
                         LitButtonChrome(voiceprint == nil ? .primary : .secondary, compact: true) {
-                            Text(voiceprint == nil ? "Record my voice" : "Record again")
+                            (voiceprint == nil ? Text("Record my voice") : Text("Record again"))
                         }
                     }
                     if voiceprint != nil {
@@ -75,7 +75,7 @@ struct VoiceprintSection: View {
                 case .recording:
                     TapButton(action: finishRecording) {
                         LitButtonChrome(.accent, compact: true) {
-                            Text(elapsed >= Self.minimumSeconds ? "Done" : "Keep reading… \(Int(Self.minimumSeconds - elapsed)) s")
+                            (elapsed >= Self.minimumSeconds ? Text("Done") : Text("Keep reading… \(Int(Self.minimumSeconds - elapsed)) s"))
                         }
                     }
                     .disabled(elapsed < Self.minimumSeconds)
@@ -109,21 +109,21 @@ struct VoiceprintSection: View {
     private var status: String {
         switch phase {
         case .starting, .recording:
-            return "Read the passage aloud at your normal meeting volume, in whatever language you use. It stops by itself after \(Int(Self.targetSeconds)) seconds."
+            return String(localized: "Read the passage aloud at your normal meeting volume, in whatever language you use. It stops by itself after \(Int(Self.targetSeconds)) seconds.")
         case .learning:
-            return "Learning your voice…"
+            return String(localized: "Learning your voice…")
         case .idle:
             if let print = voiceprint {
                 let date = print.created.formatted(date: .abbreviated, time: .omitted)
-                let quality = print.selfSimilarity < 0.6
-                    ? " The reading sounded mixed, as if someone else or a lot of noise was in it; recording again in a quiet room will make it sharper."
-                    : ""
-                return "Learned from \(Int(print.seconds.rounded())) s of your voice on \(date). Meetings find you on the mic by your voice. What the speakers play is never taken for you, your words survive when you talk over someone, and your voice coming back in the call audio is recognised as yours.\(quality)"
+                let seconds = Int(print.seconds.rounded())
+                let learned = String(localized: "Learned from \(seconds) s of your voice on \(date). Meetings find you on the mic by your voice. What the speakers play is never taken for you, your words survive when you talk over someone, and your voice coming back in the call audio is recognised as yours.")
+                guard print.selfSimilarity < 0.6 else { return learned }
+                return learned + " " + String(localized: "The reading sounded mixed, as if someone else or a lot of noise was in it; recording again in a quiet room will make it sharper.")
             }
             if VoiceprintStore.isUnreadable {
-                return "Your saved voice print can no longer be read (it is damaged or was made by an older model), so meetings use the loudness timeline. Record it again below."
+                return String(localized: "Your saved voice print can no longer be read (it is damaged or was made by an older model), so meetings use the loudness timeline. Record it again below.")
             }
-            return "Read a short passage aloud once, about 30 seconds, with the microphone you use for meetings. Meetings then find you by your voice instead of by loudness. Without it they fall back to the loudness timeline. The recording stays on this Mac."
+            return String(localized: "Read a short passage aloud once, about 30 seconds, with the microphone you use for meetings. Meetings then find you by your voice instead of by loudness. Without it they fall back to the loudness timeline. The recording stays on this Mac.")
         }
     }
 

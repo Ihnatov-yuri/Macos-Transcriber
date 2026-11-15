@@ -114,11 +114,11 @@ struct TranscriberrApp: App {
         let alert = NSAlert()
         switch status {
         case .available(let r):
-            alert.messageText = "Transcriberr \(r.version) is available"
-            alert.informativeText = r.title.isEmpty ? "The release page has the download and what changed." : r.title
-            if r.installable { alert.addButton(withTitle: "Update Now") }
-            alert.addButton(withTitle: "What's New…")
-            alert.addButton(withTitle: "Later")
+            alert.messageText = String(localized: "Transcriberr \(r.version) is available")
+            alert.informativeText = r.title.isEmpty ? String(localized: "The release page has the download and what changed.") : r.title
+            if r.installable { alert.addButton(withTitle: String(localized: "Update Now")) }
+            alert.addButton(withTitle: String(localized: "What's New…"))
+            alert.addButton(withTitle: String(localized: "Later", comment: "Update alert button: dismiss for now"))
             switch (alert.runModal(), r.installable) {
             case (.alertFirstButtonReturn, true): container.installUpdate(r)
             case (.alertFirstButtonReturn, false), (.alertSecondButtonReturn, true): NSWorkspace.shared.open(r.pageURL)
@@ -127,15 +127,15 @@ struct TranscriberrApp: App {
             return
         case .failed(let why):
             alert.messageText = why
-            alert.informativeText = "Try again later."
+            alert.informativeText = String(localized: "Try again later.")
         case .checking:
             // Another check (the one at launch) is still out: "up to date"
             // here could hide a release it is about to find.
-            alert.messageText = "Already checking for updates"
-            alert.informativeText = "Try again in a moment."
+            alert.messageText = String(localized: "Already checking for updates")
+            alert.informativeText = String(localized: "Try again in a moment.")
         default:
-            alert.messageText = "Transcriberr is up to date"
-            alert.informativeText = "This is the latest version."
+            alert.messageText = String(localized: "Transcriberr is up to date")
+            alert.informativeText = String(localized: "This is the latest version.")
         }
         alert.runModal()
     }
@@ -158,7 +158,7 @@ struct TranscriberrApp: App {
             ])
         }
         let credits = NSMutableAttributedString(
-            string: "Local-first transcription studio.\nParakeet · Whisper · local text models, on this Mac.\n",
+            string: String(localized: "Local-first transcription studio.\nParakeet · Whisper · local text models, on this Mac.\n"),
             attributes: body
         )
 
@@ -170,19 +170,19 @@ struct TranscriberrApp: App {
             left.alignment = .left
             left.headIndent = 10
             left.paragraphSpacing = 3
-            credits.append(NSAttributedString(string: "\nWhat's new in \(version)\n", attributes: [
+            credits.append(NSAttributedString(string: String(localized: "\nWhat's new in \(version)\n"), attributes: [
                 .font: NSFont.boldSystemFont(ofSize: 11),
                 .foregroundColor: NSColor.labelColor,
             ]))
             for item in notes {
                 credits.append(NSAttributedString(string: "•  \(item)\n", attributes: body.merging([.paragraphStyle: left]) { $1 }))
             }
-            credits.append(link("All release notes", "https://github.com/Ihnatov-yuri/Macos-Transcriber/releases"))
+            credits.append(link(String(localized: "All release notes"), "https://github.com/Ihnatov-yuri/Macos-Transcriber/releases"))
             credits.append(NSAttributedString(string: "\n", attributes: body))
         }
 
-        credits.append(NSAttributedString(string: "\nCreated by Yuri Ihnatov\n", attributes: body))
-        credits.append(link("How it was built", "https://ihnatov.nl/transcriber/macos"))
+        credits.append(NSAttributedString(string: String(localized: "\nCreated by Yuri Ihnatov\n"), attributes: body))
+        credits.append(link(String(localized: "How it was built"), "https://ihnatov.nl/transcriber/macos"))
         credits.append(NSAttributedString(string: "  ·  ", attributes: quiet))
         credits.append(link("ihnatov.nl", "https://ihnatov.nl"))
         credits.append(NSAttributedString(string: "  ·  ", attributes: quiet))
@@ -202,10 +202,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard VirtualMicrophone.shared.isInUseByCall else { return .terminateNow }
         let alert = NSAlert()
-        alert.messageText = "A call is using the Transcriberr Microphone"
-        alert.informativeText = "If you quit, the microphone disappears from the call. Most call apps then switch to your Mac's microphone without the echo filter; some go silent until you pick a microphone again."
-        alert.addButton(withTitle: "Quit Anyway")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = String(localized: "A call is using the Transcriberr Microphone")
+        alert.informativeText = String(localized: "If you quit, the microphone disappears from the call. Most call apps then switch to your Mac's microphone without the echo filter; some go silent until you pick a microphone again.")
+        alert.addButton(withTitle: String(localized: "Quit Anyway"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
         return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
     }
 

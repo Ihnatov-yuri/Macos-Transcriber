@@ -27,9 +27,9 @@ struct WhisperModelsSection: View {
     /// "English", "Ukrainian", "Other languages", several, or none.
     private func uses(_ m: WhisperModel) -> [String] {
         var u: [String] = []
-        if WhisperModel.model(english).id == m.id { u.append("English") }
-        if WhisperModel.model(ukrainian).id == m.id { u.append("Ukrainian") }
-        if WhisperModel.model(other).id == m.id { u.append("Other languages") }
+        if WhisperModel.model(english).id == m.id { u.append(String(localized: "English")) }
+        if WhisperModel.model(ukrainian).id == m.id { u.append(String(localized: "Ukrainian")) }
+        if WhisperModel.model(other).id == m.id { u.append(String(localized: "Other languages")) }
         return u
     }
 }
@@ -86,7 +86,7 @@ private struct WhisperModelRow: View {
             }
         } else if model.isDownloaded {
             VStack(alignment: .trailing, spacing: 4) {
-                Text(inUse ? "In use · \(uses.joined(separator: " + "))" : "Installed")
+                (inUse ? Text("In use · \(uses.joined(separator: " + "))") : Text("Installed"))
                     .uiLabel(10, color: AppColor.accentOnLight)
                 TapButton { confirmingDelete = true } label: {
                     LitButtonChrome(.destructive, compact: true) { Text("Delete") }
@@ -96,9 +96,9 @@ private struct WhisperModelRow: View {
                 Button("Delete", role: .destructive) { downloads.delete(model) }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text(inUse
-                     ? "This is the model in use: Whisper downloads it again the next time it runs. Removes \(model.folder.path)."
-                     : "Removes \(model.folder.path).")
+                inUse
+                    ? Text("This is the model in use: Whisper downloads it again the next time it runs. Removes \(model.folder.path).")
+                    : Text("Removes \(model.folder.path).")
             }
         } else {
             TapButton { downloads.download(model) } label: {

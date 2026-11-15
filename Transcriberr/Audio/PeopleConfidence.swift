@@ -10,7 +10,17 @@ import Foundation
 /// voice, the user's own included (two voices close together are left
 /// unnamed, see PeopleMatch), and how clearly it has matched lately.
 struct VoiceConfidence: Equatable {
-    enum Level: String { case learning = "Learning", good = "Good", strong = "Strong" }
+    enum Level: String {
+        case learning = "Learning", good = "Good", strong = "Strong"
+        /// The level as shown; `rawValue` stays the English identifier.
+        var title: String {
+            switch self {
+            case .learning: String(localized: "Learning", comment: "Voice recognition level: still learning the voice")
+            case .good: String(localized: "Good", comment: "Voice recognition level")
+            case .strong: String(localized: "Strong", comment: "Voice recognition level")
+            }
+        }
+    }
     enum Grade: Equatable { case weak, fair, good }
 
     struct Factor: Equatable, Identifiable {
@@ -65,23 +75,26 @@ enum PeopleConfidence {
 
         let seconds = person.print.seconds
         factors.append(.init(
-            kind: .speech, title: "Speech learned",
+            kind: .speech, title: String(localized: "Speech learned", comment: "Voice confidence factor"),
             value: clamp(seconds / fullSeconds),
-            detail: "\(Int(seconds)) s of \(ownVoice ? "your" : "their") speech. About \(Int(fullSeconds / 60)) minutes is plenty."))
+            detail: ownVoice
+                ? String(localized: "\(Int(seconds)) s of your speech. About \(Int(fullSeconds / 60)) minutes is plenty.")
+                : String(localized: "\(Int(seconds)) s of their speech. About \(Int(fullSeconds / 60)) minutes is plenty.")))
 
         let sources = person.sources
         factors.append(.init(
-            kind: .recordings, title: "Recordings",
+            kind: .recordings, title: String(localized: "Recordings", comment: "Voice confidence factor: how many recordings the voice was learned from"),
             value: clamp(Double(sources) / Double(fullSources)),
             detail: sources == 1
-                ? "Learned from 1 recording or reading. Voices sound different on calls and in rooms; \(fullSources) is plenty."
-                : "Learned from \(sources) recordings or readings."))
+                ? String(localized: "Learned from 1 recording or reading. Voices sound different on calls and in rooms; \(fullSources) is plenty.")
+                : String(localized: "Learned from \(sources) recordings or readings.")))
 
         let alike = Double(person.print.selfSimilarity)
+        let alikeText = String(format: "%.2f", alike)
         factors.append(.init(
-            kind: .consistency, title: "Consistency",
+            kind: .consistency, title: String(localized: "Consistency", comment: "Voice confidence factor: how alike the voice samples are"),
             value: clamp((alike - Double(VoiceprintStore.minSelfSimilarity)) / 0.25),
-            detail: String(format: "How alike its samples are: %.2f. A clean voice sits around 0.8.", alike)))
+            detail: String(localized: "How alike its samples are: \(alikeText). A clean voice sits around 0.8.")))
 
         // Told apart the way PeopleMatch tells them apart: their own clips
         // scored against each voice. Centroid against centroid read 0.54 for
@@ -102,27 +115,28 @@ enum PeopleConfidence {
         /// How far their clips stand above the closest other voice.
         let gap = nearest.map { selfScore - $0.similarity } ?? 1
         if let nearest {
+            let ownText = String(format: "%.2f", selfScore), otherText = String(format: "%.2f", nearest.similarity)
+            let needed = String(format: "%.2f", margin)
             factors.append(.init(
-                kind: .distinct, title: "Stands apart",
+                kind: .distinct, title: String(localized: "Stands apart", comment: "Voice confidence factor: how different the voice is from other saved voices"),
                 value: clamp((gap - margin) / 0.25),
-                detail: String(format: "Their samples score %.2f against their own voice and %.2f against %@'s, the closest saved voice. A gap over %.2f tells them apart.",
-                               selfScore, nearest.similarity, nearest.name, margin)))
+                detail: String(localized: "Their samples score \(ownText) against their own voice and \(otherText) against \(nearest.name)'s, the closest saved voice. A gap over \(needed) tells them apart.")))
         } else {
-            factors.append(.init(kind: .distinct, title: "Stands apart", value: 1,
-                                 detail: "No other saved voice to mix them up with."))
+            factors.append(.init(kind: .distinct, title: String(localized: "Stands apart", comment: "Voice confidence factor: how different the voice is from other saved voices"), value: 1,
+                                 detail: String(localized: "No other saved voice to mix them up with.")))
         }
 
         let recent = (person.matches ?? []).suffix(recentMatches).map { Double($0.score) }
         if recent.isEmpty {
-            factors.append(.init(kind: .matches, title: "Recent matches", value: nil,
-                                 detail: "No match logged yet: matches are logged from 5.0 on. Find people on the People overview logs them for older recordings."))
+            factors.append(.init(kind: .matches, title: String(localized: "Recent matches", comment: "Voice confidence factor"), value: nil,
+                                 detail: String(localized: "No match logged yet: matches are logged from 5.0 on. Find people on the People overview logs them for older recordings.", comment: "5.0 is an app version; Find people is a button name")))
         } else {
             let median = Double(ClusterVoice.median(recent.map(Float.init)))
+            let medianText = String(format: "%.2f", median), barText = String(format: "%.2f", bar)
             factors.append(.init(
-                kind: .matches, title: "Recent matches",
+                kind: .matches, title: String(localized: "Recent matches", comment: "Voice confidence factor"),
                 value: clamp((median - bar) / 0.2),
-                detail: String(format: "Median %.2f over the last %d %@. %.2f is the bar.",
-                               median, recent.count, recent.count == 1 ? "match" : "matches", bar)))
+                detail: String(localized: "Median \(medianText) over the last \(recent.count) matches. \(barText) is the bar.")))
         }
 
         if ownVoice { factors.removeAll { $0.kind == .recordings || $0.kind == .matches } }
@@ -142,16 +156,16 @@ enum PeopleConfidence {
         // judged on; too little evidence is still too little.
         if (factors.first { $0.kind == .speech }?.value ?? 0) < 0.4, level != .learning {
             level = .learning
-            heldBack = "Kept at Learning until more of their speech is learned."
+            heldBack = String(localized: "Kept at Learning until more of their speech is learned.")
         }
         if !ownVoice, recent.isEmpty, sources < 2, level == .strong {
             level = .good
-            heldBack = "Kept at Good until they are recognised in a new recording or learned from a second one."
+            heldBack = String(localized: "Kept at Good until they are recognised in a new recording or learned from a second one.")
         }
         // Two voices that close are left unnamed whatever else is true.
         if let confusable {
             level = .learning
-            heldBack = "Kept at Learning while they sound close to \(confusable): recordings leave such a speaker unnamed rather than guess."
+            heldBack = String(localized: "Kept at Learning while they sound close to \(confusable): recordings leave such a speaker unnamed rather than guess.")
         }
 
         let weakest = judged.filter { $0.grade != .good }.min { ($0.value ?? 0) < ($1.value ?? 0) }
@@ -162,11 +176,15 @@ enum PeopleConfidence {
 
     static func advice(for kind: VoiceConfidence.Factor.Kind, soundsLike: String?) -> String {
         switch kind {
-        case .speech: return "Train more: record them reading, or learn from a recording they are named in."
-        case .recordings: return "Learn from another recording, ideally one on a different microphone or a call."
-        case .consistency: return "Some samples may have someone else in them. A clean reading at this Mac adds a clear one."
-        case .distinct: return "They sound close to \(soundsLike ?? "another saved voice"). Train both from more recordings, ideally on different microphones, so they are told apart."
-        case .matches: return "Their matches are close to the bar. Confirm the suggested recordings to sharpen the voice."
+        case .speech: return String(localized: "Train more: record them reading, or learn from a recording they are named in.")
+        case .recordings: return String(localized: "Learn from another recording, ideally one on a different microphone or a call.")
+        case .consistency: return String(localized: "Some samples may have someone else in them. A clean reading at this Mac adds a clear one.")
+        case .distinct:
+            if let soundsLike {
+                return String(localized: "They sound close to \(soundsLike). Train both from more recordings, ideally on different microphones, so they are told apart.")
+            }
+            return String(localized: "They sound close to another saved voice. Train both from more recordings, ideally on different microphones, so they are told apart.")
+        case .matches: return String(localized: "Their matches are close to the bar. Confirm the suggested recordings to sharpen the voice.")
         }
     }
 

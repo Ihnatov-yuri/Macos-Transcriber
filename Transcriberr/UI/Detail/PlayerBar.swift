@@ -123,7 +123,7 @@ struct PlayerBar: View {
                 .monospacedDigit()
                 .frame(minWidth: 26, minHeight: 28)
         }
-        .help(seconds < 0 ? "Back \(Int(-seconds)) seconds" : "Forward \(Int(seconds)) seconds")
+        .help(seconds < 0 ? String(localized: "Back \(Int(-seconds)) seconds") : String(localized: "Forward \(Int(seconds)) seconds"))
     }
 
     /// "1×", "1.25×", "0.75×".

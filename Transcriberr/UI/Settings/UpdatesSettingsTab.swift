@@ -39,20 +39,20 @@ struct UpdatesSettingsTab: View {
 
     private func statusText(_ u: UpdateChecker) -> String {
         switch u.status {
-        case .checking: return "Checking…"
-        case .upToDate: return "Up to date"
+        case .checking: return String(localized: "Checking…")
+        case .upToDate: return String(localized: "Up to date")
         case .available(let r):
             switch u.installer.phase {
-            case .downloading: return "Downloading \(r.version)…"
-            case .verifying: return "Checking signature…"
-            case .relaunching: return "Reopening…"
+            case .downloading: return String(localized: "Downloading \(r.version)…")
+            case .verifying: return String(localized: "Checking signature…")
+            case .relaunching: return String(localized: "Reopening…")
             case .failed(let why): return why
-            case .idle: return "\(r.version) is available"
+            case .idle: return String(localized: "\(r.version) is available")
             }
         case .failed(let why): return why
         case .idle:
-            guard let last = u.lastCheck else { return "Not checked yet" }
-            return "Checked \(last.formatted(.relative(presentation: .named)))"
+            guard let last = u.lastCheck else { return String(localized: "Not checked yet") }
+            return String(localized: "Checked \(last.formatted(.relative(presentation: .named)))")
         }
     }
 }

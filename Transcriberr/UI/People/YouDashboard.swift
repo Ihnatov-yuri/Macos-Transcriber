@@ -108,12 +108,12 @@ struct YouDashboard: View {
 
     private var summary: String {
         guard !meetings.isEmpty else {
-            return "Your lines are the ones named \(me): meetings recorded with your microphone, or speakers you renamed to \(me)."
+            return String(localized: "Your lines are the ones named \(me): meetings recorded with your microphone, or speakers you renamed to \(me).")
         }
         let talk = PersonMeetings.talk(seconds: meetings.map(\.talkSeconds).reduce(0, +),
                                        words: meetings.map(\.words).reduce(0, +))
         let shown = min(meetings.count, SpeechMeasure.window)
-        return "Each number is the average of your last \(shown == 1 ? "meeting" : "\(shown) meetings"). In all, \(meetings.count) measured, \(talk) of your lines. Numbers come from the transcripts only; the text engine writes the goals' wording and tips."
+        return String(localized: "Each number is the average of your last \(shown) meetings. In all, \(meetings.count) measured, \(talk) of your lines. Numbers come from the transcripts only; the text engine writes the goals' wording and tips.")
     }
 
     private var emptyCard: some View {
@@ -141,7 +141,7 @@ struct YouDashboard: View {
                     let due = SpeechCoachRunner.needsRefresh(state, meetings: meetings)
                     TapButton { coach.refresh(meetings: meetings, lines: lines, container: container) } label: {
                         LitButtonChrome(state.active.isEmpty || due ? .primary : .ghost, compact: true) {
-                            Text(state.active.isEmpty ? "Set goals" : due ? "Update goals" : "Check again")
+                            state.active.isEmpty ? Text("Set goals") : due ? Text("Update goals") : Text("Check again")
                         }
                     }
                     .disabled(meetings.count < SpeechCoach.minMeetings)
@@ -166,10 +166,10 @@ struct YouDashboard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if state.active.isEmpty && !coach.isRunning {
-                Text(SpeechTargets.gaps(meetings).isEmpty
-                     ? "Nothing stands out in your recent meetings. Nice. Check again after a few more."
-                     : meetings.count < 3 ? "Goals are set after three measured meetings."
-                     : "Set goals to pick the two things most worth working on.")
+                (SpeechTargets.gaps(meetings).isEmpty
+                     ? Text("Nothing stands out in your recent meetings. Nice. Check again after a few more.")
+                     : meetings.count < 3 ? Text("Goals are set after three measured meetings.")
+                     : Text("Set goals to pick the two things most worth working on."))
                     .font(AppFont.text(13)).foregroundStyle(AppColor.ink2)
             }
             ForEach(state.active) { goal in
@@ -236,22 +236,32 @@ struct YouDashboard: View {
     private var metricsIntro: String {
         let shown = meetings.filter { language == nil || $0.language == language }
         let used = min(shown.count, SpeechMeasure.window)
-        let where_ = language.map { " in \(SpeechMetric.languageName($0))" } ?? ""
-        guard used > 0 else { return "No meeting\(where_) measured yet." }
+        let lang = language.map { SpeechMetric.languageName($0) }
+        guard used > 0 else {
+            return lang.map { String(localized: "No meeting in \($0) measured yet.") }
+                ?? String(localized: "No meeting measured yet.")
+        }
         let dates = shown.sorted { $0.date > $1.date }.prefix(used).map(\.date)
-        let span = dates.count > 1
-            ? " (\(dates.last!.formatted(date: .abbreviated, time: .omitted)) to \(dates.first!.formatted(date: .abbreviated, time: .omitted)))"
-            : ""
-        return "Each number is the average over your \(used == 1 ? "latest meeting" : "latest \(used) meetings")\(where_)\(span), out of \(shown.count) measured. The line under it is one point per meeting, oldest on the left; the red dot is the latest."
+        let n = shown.count
+        let first: String
+        if dates.count > 1, let from = dates.last, let to = dates.first {
+            let a = from.formatted(date: .abbreviated, time: .omitted), b = to.formatted(date: .abbreviated, time: .omitted)
+            first = lang.map { String(localized: "Each number is the average over your latest \(used) meetings in \($0) (\(a) to \(b)), out of \(n) measured.") }
+                ?? String(localized: "Each number is the average over your latest \(used) meetings (\(a) to \(b)), out of \(n) measured.")
+        } else {
+            first = lang.map { String(localized: "Each number is the average over your latest \(used) meetings in \($0), out of \(n) measured.") }
+                ?? String(localized: "Each number is the average over your latest \(used) meetings, out of \(n) measured.")
+        }
+        return first + " " + String(localized: "The line under it is one point per meeting, oldest on the left; the red dot is the latest.")
     }
 
-    static let aboutNumbers: [String] = [
-        "Only what you said counts: your microphone track in meetings recorded here, and lines named you in imported ones.",
-        "Recordings with fewer than \(SpeechHistory.minimumMeetingWords) words in all (microphone tests, a few seconds) are left out.",
-        "A meeting's language comes from your own words in it: mostly Cyrillic is Ukrainian, mostly Latin is English. A language appears in the menu from two meetings.",
-        "“Lately” compares the newer half of those meetings with the older half; under 5% of a change reads as steady.",
-        "Fillers and hedges are counted in English and Ukrainian only. Speech engines leave many fillers out, so those read low; compare them between meetings transcribed the same way.",
-    ]
+    static var aboutNumbers: [String] { [
+        String(localized: "Only what you said counts: your microphone track in meetings recorded here, and lines named you in imported ones."),
+        String(localized: "Recordings with fewer than \(SpeechHistory.minimumMeetingWords) words in all (microphone tests, a few seconds) are left out."),
+        String(localized: "A meeting's language comes from your own words in it: mostly Cyrillic is Ukrainian, mostly Latin is English. A language appears in the menu from two meetings."),
+        String(localized: "“Lately” compares the newer half of those meetings with the older half; under 5% of a change reads as steady."),
+        String(localized: "Fillers and hedges are counted in English and Ukrainian only. Speech engines leave many fillers out, so those read low; compare them between meetings transcribed the same way."),
+    ] }
 
     private var historyCard: some View {
         VStack(alignment: .leading, spacing: AppMetric.s) {
@@ -265,7 +275,7 @@ struct YouDashboard: View {
             }
             ForEach(state.goals.filter { $0.status != .active }.reversed()) { g in
                 HStack(alignment: .firstTextBaseline) {
-                    Text(g.status == .achieved ? "Reached" : "Replaced")
+                    (g.status == .achieved ? Text("Reached", comment: "Past goal status") : Text("Replaced", comment: "Past goal status"))
                         .uiLabel(9, color: g.status == .achieved ? AppColor.statusSuccess : AppColor.ink3)
                         .frame(width: 70, alignment: .leading)
                     Text(g.title).font(AppFont.text(13)).foregroundStyle(AppColor.ink)
@@ -350,11 +360,11 @@ struct GoalCard: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(goal.title).font(AppFont.text(16, weight: .bold)).foregroundStyle(AppColor.ink)
                 Spacer()
-                Text(verdict.values.isEmpty ? "Not measured yet"
-                     : "\(verdict.hits) of last \(min(GoalJudge.window, verdict.values.count)) met")
+                (verdict.values.isEmpty ? Text("Not measured yet")
+                     : Text("\(verdict.hits) of last \(min(GoalJudge.window, verdict.values.count)) met"))
                     .uiLabel(9, color: verdict.hits > 0 ? AppColor.statusSuccess : AppColor.ink3)
             }
-            Text("\(goal.metric.title)\(goal.language.map { " in \(SpeechMetric.languageName($0))" } ?? ""): \(goal.targetText). Was \(goal.metric.format(goal.baseline))\(verdict.latest.map { ", latest \(goal.metric.format($0))" } ?? ", not measured since").")
+            Text(targetLine)
                 .font(AppFont.text(12)).foregroundStyle(AppColor.ink2)
             if !verdict.values.isEmpty {
                 GoalChart(goal: goal, verdict: verdict)
@@ -369,13 +379,28 @@ struct GoalCard: View {
                 }
             }
             if goal.revisions > 0 {
-                Text("Rethought \(goal.revisions == 1 ? "once" : "twice"): a target from your recent meetings and new tips.")
+                (goal.revisions == 1
+                    ? Text("Rethought once: a target from your recent meetings and new tips.")
+                    : Text("Rethought twice: a target from your recent meetings and new tips."))
                     .font(AppFont.text(11)).foregroundStyle(AppColor.ink3)
             }
         }
         .padding(AppMetric.m)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.45)))
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension GoalCard {
+    /// "Pace in English: under 160 wpm. Was 175, latest 168."
+    fileprivate var targetLine: String {
+        let title = goal.metric.title, target = goal.targetText
+        let head = goal.language.map { String(localized: "\(title) in \(SpeechMetric.languageName($0)): \(target).") }
+            ?? String(localized: "\(title): \(target).")
+        let was = goal.metric.format(goal.baseline)
+        let tail = verdict.latest.map { String(localized: "Was \(was), latest \(goal.metric.format($0)).") }
+            ?? String(localized: "Was \(was), not measured since.")
+        return head + " " + tail
     }
 }
 

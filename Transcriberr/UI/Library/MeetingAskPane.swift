@@ -166,11 +166,11 @@ struct MeetingAskPane: View {
                     if let n = url.host.flatMap(Int.init), let s = answer.cited.first(where: { $0.number == n }) { onOpen(s) }
                     return .handled
                 })
-            sources("Where this comes from", answer.cited, numbered: true)
+            sources(String(localized: "Where this comes from"), answer.cited, numbered: true)
         } else {
             Text("Your recordings don't answer this.")
                 .font(AppFont.text(16)).foregroundStyle(AppColor.ink)
-            if !answer.nearby.isEmpty { sources("Closest passages", answer.nearby, numbered: false) }
+            if !answer.nearby.isEmpty { sources(String(localized: "Closest passages"), answer.nearby, numbered: false) }
         }
     }
 

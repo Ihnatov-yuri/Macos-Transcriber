@@ -60,15 +60,16 @@ nonisolated enum PersonMeetings {
     /// "45 s", "12 min", "1 h 05 min".
     static func duration(_ seconds: Double) -> String {
         let s = Int(seconds.rounded())
-        if s < 60 { return "\(s) s" }
-        if s < 3600 { return "\(s / 60) min" }
-        return String(format: "%d h %02d min", s / 3600, (s / 60) % 60)
+        if s < 60 { return String(localized: "\(s) s", comment: "Duration in seconds") }
+        if s < 3600 { return String(localized: "\(s / 60) min", comment: "Duration in minutes") }
+        let minutes = String(format: "%02d", (s / 60) % 60)
+        return String(localized: "\(s / 3600) h \(minutes) min", comment: "Duration in hours and minutes")
     }
 
     /// Talk as every page shows it: the time their lines cover, bounded by
     /// their words, marked as approximate, and the words, which are exact.
     static func talk(seconds: Double, words: Int) -> String {
-        "~\(duration(seconds)) · \(words == 1 ? "1 word" : "\(words) words")"
+        String(localized: "~\(duration(seconds)) · \(words) words", comment: "Approximate talk time and exact word count")
     }
 
     static func talk(_ meetings: [PersonMeeting]) -> String {
@@ -185,7 +186,7 @@ final class PersonBriefRunner {
                 if Task.isCancelled { return }
                 running = l.person.id
                 await read(id: l.person.id, name: l.person.name, meetings: l.meetings, container: container,
-                           prefix: list.count > 1 ? "\(l.person.name), \(n + 1) of \(list.count). " : "")
+                           prefix: list.count > 1 ? String(localized: "\(l.person.name), \(n + 1) of \(list.count).") + " " : "")
             }
         }
     }
@@ -208,7 +209,8 @@ final class PersonBriefRunner {
                 let text = s.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return nil }
                 // "Speaker 2", never a raw key the model would copy ("Speaker_01").
-                let who = s.speaker.map { SpeakerLabel.display(s.speakerName, key: $0) }
+                // English: these lines go to the model and into the brief's cache key.
+                let who = s.speaker.map { SpeakerLabel.english(s.speakerName, key: $0) }
                     ?? s.speakerName.flatMap { $0.isEmpty ? nil : $0 } ?? "Someone"
                 return .init(start: s.startSeconds, speaker: who, text: text)
             }
@@ -223,7 +225,7 @@ final class PersonBriefRunner {
                 try? store.save(.init(recordingId: meeting.id, key: key, built: entry.built, brief: entry.brief), for: id)
                 continue
             }
-            progress = prefix + "Reading meeting \(i + 1) of \(recent.count): \(meeting.title)"
+            progress = prefix + String(localized: "Reading meeting \(i + 1) of \(recent.count): \(meeting.title)")
             let starts = lines.filter { $0.speaker.caseInsensitiveCompare(name) == .orderedSame }.map(\.start)
             // Fetched per meeting: housekeeping may release the shared
             // engine between two reads, and a held instance would then
@@ -249,13 +251,13 @@ final class PersonBriefRunner {
                 try store.save(.init(recordingId: meeting.id, key: result.complete ? key : "",
                                      built: Date(), brief: result.brief), for: id)
                 if let previous { store.carryClosed(from: previous, to: result.brief, recording: meeting.id, for: id) }
-                if !result.complete { errors[id] = "Part of “\(meeting.title)” could not be read. Refresh tries it again." }
+                if !result.complete { errors[id] = String(localized: "Part of “\(meeting.title)” could not be read. Refresh tries it again.") }
                 read += 1
                 revision &+= 1
             } catch is CancellationError {
                 return
             } catch {
-                errors[id] = "“\(meeting.title)” could not be read: \(error.localizedDescription)"
+                errors[id] = String(localized: "“\(meeting.title)” could not be read: \(error.localizedDescription)")
                 AppLog.warn("person-brief", "\(meeting.id) failed: \(error.localizedDescription)")
                 // A timed-out read means the engine is struggling; more
                 // reads would only queue behind it.
@@ -296,17 +298,9 @@ struct PersonBriefView: Equatable {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .lastMeeting: return "Last meeting"
-            case .week: return "Last week"
-            case .month: return "Last month"
-            }
-        }
-        /// "in the last week", for sentences.
-        var phrase: String {
-            switch self {
-            case .lastMeeting: return "in the last meeting"
-            case .week: return "in the last week"
-            case .month: return "in the last month"
+            case .lastMeeting: return String(localized: "Last meeting", comment: "Person brief period")
+            case .week: return String(localized: "Last week", comment: "Person brief period")
+            case .month: return String(localized: "Last month", comment: "Person brief period")
             }
         }
         var days: Double? {
@@ -417,21 +411,21 @@ extension PersonBriefView {
     /// The brief as plain text, to paste into notes before a meeting.
     func text(for name: String, period: Period? = nil) -> String {
         func day(_ d: Date) -> String { d.formatted(date: .abbreviated, time: .omitted) }
-        var out = [period.map { "\(name), \($0.label.lowercased())" } ?? name]
+        var out = [period.map { String(localized: "\(name), \($0.label.lowercased())", comment: "Copied brief heading: name and period") } ?? name]
         if !gists.isEmpty {
-            out.append("\nIn short")
+            out.append("\n" + String(localized: "In short", comment: "Person brief section: a summary of each meeting"))
             out += gists.map { "- \($0.text) (\($0.meeting.title), \(day($0.meeting.date)))" }
         }
         if !commitments.isEmpty {
-            out.append("\nCommitted to")
+            out.append("\n" + String(localized: "Committed to", comment: "Person brief section: what they promised to do"))
             out += commitments.map { "- \($0.item.text) (\($0.meeting.title), \(day($0.meeting.date)))" }
         }
         if !questions.isEmpty {
-            out.append("\nOpen questions")
+            out.append("\n" + String(localized: "Open questions", comment: "Person brief section"))
             out += questions.map { "- \($0.item.text) (\($0.meeting.title), \(day($0.meeting.date)))" }
         }
         if !topics.isEmpty {
-            out.append("\nLast said on")
+            out.append("\n" + String(localized: "Last said on", comment: "Person brief section: topics and what they last said about each"))
             out += topics.map { "- \($0.item.topic ?? ""): \($0.item.text) (\(day($0.meeting.date)))" }
         }
         return out.joined(separator: "\n")

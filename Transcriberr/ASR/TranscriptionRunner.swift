@@ -237,7 +237,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         // chunked on its own (same shared timeline), everything from the mic
         // track is ground-truth "you", and diarization only has to untangle
         // the system track. Crosstalk can't blur identities across files.
-        continuation.yield(.stage(text: "Decoding audio…", fraction: 0.02))
+        continuation.yield(.stage(text: String(localized: "Decoding audio…"), fraction: 0.02))
         let decoder = AudioDecoder()
         let micURL = AudioCompressor.sidecarURL(for: params.file, kind: "mic")
         let sysURL = AudioCompressor.sidecarURL(for: params.file, kind: "sys")
@@ -273,12 +273,12 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 let sysSamples = try await sysTask
                 // What the user chose for this meeting's mic (see MicMute):
                 // the track on disk stays as recorded.
-                continuation.yield(.stage(text: "Checking your microphone…", fraction: 0.03))
+                continuation.yield(.stage(text: String(localized: "Checking your microphone…"), fraction: 0.03))
                 let micSuffix = try await MicMute.apply(to: &rawMic, main: params.file, print: voiceprint)
                 // Offline AEC: subtract the far side's echo from the mic
                 // using the sys track as reference — the echo never reaches
                 // an engine, and the user's speech survives crosstalk.
-                continuation.yield(.stage(text: "Cancelling echo…", fraction: 0.04))
+                continuation.yield(.stage(text: String(localized: "Cancelling echo…"), fraction: 0.04))
                 let micNeeded = prepareTimeline || params.backend.isParakeet
                 let prepared = try await Self.cancelEchoAndChunk(
                     mic: &rawMic, sys: sysSamples, decoder: decoder,
@@ -288,7 +288,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 micHadEcho = prepared.micHadEcho
                 sysSound = prepared.sysSound
                 if let voiceprint, let mic = prepared.cleanedMic {
-                    continuation.yield(.stage(text: "Finding your voice…", fraction: 0.05))
+                    continuation.yield(.stage(text: String(localized: "Finding your voice…"), fraction: 0.05))
                     let t0 = Date()
                     do {
                         // Scored again on the muted mic, not taken from the
@@ -297,7 +297,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                         // under the bar and the reply is lost from the user's
                         // lines. Worth the 20-odd s.
                         voice = try await VoiceTimeline.compute(mic: mic, sys: sysSamples, print: voiceprint) { f in
-                            continuation.yield(.stage(text: "Finding your voice… \(Int(f * 100))%", fraction: 0.05 + 0.01 * f))
+                            continuation.yield(.stage(text: String(localized: "Finding your voice… \(Int(f * 100))%"), fraction: 0.05 + 0.01 * f))
                         }
                         let secs = { (r: [ClosedRange<Double>]) in Int(r.reduce(0) { $0 + $1.upperBound - $1.lowerBound }) }
                         AppLog.info("runner", "voice print: you speak \(secs(voice!.mic)) s on the mic, \(secs(voice!.sys)) s in the call audio (\(String(format: "%.1f", Date().timeIntervalSince(t0))) s)")
@@ -331,7 +331,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         // background without racing this run's (already-finished) reads.
         continuation.yield(.sourceConsumed)
         continuation.yield(.stage(
-            text: "Sliced \(chunks.count) chunks (\(Int(duration))s)",
+            text: String(localized: "Sliced \(chunks.count) chunks (\(Int(duration))s)"),
             fraction: 0.06
         ))
 
@@ -344,7 +344,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             (params.hybridDiarize || params.backend.needsDiarizerForSpeakers)
         var diarSegments: [DiarizationRunner.SpeakerSegment] = []
         if needsDiarPrePass {
-            continuation.yield(.stage(text: "Diarizing speakers…", fraction: 0.10))
+            continuation.yield(.stage(text: String(localized: "Diarizing speakers…"), fraction: 0.10))
             do {
                 diarSegments = try await diarization.run(
                     samples: samples,
@@ -365,7 +365,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         // tracks know it already, the mic is the user).
         var clusterVoice: [String: Float]?
         if !splitTracks, !diarSegments.isEmpty, let print = VoiceprintStore.load() {
-            continuation.yield(.stage(text: "Finding your voice…", fraction: 0.12))
+            continuation.yield(.stage(text: String(localized: "Finding your voice…"), fraction: 0.12))
             let t0 = Date()
             do {
                 clusterVoice = try await ClusterVoice.compute(samples: samples, regions: diarSegments, print: print)
@@ -388,7 +388,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         }
 
         // ---------- load backend ----------
-        continuation.yield(.stage(text: "Loading model…", fraction: 0.14))
+        continuation.yield(.stage(text: String(localized: "Loading model…"), fraction: 0.14))
         if WhisperModel.needsLanguageProbe(params.languages), usesWhisper(params.backend) {
             await repinIfUkrainian(tracks: [samples] + (cleanedMic.map { [$0] } ?? []))
             try Task.checkCancellation()
@@ -411,12 +411,12 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
 
         if prepareTimeline, let ens = backend as? EnsembleBackend {
             try await holdWhileRecording(params, continuation: continuation)
-            continuation.yield(.stage(text: "Reading the whole recording…", fraction: 0.15))
+            continuation.yield(.stage(text: String(localized: "Reading the whole recording…"), fraction: 0.15))
             var tracks: [(id: Int, samples: [Float])] = [(0, samples)]
             if let cleanedMic { tracks.append((1, cleanedMic)) }
             await ens.prepareTimeline(tracks: tracks, languages: params.languages, splitTracks: splitTracks,
                                       onProgress: { f in
-                continuation.yield(.stage(text: "Reading the whole recording… \(Int(f * 100))%",
+                continuation.yield(.stage(text: String(localized: "Reading the whole recording… \(Int(f * 100))%"),
                                           fraction: 0.15 + 0.01 * f))
             })
             cleanedMic = nil
@@ -652,7 +652,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                     pipelineResults[idx] = raw
                     finished += 1
                     continuation.yield(.stage(
-                        text: "Chunk \(min(finished, chunks.count))/\(chunks.count)",
+                        text: String(localized: "Chunk \(min(finished, chunks.count))/\(chunks.count)", comment: "Run progress: chunks of audio transcribed so far / all chunks"),
                         fraction: chunkBaseFraction + chunkSpan * Double(finished) / Double(max(chunks.count, 1))
                     ))
                     if submitted < chunks.count {
@@ -674,7 +674,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             try await holdWhileRecording(params, continuation: continuation)
             let progress = chunkBaseFraction + chunkSpan * Double(idx) / Double(max(chunks.count, 1))
             continuation.yield(.stage(
-                text: "Chunk \(idx + 1)/\(chunks.count) (\(formatTime(chunk.startSeconds))–\(formatTime(chunk.endSeconds)))",
+                text: String(localized: "Chunk \(idx + 1)/\(chunks.count) (\(formatTime(chunk.startSeconds))–\(formatTime(chunk.endSeconds)))", comment: "Run progress: chunk number / all chunks, then its time span"),
                 fraction: progress
             ))
             let raw: String
@@ -708,7 +708,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             // spelling fixes are applied to the finished text.
             let firstPass = allSegments.map(\.text).joined(separator: "\n")
             if MeetingBriefBuilder.isEnabled, firstPass.count >= 600 {
-                continuation.yield(.stage(text: "Reading the whole transcript…", fraction: 0.89))
+                continuation.yield(.stage(text: String(localized: "Reading the whole transcript…"), fraction: 0.89))
                 var vocabulary = prompts.vocabulary(for: params.languages)
                 if let terms = params.meetingContext?.allTerms, !terms.isEmpty {
                     vocabulary += (vocabulary.isEmpty ? "" : ", ") + terms.joined(separator: ", ")
@@ -763,7 +763,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
                 guard let info = rich[idx] else { continue }
                 let chunk = chunks[idx]
                 continuation.yield(.stage(
-                    text: "Arbitrating disputed chunk \(k + 1)/\(disputes.count)…",
+                    text: String(localized: "Arbitrating disputed chunk \(k + 1)/\(disputes.count)…", comment: "Super run progress: the text model decides between two engines' readings of a chunk"),
                     fraction: 0.90 + 0.05 * Double(k) / Double(max(1, disputes.count))
                 ))
                 let ctx = neighborContext(around: chunk, in: allSegments)
@@ -880,7 +880,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             if let ens = backend as? EnsembleBackend {
                 timelines = await ens.wholeTrackWords()
             } else if let parakeet = backend as? ParakeetBackend, let mic = cleanedMic {
-                continuation.yield(.stage(text: "Timing the turns…", fraction: 0.97))
+                continuation.yield(.stage(text: String(localized: "Timing the turns…", comment: "Run progress: setting start and end times of each speaker turn"), fraction: 0.97))
                 for (id, track) in [(0, samples), (1, mic)] {
                     do {
                         timelines[id] = try await parakeet.transcribeTimed(samples: track, languages: params.languages)
@@ -946,7 +946,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             AppLog.info("runner", "\(disputes.count) disputed words kept for the transcript")
             continuation.yield(.disputes(disputes))
         }
-        continuation.yield(.stage(text: "Done.", fraction: 1.0))
+        continuation.yield(.stage(text: String(localized: "Done.", comment: "Run progress: finished"), fraction: 1.0))
         continuation.yield(.done(segments: allSegments))
     }
 
@@ -1321,7 +1321,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     ) async throws -> [RawSegment] {
         var allSegments = incoming
         continuation.yield(.stage(
-            text: "Refining \(flagged.count) low-confidence chunk\(flagged.count == 1 ? "" : "s")…",
+            text: String(localized: "Refining \(flagged.count) low-confidence chunks…"),
             fraction: 0.96
         ))
 
@@ -1330,7 +1330,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
             try await holdWhileRecording(params, continuation: continuation)
             let progress = 0.96 + 0.03 * Double(i) / Double(max(flagged.count, 1))
             continuation.yield(.stage(
-                text: "Refine \(i + 1)/\(flagged.count) — \(formatTime(entry.chunk.startSeconds))",
+                text: String(localized: "Refine \(i + 1)/\(flagged.count) — \(formatTime(entry.chunk.startSeconds))", comment: "Run progress: re-reading low-confidence chunk number / all, then its start time"),
                 fraction: progress
             ))
 
@@ -1516,7 +1516,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
     ) async throws {
         guard params.backend == .ensemble, RecordingActivity.shared.isRecording else { return }
         AppLog.info("runner", "Super held — a recording is in progress")
-        continuation.yield(.stage(text: "Waiting for the recording to end…", fraction: -1))
+        continuation.yield(.stage(text: String(localized: "Waiting for the recording to end…"), fraction: -1))
         try await RecordingActivity.shared.waitUntilIdle()
         AppLog.info("runner", "Super carries on")
     }
@@ -1604,7 +1604,7 @@ nonisolated final class TranscriptionRunner: @unchecked Sendable {
         } catch let gaveUp as WhisperBackend.DecodeBudgetExceeded {
             AppLog.warn("runner", "\(gaveUp.localizedDescription) Trying the part once more.")
         } catch ASRError.chunkTimeout {
-            continuation.yield(.stage(text: "Chunk wedged — recovering engine…", fraction: -1))
+            continuation.yield(.stage(text: String(localized: "Chunk wedged — recovering engine…"), fraction: -1))
             await rebuild()
         }
         do {
@@ -1877,10 +1877,8 @@ nonisolated enum RunGapLog {
     static func message(_ counts: [Kind: Int]) -> String? {
         let n = counts.values.reduce(0, +)
         guard n > 0 else { return nil }
-        let parts = n == 1 ? "1 part" : "\(n) parts"
-        let why = counts[.wedged, default: 0] == n
-            ? "the engine hung on it twice"
-            : "the engine ran out of time, probably because the Mac was busy"
-        return "\(parts) of this recording \(n == 1 ? "has" : "have") no text: \(why). Run it again to fill \(n == 1 ? "it" : "them") in."
+        return counts[.wedged, default: 0] == n
+            ? String(localized: "\(n) parts of this recording have no text: the engine hung on it twice. Run it again to fill them in.")
+            : String(localized: "\(n) parts of this recording have no text: the engine ran out of time, probably because the Mac was busy. Run it again to fill them in.")
     }
 }

@@ -118,12 +118,12 @@ final class DetailModel {
         // reading), so it is not gated here.
         if backend == .ensemble,
            container.uiPrefs.ensembleEngineA == container.uiPrefs.ensembleEngineB {
-            lastError = "SUPER MERGE NEEDS TWO DIFFERENT ENGINES · PICK MERGE A ≠ MERGE B"
+            lastError = String(localized: "Super merge needs two different engines · pick Merge A ≠ Merge B").uppercased()
             return
         }
         // Parakeet downloads its own models on first run — no gate needed.
         if !backend.isLocal && !container.apiKeys.isSet(apiProvider(for: backend)) {
-            lastError = "\(backend.displayName.uppercased()) API KEY NOT SET · OPEN SETTINGS → API KEYS"
+            lastError = String(localized: "\(backend.displayName) API key not set · open Settings → API Keys").uppercased()
             return
         }
 

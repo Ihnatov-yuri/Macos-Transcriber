@@ -19,17 +19,18 @@ nonisolated enum VoiceModel: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .standard: return "Standard"
-        case .simam: return "High accuracy"
+        case .standard: return String(localized: "Standard", comment: "Voice model choice: the built-in model")
+        case .simam: return String(localized: "High accuracy", comment: "Voice model choice: the downloadable, more accurate model")
         }
     }
 
     var detail: String {
         switch self {
         case .standard:
-            return "WeSpeaker ResNet34, built in."
+            return String(localized: "WeSpeaker ResNet34, built in.")
         case .simam:
-            return "SimAM-ResNet100 trained on VoxBlink2, a \(SimAMModel.totalBytes / 1_000_000) MB download. About twice as good at telling people apart, and slower. Licensed CC BY-NC-SA 4.0: personal, non-commercial use."
+            let megabytes = SimAMModel.totalBytes / 1_000_000
+            return String(localized: "SimAM-ResNet100 trained on VoxBlink2, a \(megabytes) MB download. About twice as good at telling people apart, and slower. Licensed CC BY-NC-SA 4.0: personal, non-commercial use.")
         }
     }
 
@@ -123,7 +124,7 @@ nonisolated enum SimAMModel {
 
     struct DownloadFailed: LocalizedError {
         let reason: String
-        var errorDescription: String? { "The high-accuracy voice model could not be downloaded: \(reason)" }
+        var errorDescription: String? { String(localized: "The high-accuracy voice model could not be downloaded: \(reason)") }
     }
 
     /// Downloads the model unless it is installed. Each file is checked
@@ -153,7 +154,7 @@ nonisolated enum SimAMModel {
                 throw DownloadFailed(reason: "HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1) for \(file.path)")
             }
             guard try ModelDownloader.sha256(of: temp) == file.sha256 else {
-                throw DownloadFailed(reason: "\(file.path) did not match its checksum")
+                throw DownloadFailed(reason: String(localized: "\(file.path) did not match its checksum"))
             }
             try fm.moveItem(at: temp, to: target)
             done += file.size
@@ -243,7 +244,7 @@ actor SimAMEmbedder {
                             let results = try model.predictions(fromBatch: MLArrayBatchProvider(array: batch))
                             for i in 0..<results.count {
                                 guard let e = results.features(at: i).featureValue(for: "embedding")?.multiArrayValue else {
-                                    throw SimAMModel.DownloadFailed(reason: "the model gave no embedding")
+                                    throw SimAMModel.DownloadFailed(reason: String(localized: "the model gave no embedding"))
                                 }
                                 var v = (0..<e.count).map { e[$0].floatValue }
                                 let n = v.reduce(0) { $0 + $1 * $1 }.squareRoot()

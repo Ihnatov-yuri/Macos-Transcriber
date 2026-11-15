@@ -48,15 +48,18 @@ nonisolated enum RecordingResume {
         return "\(r.isMeeting ? "Meeting" : "Recording") \(f.string(from: r.startedAt))"
     }
 
-    /// "23 minutes", "1 hour 5 minutes", "40 seconds".
+    /// "23 minutes", "1 hour 5 minutes", "40 seconds". Each unit is one
+    /// localized string with an Int count, so the catalog carries the plurals.
     static func lengthText(_ seconds: Double) -> String {
         let s = Int(seconds.rounded())
-        if s < 60 { return "\(s) second\(s == 1 ? "" : "s")" }
+        if s < 60 { return String(localized: "\(s) seconds", comment: "Length of an interrupted recording") }
         let m = s / 60
-        if m < 60 { return "\(m) minute\(m == 1 ? "" : "s")" }
+        if m < 60 { return String(localized: "\(m) minutes", comment: "Length of an interrupted recording") }
         let h = m / 60, rest = m % 60
-        let hours = "\(h) hour\(h == 1 ? "" : "s")"
-        return rest == 0 ? hours : "\(hours) \(rest) minute\(rest == 1 ? "" : "s")"
+        if rest == 0 { return String(localized: "\(h) hours", comment: "Length of an interrupted recording") }
+        // Two strings, so each count takes its own plural form ("1 hour 5 minutes").
+        return String(localized: "\(h) hours", comment: "Length of an interrupted recording")
+            + " " + String(localized: "\(rest) minutes", comment: "Length of an interrupted recording")
     }
 
     /// The launch question's text.
@@ -64,9 +67,12 @@ nonisolated enum RecordingResume {
         let t = DateFormatter()
         t.dateStyle = .none
         t.timeStyle = .short
-        let kind = r.isMeeting ? "meeting" : "recording"
-        return "Transcriberr closed while a \(kind) was recording. The \(lengthText(r.seconds)) up to "
-            + "\(t.string(from: r.endedAt)) are saved. Continue recording, and Stop joins the new part "
-            + "to it as one \(kind)."
+        let length = lengthText(r.seconds)
+        let until = t.string(from: r.endedAt)
+        return r.isMeeting
+            ? String(localized: "Transcriberr closed while a meeting was recording. The \(length) up to \(until) are saved. Continue recording, and Stop joins the new part to it as one meeting.",
+                     comment: "Launch question after a crash; first value is a length like 23 minutes, second a time")
+            : String(localized: "Transcriberr closed while a recording was recording. The \(length) up to \(until) are saved. Continue recording, and Stop joins the new part to it as one recording.",
+                     comment: "Launch question after a crash; first value is a length like 23 minutes, second a time")
     }
 }

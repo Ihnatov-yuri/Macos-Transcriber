@@ -16,7 +16,7 @@ nonisolated final class RecorderSettings: @unchecked Sendable {
 
         var label: String {
             switch self {
-            case .auto: return "Auto"
+            case .auto: return String(localized: "Auto", comment: "Mic sensitivity: level set automatically")
             case .x2:   return "2×"
             case .x4:   return "4×"
             case .x6:   return "6×"

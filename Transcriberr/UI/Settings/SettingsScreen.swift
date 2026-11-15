@@ -21,6 +21,9 @@ struct SettingsScreen: View {
     @FocusState private var searchFocused: Bool
     @State private var askPhase: SettingsAskPhase = .idle
     @State private var askTask: Task<Void, Never>?
+    /// The interface language picked here; it applies after a restart.
+    @State private var language = AppLanguage.chosen()
+    @State private var askRestart = false
 
     private var collapsed: Set<String> { Set(collapsedRaw.split(separator: ",").map(String.init)) }
     private var level: SettingsLevel { SettingsLevel(rawValue: levelRaw) ?? .normal }
@@ -50,8 +53,8 @@ struct SettingsScreen: View {
                     InkRule()
                     Spacer().frame(height: AppMetric.l)
 
-                    SectionIndex(5, "Settings",
-                                 summary: "Per-recording overrides live in the Library detail Run sheet. Everything here is global defaults.")
+                    SectionIndex(5, String(localized: "Settings"),
+                                 summary: String(localized: "Per-recording overrides live in the Library detail Run sheet. Everything here is global defaults."))
                         .padding(.horizontal, AppMetric.sheetPadding)
 
                     Spacer().frame(height: AppMetric.l)
@@ -125,11 +128,38 @@ struct SettingsScreen: View {
                             LitChip(label: l.title, active: level == l) { levelRaw = l.rawValue }
                                 .accessibilityAddTraits(level == l ? .isSelected : [])
                                 .help(l == .normal
-                                      ? "The settings most people change"
-                                      : "Everything, including Super tuning, prompts, voices and API keys")
+                                      ? Text("The settings most people change")
+                                      : Text("Everything, including Super tuning, prompts, voices and API keys"))
                         }
                     }
                 }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Language").uiLabel(9, color: AppColor.ink2)
+                    HStack(spacing: 6) {
+                        ForEach(AppLanguage.allCases, id: \.self) { l in
+                            LitChip(label: l.name, active: language == l) {
+                                guard l != language else { return }
+                                language = l
+                                AppLanguage.choose(l)
+                                askRestart = true
+                            }
+                            .accessibilityAddTraits(language == l ? .isSelected : [])
+                        }
+                    }
+                    .help("The language of Transcriberr's own screens. Transcripts, summaries and dictation follow the speech and your presets.")
+                }
+            }
+            .alert("Restart Transcriberr to change the language", isPresented: $askRestart) {
+                if container.recorder.isCapturing || container.meetingRecorder.isCapturing {
+                    Button("Later", role: .cancel) {}
+                } else {
+                    Button("Restart Now") { AppLanguage.relaunch() }
+                    Button("Later", role: .cancel) {}
+                }
+            } message: {
+                container.recorder.isCapturing || container.meetingRecorder.isCapturing
+                    ? Text("A recording is running. The new language shows the next time Transcriberr opens.")
+                    : Text("The new language shows the next time Transcriberr opens.")
             }
             Text(caption(filter, sections: sections))
                 .font(AppFont.text(12))
@@ -205,21 +235,33 @@ struct SettingsScreen: View {
     private func caption(_ filter: SettingsFilter, sections: [SettingsSection]) -> String {
         guard filter.isSearching else {
             return level == .normal
-                ? "Showing the settings most people change. Advanced adds Super tuning, prompts, voices, learned terms, API keys and AI assistants."
-                : "Showing every setting."
+                ? String(localized: "Showing the settings most people change. Advanced adds Super tuning, prompts, voices, learned terms, API keys and AI assistants.")
+                : String(localized: "Showing every setting.")
         }
         let matches = sections.flatMap { filter.visible(in: $0) }
-        guard !matches.isEmpty else { return "Search covers Normal and Advanced settings." }
-        let count = matches.count == 1 ? "1 setting matches" : "\(matches.count) settings match"
-        let scope = sections.count == 1 ? "" : " in \(sections.count) sections"
+        guard !matches.isEmpty else { return String(localized: "Search covers Normal and Advanced settings.") }
+        let count = matches.count
+        let sectionCount = sections.count
         let advanced = sections.flatMap { filter.advancedMatches(in: $0) }.count
-        let tail: String
-        switch advanced {
-        case 0: tail = "."
-        case matches.count: tail = matches.count == 1 ? ", an Advanced one." : ", all of them Advanced."
-        default: tail = ", \(advanced) of them Advanced."
+        // Whole sentences per case, so each one translates (one match is
+        // always in one section).
+        if count == 1 {
+            return advanced == 0
+                ? String(localized: "1 setting matches.")
+                : String(localized: "1 setting matches, an Advanced one.")
         }
-        return count + scope + tail
+        if sectionCount == 1 {
+            switch advanced {
+            case 0: return String(localized: "\(count) settings match.")
+            case count: return String(localized: "\(count) settings match, all of them Advanced.")
+            default: return String(localized: "\(count) settings match, \(advanced) of them Advanced.")
+            }
+        }
+        switch advanced {
+        case 0: return String(localized: "\(count) settings match in \(sectionCount) sections.")
+        case count: return String(localized: "\(count) settings match in \(sectionCount) sections, all of them Advanced.")
+        default: return String(localized: "\(count) settings match in \(sectionCount) sections, \(advanced) of them Advanced.")
+        }
     }
 
     private var noMatch: some View {
@@ -309,7 +351,7 @@ struct SettingsScreen: View {
                 withAnimation(.easeOut(duration: 0.15)) { toggle(key) }
             } label: {
                 HStack(spacing: 0) {
-                    Text("\(letter) · ")
+                    Text(verbatim: "\(letter) · ")
                         .uiLabel(11, color: AppColor.accentOnLight)
                     Text(label)
                         .uiLabel(11)
@@ -325,8 +367,8 @@ struct SettingsScreen: View {
                 .padding(.vertical, 14)
                 .contentShape(Rectangle())
             }
-            .help(searching ? label : open ? "Fold \(label) away" : "Show \(label)")
-            .accessibilityValue(open ? "expanded" : "collapsed")
+            .help(searching ? Text(label) : open ? Text("Fold \(label) away") : Text("Show \(label)"))
+            .accessibilityValue(open ? Text("expanded", comment: "A settings section that is unfolded") : Text("collapsed", comment: "A settings section that is folded away"))
             if open {
                 HairlineSoft()
                 advancedNote(filter.advancedMatches(in: section))
@@ -344,10 +386,10 @@ struct SettingsScreen: View {
     private func advancedNote(_ ids: [SettingID]) -> some View {
         if !ids.isEmpty {
             HStack(alignment: .firstTextBaseline, spacing: AppMetric.s) {
-                Text("Advanced").uiLabel(9, color: AppColor.accentOnLight)
-                Text(ids.count == 1
-                     ? "\(ids[0].label) is an Advanced setting, shown because it matches."
-                     : "\(ids.map(\.label).joined(separator: ", ")) are Advanced settings, shown because they match.")
+                Text("Advanced", comment: "Settings level: shows every setting").uiLabel(9, color: AppColor.accentOnLight)
+                (ids.count == 1
+                     ? Text("\(ids[0].label) is an Advanced setting, shown because it matches.")
+                     : Text("\(ids.map(\.label).joined(separator: ", ")) are Advanced settings, shown because they match."))
                     .font(AppFont.text(12))
                     .foregroundStyle(AppColor.ink2)
                     .fixedSize(horizontal: false, vertical: true)

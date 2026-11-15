@@ -608,16 +608,16 @@ nonisolated final class DictationController: @unchecked Sendable {
         // voice-processing setup), when its state has not turned yet: a
         // second engine on the same input device must not open then.
         if recorder.isCapturing {
-            showMessage("Stop the recording first"); return
+            showMessage(String(localized: "Stop the recording first")); return
         }
         if case .recording = recorder.state {
-            showMessage("Stop the recording first"); return
+            showMessage(String(localized: "Stop the recording first")); return
         }
         if case .paused = recorder.state {
-            showMessage("Stop the recording first"); return
+            showMessage(String(localized: "Stop the recording first")); return
         }
         if meetingRecorder.isCapturing {
-            showMessage("Stop the meeting recording first"); return
+            showMessage(String(localized: "Stop the meeting recording first")); return
         }
         messageTask?.cancel()
         self.target = target
@@ -800,7 +800,7 @@ nonisolated final class DictationController: @unchecked Sendable {
             phase = .idle
             updateHUD()
         } else {
-            showMessage("Cancelled")
+            showMessage(String(localized: "Cancelled", comment: "Dictation HUD: the dictation was cancelled"))
         }
     }
 
@@ -933,7 +933,7 @@ nonisolated final class DictationController: @unchecked Sendable {
             AppLog.warn("dictation", "password field with a cloud engine — passage dropped, nothing sent")
             if final {
                 deliveredSessions.remove(passage.session)
-                finalMessage("Passwords are dictated with a local engine only")
+                finalMessage(String(localized: "Passwords are dictated with a local engine only"))
             }
             return
         }
@@ -993,7 +993,7 @@ nonisolated final class DictationController: @unchecked Sendable {
         } catch {
             AppLog.error("dictation", "recognition failed: \(error.localizedDescription)")
             lastError = error.localizedDescription
-            if final { finalMessage("Recognition failed: \(error.localizedDescription)") }
+            if final { finalMessage(String(localized: "Recognition failed: \(error.localizedDescription)")) }
             return
         }
         guard !cancelledSessions.contains(passage.session) else { return }
@@ -1029,13 +1029,13 @@ nonisolated final class DictationController: @unchecked Sendable {
                     updateHUD(showResultBriefly: true)
                 }
             case .copiedOnly:
-                finalMessage("Copied — press ⌘V. Grant Accessibility to auto-insert.")
+                finalMessage(String(localized: "Copied — press ⌘V. Grant Accessibility to auto-insert."))
             case .appChanged:
-                finalMessage(secret ? "You switched apps — password not inserted"
-                                    : "You switched apps — pastes when you return")
+                finalMessage(secret ? String(localized: "You switched apps — password not inserted")
+                                    : String(localized: "You switched apps — pastes when you return"))
             case .fieldChanged:
-                finalMessage(secret ? "You left the password field — password not inserted"
-                                    : "Password field — the text is in the Dictate pad")
+                finalMessage(secret ? String(localized: "You left the password field — password not inserted")
+                                    : String(localized: "Password field — the text is in the Dictate pad"))
             }
         } else if outcome == .copiedOnly {
             // Keep listening, but tell the user once.
@@ -1156,7 +1156,7 @@ nonisolated final class DictationController: @unchecked Sendable {
         // another app (any app or web page can open the link).
         if passage.target != .frontmostApp, lastInsertion?.target == .frontmostApp {
             AppLog.warn("dictation", "scratch that from a pad session → the last passage went to an app, not removing")
-            if final { finalMessage("Nothing to scratch") }
+            if final { finalMessage(String(localized: "Nothing to scratch")) }
             return
         }
         // The passage to take back may still be queued behind an earlier
@@ -1173,12 +1173,12 @@ nonisolated final class DictationController: @unchecked Sendable {
                 AppLog.warn("dictation", "scratch that → the passage is not in the app, not removing")
                 lastText = ""
                 lastInsertion = nil
-                if final { finalMessage("Couldn't remove the last passage") }
+                if final { finalMessage(String(localized: "Couldn't remove the last passage")) }
                 return
             }
         }
         guard let last = lastInsertion, Date().timeIntervalSince(last.at) < 180 else {
-            if final { finalMessage("Nothing to scratch") }
+            if final { finalMessage(String(localized: "Nothing to scratch")) }
             return
         }
         var removed = false
@@ -1200,8 +1200,8 @@ nonisolated final class DictationController: @unchecked Sendable {
         lastInsertion = nil
         AppLog.info("dictation", "scratch that → \(removed ? "removed \(last.inserted.count) chars" : "not possible")")
         let shown = last.secret ? "•••" : String(last.inserted.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
-        lastText = removed ? "Scratched: “\(shown)…”" : ""
-        if final { finalMessage(removed ? "Removed the last passage" : "Couldn't remove the last passage") }
+        lastText = removed ? String(localized: "Scratched: “\(shown)…”") : ""
+        if final { finalMessage(removed ? String(localized: "Removed the last passage") : String(localized: "Couldn't remove the last passage")) }
     }
 
     // MARK: - Polish (optional text-model pass)
@@ -1275,7 +1275,7 @@ nonisolated final class DictationController: @unchecked Sendable {
     private func saveHistory(samples: [Float], seconds: Double, text: String) {
         do {
             try store(samples: samples, seconds: seconds, text: text,
-                      versionLabel: settings.engine.displayName + " · dictation")
+                      versionLabel: settings.engine.storedName + " · dictation")
         } catch {
             AppLog.error("dictation", "history save failed: \(error.localizedDescription)")
         }
@@ -1291,7 +1291,7 @@ nonisolated final class DictationController: @unchecked Sendable {
         do {
             let silence = [Float](repeating: 0, count: Int(UtteranceCapture.sampleRate / 2))
             try store(samples: silence, seconds: 0.5, text: text, versionLabel: "Dictation scratch pad")
-            showMessage("Saved to Library → Dictation")
+            showMessage(String(localized: "Saved to Library → Dictation"))
         } catch {
             AppLog.error("dictation", "scratch pad save failed: \(error.localizedDescription)")
             lastError = error.localizedDescription
@@ -1362,7 +1362,7 @@ nonisolated final class DictationController: @unchecked Sendable {
                                    commonFormat: .pcmFormatFloat32, interleaved: false)
         guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(samples.count)) else {
             throw NSError(domain: "Dictation", code: -1,
-                          userInfo: [NSLocalizedDescriptionKey: "Cannot allocate WAV buffer"])
+                          userInfo: [NSLocalizedDescriptionKey: String(localized: "Cannot allocate WAV buffer")])
         }
         buf.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { src in
@@ -1480,7 +1480,7 @@ nonisolated final class DictationController: @unchecked Sendable {
     @MainActor
     private func endEmptyFinal(passage: Passage) {
         guard deliveredSessions.remove(passage.session) != nil else {
-            finalMessage("Nothing heard")
+            finalMessage(String(localized: "Nothing heard", comment: "Dictation HUD: no speech was picked up"))
             return
         }
         AppLog.info("dictation", "silent tail after a delivered flush — ending as success")

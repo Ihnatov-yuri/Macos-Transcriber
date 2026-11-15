@@ -28,11 +28,25 @@ final class RecordingResumeTests: XCTestCase {
     }
 
     func testLengthText() {
-        XCTAssertEqual(RecordingResume.lengthText(40), "40 seconds")
-        XCTAssertEqual(RecordingResume.lengthText(61), "1 minute")
-        XCTAssertEqual(RecordingResume.lengthText(23 * 60 + 10), "23 minutes")
-        XCTAssertEqual(RecordingResume.lengthText(3600), "1 hour")
-        XCTAssertEqual(RecordingResume.lengthText(3900), "1 hour 5 minutes")
+        // The English singulars ("1 minute") come from the catalog's plural
+        // variants, so check the structure: the count and the unit.
+        func check(_ seconds: Double, _ parts: [String], not absent: [String] = []) {
+            let text = RecordingResume.lengthText(seconds)
+            for p in parts { XCTAssertTrue(text.contains(p), "\(text) lacks \(p)") }
+            for p in absent { XCTAssertFalse(text.contains(p), "\(text) has \(p)") }
+        }
+        check(40, ["40", "second"], not: ["minute"])
+        check(61, ["1", "minute"], not: ["second", "hour"])
+        check(23 * 60 + 10, ["23", "minute"], not: ["second", "hour"])
+        check(3600, ["1", "hour"], not: ["minute"])
+        check(3900, ["1", "hour", "5", "minute"])
+        // In English the singulars must come out right (review of 5.8.0:
+        // one string with two counts said "1 hours 5 minutes").
+        if Bundle.main.preferredLocalizations.first == "en" {
+            XCTAssertEqual(RecordingResume.lengthText(61), "1 minute")
+            XCTAssertEqual(RecordingResume.lengthText(3900), "1 hour 5 minutes")
+            XCTAssertEqual(RecordingResume.lengthText(2 * 3600 + 60), "2 hours 1 minute")
+        }
     }
 
     func testJoinedTitleNamesTheKind() {

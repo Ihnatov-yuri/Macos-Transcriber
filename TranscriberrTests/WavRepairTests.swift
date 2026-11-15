@@ -118,12 +118,12 @@ final class WavRepairTests: XCTestCase {
         _ = try writeWav("Recording_deleted.wav", frames: 16_000)
 
         let repaired = WavRepair.repairAll(WavRepair.candidates(in: dir))
-        XCTAssertEqual(WavRepair.importOrphans(repaired, into: repo), 1)
+        XCTAssertEqual(WavRepair.importOrphans(repaired, into: repo).count, 1)
         let rows = try repo.all()
         XCTAssertEqual(rows.map(\.audioPath), [crashed.path])
         XCTAssertEqual(rows.first?.durationSeconds ?? 0, 1, accuracy: 0.001)
         XCTAssertTrue(rows.first?.title.hasPrefix("Recovered recording") == true)
-        XCTAssertEqual(WavRepair.importOrphans(repaired, into: repo), 0, "a file with a row is never imported twice")
+        XCTAssertEqual(WavRepair.importOrphans(repaired, into: repo).count, 0, "a file with a row is never imported twice")
     }
 
     func testNotAWavIsUnrepairable() throws {

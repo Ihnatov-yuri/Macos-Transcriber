@@ -48,11 +48,13 @@ struct LibraryView: View {
             Group {
                 if ask.isOpen {
                     askPane
-                } else if let selection {
+                // A recording deleted elsewhere (a join after a crash
+                // removes its parts) is never shown.
+                } else if let selection, selection.modelContext != nil, !selection.isDeleted {
                     DetailView(recording: selection,
                                onClose: { self.selection = nil },
                                searchQuery: transcriptMatches.contains(selection.id) ? appliedQuery : "",
-                               isMerging: mergingIDs.contains(selection.id))
+                               isMerging: mergingIDs.contains(selection.id) || container.joiningIDs.contains(selection.id))
                 } else {
                     emptyState
                 }
@@ -73,7 +75,7 @@ struct LibraryView: View {
         // ⌘⌫ from the menu bar: the same confirmation as the row's Delete….
         .onChange(of: container.deleteRecordingRequested) {
             let shown = ask.isOpen ? ask.opened.flatMap { try? container.repository.get(id: $0.id) } : selection
-            if let rec = shown, rec.modelContext != nil, !mergingIDs.contains(rec.id) { deleting = rec }
+            if let rec = shown, rec.modelContext != nil, !mergingIDs.contains(rec.id), !container.joiningIDs.contains(rec.id) { deleting = rec }
         }
         .task(id: query) {
             let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -404,7 +406,7 @@ struct LibraryView: View {
 
     private func delete(_ rec: Recording) {
         // isDeleted resets after a save; the context is the reliable sign.
-        guard rec.modelContext != nil, !mergingIDs.contains(rec.id) else { return }
+        guard rec.modelContext != nil, !mergingIDs.contains(rec.id), !container.joiningIDs.contains(rec.id) else { return }
         if selection?.id == rec.id { selection = nil }
         // A run in flight on this recording would keep
         // appending segments to a deleted model — stop it

@@ -995,6 +995,50 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         return true
     }
 
+    /// A recording carried on after a crash, merged: it takes the title the
+    /// recording would have had, and the parts leave the Library. Their
+    /// audio stays on disk, as with any deleted recording.
+    func adoptJoin(_ joined: Recording, title: String, replacing parts: [Recording]) throws {
+        joined.title = title
+        for part in parts where part.id != joined.id && !part.isDeleted && part.modelContext != nil {
+            context.delete(part)
+            removePendingTask(part.id, save: false)
+        }
+        try context.save()
+    }
+
+    /// The lines of `recording` other than `except` that have `change.old`
+    /// as whole words: what "correct everywhere" would touch.
+    func linesToCorrect(_ change: TranscriptCorrection.Change, in recording: Recording,
+                        except: UUID? = nil) -> [Segment] {
+        recording.segments
+            .filter { $0.id != except && !TranscriptCorrection.ranges(of: change.old, in: $0.text).isEmpty }
+            .sorted { $0.startSeconds < $1.startSeconds }
+    }
+
+    /// Make `change` in every other line of the recording, in one save.
+    /// Returns each changed line with its text from before, or nothing when
+    /// the save failed (every line is then put back as it was).
+    @discardableResult
+    func correctEverywhere(_ change: TranscriptCorrection.Change, in recording: Recording,
+                           except: UUID? = nil) throws -> [(segment: Segment, before: String)] {
+        var changed: [(segment: Segment, before: String)] = []
+        for seg in linesToCorrect(change, in: recording, except: except) {
+            let fixed = TranscriptCorrection.replacing(change.old, with: change.new, in: seg.text)
+            guard fixed != seg.text else { continue }
+            changed.append((seg, seg.text))
+            seg.text = fixed
+        }
+        guard !changed.isEmpty else { return [] }
+        do {
+            try context.save()
+        } catch {
+            for (seg, before) in changed { seg.text = before }
+            throw error
+        }
+        return changed
+    }
+
     /// What made an output: kept on its OutputVersion.
     struct OutputProvenance {
         var engineLabel: String

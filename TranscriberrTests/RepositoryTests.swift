@@ -190,6 +190,41 @@ final class RepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.get(id: rec.id)?.segments.first?.text, "the cat")
     }
 
+    /// Carrying on after a crash: the joined recording gets the plain title
+    /// and the two parts leave the Library, queued runs included.
+    func testAdoptJoinRetitlesAndRemovesTheParts() throws {
+        let earlier = try makeRecording(title: "Recovered meeting", seconds: 2, segs: [])
+        let later = try makeRecording(title: "Meeting 21:30", seconds: 2, segs: [])
+        let joined = try makeRecording(title: "Recovered meeting + Meeting 21:30", seconds: 4, segs: [])
+        repo.savePendingTask(for: later, params: .init(file: URL(fileURLWithPath: later.audioPath), backend: .parakeet,
+                                                       modelDirectory: nil, languages: [], translateTo: nil))
+        try repo.adoptJoin(joined, title: "Meeting 15/11/2026, 21:05", replacing: [earlier, later])
+        XCTAssertEqual(try repo.all().map(\.id), [joined.id])
+        XCTAssertEqual(joined.title, "Meeting 15/11/2026, 21:05")
+        XCTAssertTrue(repo.pendingTasks().isEmpty)
+        XCTAssertFalse(container.mainContext.hasChanges)
+    }
+
+    /// One correction, every line: the edited line is left alone, lines
+    /// without the words are untouched, and the whole change is one save.
+    func testCorrectEverywhereChangesOtherLinesOnly() throws {
+        let rec = try makeRecording(title: "t", seconds: 4, segs: [
+            (0, 1, "Bel post en el morgen.", nil, nil),
+            (1, 2, "Post en el belde terug.", nil, nil),
+            (2, 3, "Geen pakket vandaag.", nil, nil),
+            (3, 4, "Weer post en el, en postenel.", nil, nil),
+        ])
+        let ordered = rec.segments.sorted { $0.startSeconds < $1.startSeconds }
+        XCTAssertTrue(try repo.correctSegment(ordered[0], to: "Bel PostNL morgen."))
+        let change = try XCTUnwrap(TranscriptCorrection.change(from: "Bel post en el morgen.", to: "Bel PostNL morgen."))
+        XCTAssertEqual(repo.linesToCorrect(change, in: rec, except: ordered[0].id).count, 2)
+        let changed = try repo.correctEverywhere(change, in: rec, except: ordered[0].id)
+        XCTAssertEqual(changed.map(\.before), ["Post en el belde terug.", "Weer post en el, en postenel."])
+        XCTAssertFalse(container.mainContext.hasChanges)
+        XCTAssertEqual(ordered.map(\.text), ["Bel PostNL morgen.", "PostNL belde terug.",
+                                             "Geen pakket vandaag.", "Weer PostNL, en postenel."])
+    }
+
     /// PostProcessor now writes through replaceOutput, so it must leave one
     /// output per preset in the relationship, not only in the store.
     func testReplaceOutputLeavesOneDocPerPreset() throws {

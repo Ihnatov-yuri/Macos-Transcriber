@@ -359,6 +359,9 @@ struct SegmentEditSheet: View {
                     .frame(minHeight: 140)
                     .scrollContentBackground(.hidden)
                     .background(AppColor.baseDeep)
+                Text("Fix a misheard word and Transcriberr offers to fix it in every other line too.")
+                    .font(AppFont.text(12))
+                    .foregroundStyle(AppColor.ink2)
                 Spacer()
                 HStack {
                     TapButton { dismiss() } label: {
@@ -384,12 +387,20 @@ struct SegmentEditSheet: View {
                             saveError = error.localizedDescription
                             return
                         }
-                        if let rec = segment.recording, changed {
+                        // Taken now: the question below is modal but the main
+                        // actor keeps running, and a run or a restore can
+                        // replace every segment while it waits.
+                        let rec = segment.recording
+                        let segmentID = segment.id
+                        if let rec, changed {
                             // A correction is a checked reference.
                             let source = Benchmark.source(segment, in: rec)
                             Benchmark.enqueue(source, machine: before)
+                            if let change = TranscriptCorrection.change(from: before, to: text) {
+                                offerEverywhere(change, in: rec, except: segmentID)
+                            }
                         }
-                        if let rec = segment.recording {
+                        if let rec, rec.modelContext != nil, !rec.isDeleted {
                             try? TranscriptExporter.export(recording: rec)
                             // Hand-corrected text is exactly what the
                             // file backup exists to preserve.
@@ -416,6 +427,58 @@ struct SegmentEditSheet: View {
     private func timestamp(_ s: Double) -> String {
         let t = Int(s)
         return String(format: "%02d:%02d", t / 60, t % 60)
+    }
+
+    /// The edit swapped a few words: offer the same swap in every other line
+    /// that has them, and a name or coined term for the vocabulary. Nothing
+    /// is asked when there is nothing more to change or learn.
+    private func offerEverywhere(_ change: TranscriptCorrection.Change, in rec: Recording, except segmentID: UUID) {
+        let others = container.repository.linesToCorrect(change, in: rec, except: segmentID)
+        let language = rec.sourceLanguage
+        let known = container.promptStore.vocabulary(for: language.map { [$0] } ?? [])
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let isTerm = DisputeLearning.isTerm(change.new, sentenceStart: false)
+            && !known.contains { $0.caseInsensitiveCompare(change.new) == .orderedSame }
+        guard !others.isEmpty || isTerm else { return }
+
+        let alert = NSAlert()
+        if others.isEmpty {
+            alert.messageText = "Add “\(change.new)” to your vocabulary?"
+            alert.informativeText = "The speech engines and the presets will spell it this way from now on."
+            alert.addButton(withTitle: "Add to Vocabulary")
+            alert.addButton(withTitle: "Not Now")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            container.promptStore.learnTerm(change.new, language: language)
+            AppLog.info("detail", "correction: learned \"\(change.new)\"")
+            return
+        }
+        let lines = others.count == 1 ? "1 more line" : "\(others.count) more lines"
+        alert.messageText = "Change “\(change.old)” to “\(change.new)” everywhere?"
+        alert.informativeText = "\(lines) in this recording \(others.count == 1 ? "says" : "say") “\(change.old)”."
+        alert.addButton(withTitle: others.count == 1 ? "Change 1 More" : "Change \(others.count) More")
+        alert.addButton(withTitle: "Only This Line")
+        if isTerm {
+            alert.showsSuppressionButton = true
+            alert.suppressionButton?.title = "Also add “\(change.new)” to the vocabulary"
+            alert.suppressionButton?.state = .on
+        }
+        let everywhere = alert.runModal() == .alertFirstButtonReturn
+        if isTerm, alert.suppressionButton?.state == .on {
+            container.promptStore.learnTerm(change.new, language: language)
+        }
+        guard everywhere, rec.modelContext != nil, !rec.isDeleted else { return }
+        do {
+            let changed = try container.repository.correctEverywhere(change, in: rec, except: segmentID)
+            for (seg, before) in changed {
+                Benchmark.enqueue(Benchmark.source(seg, in: rec), machine: before)
+            }
+            AppLog.info("detail", "correction: \"\(change.old)\" → \"\(change.new)\" in \(changed.count) more line(s)")
+        } catch {
+            let failure = NSAlert()
+            failure.messageText = "Couldn't change the other lines"
+            failure.informativeText = error.localizedDescription
+            failure.runModal()
+        }
     }
 }
 

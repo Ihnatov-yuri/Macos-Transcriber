@@ -91,6 +91,8 @@ final class RecordModel {
     /// Exposed so the record screen can pick the right waveform source.
     var meetingActive: Bool { activeMeeting }
     private var isStopping = false
+    /// The crashed recording this session carries on: Stop joins the two.
+    private(set) var continuing: InterruptedRecording?
     var lastError: String?
     /// A plain message for the record screen (not an error).
     var notice: String?
@@ -219,7 +221,17 @@ final class RecordModel {
     /// nothing on screen able to stop it.
     private var isStarting = false
 
-    private func beginRecording() async {
+    /// "Continue recording" after a crash: the same kind of recording as
+    /// the one cut short, whatever the Meeting switch says now.
+    func continueRecording(_ r: InterruptedRecording) async {
+        switch uiState {
+        case .idle, .finished: break
+        case .recording, .paused: return
+        }
+        await beginRecording(meeting: r.isMeeting, continuing: r)
+    }
+
+    private func beginRecording(meeting: Bool? = nil, continuing next: InterruptedRecording? = nil) async {
         guard !isStarting else { return }
         isStarting = true
         defer { isStarting = false }
@@ -234,7 +246,8 @@ final class RecordModel {
             return
         }
         do {
-            activeMeeting = meetingMode
+            activeMeeting = meeting ?? meetingMode
+            continuing = nil
             if activeMeeting {
                 // The mic went away mid-meeting: the recorder has already
                 // closed its files, so stop the session and save what was
@@ -257,6 +270,11 @@ final class RecordModel {
             }
             uiState = .recording
             RecordingActivity.shared.begin()
+            if let next {
+                continuing = next
+                notice = "Continuing the \(next.isMeeting ? "meeting" : "recording") cut short at "
+                    + "\(DateFormatter.time.string(from: next.endedAt)). Stop joins the two parts."
+            }
 
             liveWorker.clear()
             if liveEnabled { await startLive(resetCaptions: true) }
@@ -311,6 +329,8 @@ final class RecordModel {
         }
         lastError = nil
         await liveWorker.stop()
+        let joining = continuing
+        continuing = nil
         do {
             let wasMeeting = activeMeeting
             let url: URL?
@@ -386,23 +406,37 @@ final class RecordModel {
             // while it's still running. `self` is only used afterward, best-
             // effort, to refresh the on-screen state if the view is still around.
             let container = container
-            if autoTranscribe {
-                let params = TranscriptionRunner.Params(
-                    file: url,
-                    backend: container.uiPrefs.defaultBackend,
-                    modelDirectory: nil,
-                    languages: liveLanguages,
-                    translateTo: nil
-                )
-                // Meetings: the quick draft first, then Super in the background.
-                let followUp: TranscriptionRunner.Params? =
-                    wasMeeting && params.backend != .ensemble && container.uiPrefs.meetingSuperFollowUp
-                    ? TranscriptionRunner.Params(
-                        file: url, backend: .ensemble, modelDirectory: nil,
-                        languages: liveLanguages, translateTo: nil,
-                        diarize: true, keepVisibleUntilDone: true)
-                    : nil
+            let languages = liveLanguages
+            if let joining {
+                // Carrying on after a crash: no run on this part alone. Both
+                // parts are made ready, joined into one recording, and that
+                // one is transcribed.
+                let transcribe = autoTranscribe
+                notice = nil
+                Task { @MainActor [weak self] in
+                    let partURL = await Self.finishPostProcessing(
+                        container: container, recording: recording, mainURL: url, wasMeeting: wasMeeting)
+                    do {
+                        let joined = try await Self.join(container: container, earlier: joining, later: recording)
+                        if transcribe { Self.transcribe(joined, container: container, languages: languages, isMeeting: wasMeeting) }
+                        if let self, self.uiState == .finished(url) {
+                            self.uiState = .finished(URL(fileURLWithPath: joined.audioPath))
+                            self.notice = "Joined into “\(joined.title)”."
+                        }
+                    } catch {
+                        AppLog.error("record", "could not join the part to the recording cut short: \(error.localizedDescription)")
+                        if transcribe, !recording.isDeleted, recording.modelContext != nil {
+                            Self.transcribe(recording, container: container, languages: languages, isMeeting: wasMeeting)
+                        }
+                        if let self, self.uiState == .finished(url) {
+                            self.uiState = .finished(partURL)
+                            self.lastError = "The new part could not be joined to the one cut short, so it is in the Library on its own. \(error.localizedDescription)"
+                        }
+                    }
+                }
+            } else if autoTranscribe {
                 let jobManager = container.jobManager
+                let (params, followUp) = Self.params(file: url, container: container, languages: languages, isMeeting: wasMeeting)
                 Task { @MainActor [weak self] in
                     await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                         jobManager.enqueue(recording, params: params, followUp: followUp) { cont.resume() }
@@ -438,7 +472,7 @@ final class RecordModel {
     /// job has finished decoding them (auto-transcribe on). Static, and
     /// takes `container` explicitly, so it runs to completion independent of
     /// whether the `RecordModel` that started it is still alive.
-    private static func finishPostProcessing(
+    static func finishPostProcessing(
         container: AppContainer, recording: Recording, mainURL: URL, wasMeeting: Bool
     ) async -> URL {
         let tracker = container.audioPostProcessTracker
@@ -455,10 +489,90 @@ final class RecordModel {
     }
 }
 
+// MARK: - Runs and carrying on after a crash
+
+extension RecordModel {
+    /// The run a stopped recording gets: the default engine, and for a
+    /// meeting Super in the background after the quick draft.
+    static func params(file url: URL, container: AppContainer, languages: Set<String>, isMeeting: Bool)
+        -> (TranscriptionRunner.Params, TranscriptionRunner.Params?) {
+        let params = TranscriptionRunner.Params(
+            file: url,
+            backend: container.uiPrefs.defaultBackend,
+            modelDirectory: nil,
+            languages: languages,
+            translateTo: nil
+        )
+        let followUp: TranscriptionRunner.Params? =
+            isMeeting && params.backend != .ensemble && container.uiPrefs.meetingSuperFollowUp
+            ? TranscriptionRunner.Params(
+                file: url, backend: .ensemble, modelDirectory: nil,
+                languages: languages, translateTo: nil,
+                diarize: true, keepVisibleUntilDone: true)
+            : nil
+        return (params, followUp)
+    }
+
+    /// Queue the run a stopped recording would have had.
+    static func transcribe(_ recording: Recording, container: AppContainer, languages: Set<String>, isMeeting: Bool) {
+        let (params, followUp) = params(file: URL(fileURLWithPath: recording.audioPath),
+                                        container: container, languages: languages, isMeeting: isMeeting)
+        container.jobManager.enqueue(recording, params: params, followUp: followUp) {}
+    }
+
+    /// "Transcribe it" on the launch question: the recovered recording gets
+    /// the echo rebuild and compression its Stop never ran, then its run.
+    static func transcribeRecovered(_ r: InterruptedRecording, container: AppContainer) {
+        guard let recording = try? container.repository.get(id: r.id) else { return }
+        let languages = container.uiPrefs.lastLanguages
+        Task { @MainActor in
+            await container.audioPostProcessTracker.markPending(recording.id)
+            _ = await finishPostProcessing(container: container, recording: recording,
+                                           mainURL: URL(fileURLWithPath: recording.audioPath), wasMeeting: r.isMeeting)
+            guard !recording.isDeleted, recording.modelContext != nil else { return }
+            transcribe(recording, container: container, languages: languages, isMeeting: r.isMeeting)
+        }
+    }
+
+    /// Join the part recorded after a crash to the recording the crash cut
+    /// short. The recovered part first gets the echo rebuild and compression
+    /// its Stop never ran; the merge then writes one recording with both
+    /// parts (tracks included), and the two parts leave the Library only
+    /// once the joined one is saved.
+    static func join(container: AppContainer, earlier r: InterruptedRecording, later: Recording) async throws -> Recording {
+        let repository = container.repository
+        container.joiningIDs.formUnion([r.id, later.id])
+        defer { container.joiningIDs.subtract([r.id, later.id]) }
+        guard let earlier = try repository.get(id: r.id) else {
+            throw NSError(domain: "Resume", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                "The recording cut short is no longer in the Library."])
+        }
+        if URL(fileURLWithPath: earlier.audioPath).pathExtension.lowercased() == "wav" {
+            await container.audioPostProcessTracker.markPending(earlier.id)
+            _ = await finishPostProcessing(container: container, recording: earlier,
+                                           mainURL: URL(fileURLWithPath: earlier.audioPath), wasMeeting: r.isMeeting)
+        }
+        let joined = try await repository.merge(earlier, later)
+        for part in [earlier, later] { container.jobManager.cancel(part.id) }
+        if let open = container.librarySelection, open == earlier.id || open == later.id {
+            container.librarySelection = joined.id
+        }
+        try repository.adoptJoin(joined, title: RecordingResume.joinedTitle(r), replacing: [earlier, later])
+        AppLog.info("record", "joined the part recorded after a crash → '\(joined.title)'")
+        return joined
+    }
+}
+
 private extension DateFormatter {
     static let short: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+    static let time: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
         f.timeStyle = .short
         return f
     }()

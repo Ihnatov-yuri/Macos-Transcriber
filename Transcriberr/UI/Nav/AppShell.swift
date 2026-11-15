@@ -41,6 +41,8 @@ struct AppShell: View {
     /// Asked once, when no text model is installed: summaries, titles,
     /// briefs and Super's rulings need one.
     @AppStorage("textModel.prompted") private var textModelPrompted = false
+    /// A recording a crash cut short: carry on with it?
+    @State private var resumeOffer: InterruptedRecording?
 
     var body: some View {
         shell
@@ -61,14 +63,38 @@ struct AppShell: View {
                 // A beat after the window settles, once, until answered.
                 guard container.updates.needsConsent else { return }
                 try? await Task.sleep(for: .seconds(1.5))
+                while resumeOffer != nil { try? await Task.sleep(for: .seconds(1)) }
                 askUpdateConsent = container.updates.needsConsent
             }
             .task {
                 guard !textModelPrompted, !ModelCatalog.anyInstalled else { return }
                 try? await Task.sleep(for: .seconds(2))
                 // The update question, when there is one, goes first.
-                while askUpdateConsent { try? await Task.sleep(for: .seconds(1)) }
+                while askUpdateConsent || resumeOffer != nil { try? await Task.sleep(for: .seconds(1)) }
                 askTextModel = !ModelCatalog.anyInstalled
+            }
+            .task(id: container.interruptedRecording?.id) {
+                // Found by the launch repair, a moment after the window
+                // opens. One question at a time.
+                guard let offer = container.interruptedRecording else { return }
+                while askUpdateConsent || askTextModel { try? await Task.sleep(for: .seconds(1)) }
+                resumeOffer = offer
+            }
+            .alert(resumeOffer?.isMeeting == true ? "Continue the meeting?" : "Continue the recording?",
+                   isPresented: Binding(get: { resumeOffer != nil },
+                                        set: { if !$0 { resumeOffer = nil; container.interruptedRecording = nil } }),
+                   presenting: resumeOffer) { offer in
+                Button("Continue Recording") {
+                    container.requestContinuation(offer)
+                    section = .record
+                }
+                Button("Transcribe It") {
+                    container.interruptedRecording = nil
+                    RecordModel.transcribeRecovered(offer, container: container)
+                }
+                Button("Keep It As It Is", role: .cancel) { container.interruptedRecording = nil }
+            } message: { offer in
+                Text(RecordingResume.message(offer))
             }
             .alert("Download a text model", isPresented: $askTextModel) {
                 Button("Open Models") {

@@ -68,20 +68,21 @@ nonisolated enum WavRepair {
     /// header needed repair is exactly that case. Only repaired MAIN files
     /// qualify — a healthy orphan is a recording the user deleted (deleting
     /// a row leaves its audio on disk), and must not come back.
-    @MainActor
-    static func importOrphans(_ repaired: [(url: URL, seconds: Double)], into repository: RecordingRepository) -> Int {
+    /// Returns the rows it added, so the app can offer to carry on with one.
+    @MainActor @discardableResult
+    static func importOrphans(_ repaired: [(url: URL, seconds: Double)], into repository: RecordingRepository) -> [Recording] {
         let mains = repaired.filter {
             let name = $0.url.lastPathComponent.lowercased()
             // Under a second is a start that crashed at once, not a
             // recording anyone lost: repaired, but not put in the library.
             return !name.hasSuffix(".mic.wav") && !name.hasSuffix(".sys.wav") && $0.seconds >= 1
         }
-        guard !mains.isEmpty, let rows = try? repository.all() else { return 0 }
+        guard !mains.isEmpty, let rows = try? repository.all() else { return [] }
         let known = Set(rows.map { URL(fileURLWithPath: $0.audioPath).deletingPathExtension().standardizedFileURL.path })
         let stamp = DateFormatter()
         stamp.dateStyle = .short
         stamp.timeStyle = .short
-        var imported = 0
+        var imported: [Recording] = []
         for (url, seconds) in mains {
             guard !known.contains(url.deletingPathExtension().standardizedFileURL.path) else { continue }
             let created = (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
@@ -93,7 +94,7 @@ nonisolated enum WavRepair {
                 durationSeconds: seconds)
             do {
                 try repository.save(recording)
-                imported += 1
+                imported.append(recording)
                 AppLog.info("recover", "added '\(recording.title)' to the library → \(url.lastPathComponent)")
             } catch {
                 AppLog.error("recover", "could not add \(url.lastPathComponent) to the library: \(error.localizedDescription)")

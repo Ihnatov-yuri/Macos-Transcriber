@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.8.0
+
+- Fix a misheard word in one line of a transcript, and Transcriberr offers to fix it in every other line that has it. A name or product it does not know yet can go into your vocabulary in the same step.
+- When Transcriberr closes while a meeting or recording is running, for example after a crash or a power cut, it asks at the next launch whether to carry on. Continue recording starts a new part, and Stop joins it to the part that was saved, as one recording.
+- The microphone choice for a meeting is now an option beside Meeting, called My mic: Follows mute, Always in or Left out. It shows before you press Record, so the choice counts from the first second.
+
 ## 5.7.5
 
 - Super no longer writes a phrase twice when one engine heard it once and the other looped on it, as in "ти ще й залишишся там. Угу. То може ти ще й залишишся там."

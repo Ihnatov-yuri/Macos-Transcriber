@@ -88,6 +88,15 @@ nonisolated final class AppContainer: @unchecked Sendable {
     /// the recording open there.
     private(set) var deleteRecordingRequested = 0
     var pendingNewRecording = false
+    /// A recording a crash cut short within the last hours, found at launch:
+    /// the window asks whether to carry on with it.
+    var interruptedRecording: InterruptedRecording?
+    /// Set with `requestNewRecording` when the user chose to carry on: the
+    /// Record screen starts a recording that Stop joins to this one.
+    var pendingContinuation: InterruptedRecording?
+    /// Recordings being joined after a crash: the Library treats them as a
+    /// merge in progress (no delete, no run) until the join is done.
+    var joiningIDs: Set<UUID> = []
 
     /// The unit-test host launches this same app. It must not act like a
     /// second running copy: no global hotkey (both copies would paste), no
@@ -241,7 +250,11 @@ nonisolated final class AppContainer: @unchecked Sendable {
                     let candidates = WavRepair.candidates(in: WavRepair.recordingsDirectory)
                     let repaired = await Task.detached(priority: .utility) { WavRepair.repairAll(candidates) }.value
                     let recovered = WavRepair.importOrphans(repaired, into: self.repository)
-                    if recovered > 0 { AppLog.info("app", "recovered \(recovered) interrupted recording(s)") }
+                    if !recovered.isEmpty { AppLog.info("app", "recovered \(recovered.count) interrupted recording(s)") }
+                    if let offer = RecordingResume.offer(from: recovered.map(RecordingResume.interrupted)),
+                       !self.recorder.isCapturing, !self.meetingRecorder.isCapturing {
+                        self.interruptedRecording = offer
+                    }
                 }
             }
         }
@@ -364,6 +377,13 @@ nonisolated final class AppContainer: @unchecked Sendable {
     func requestNewRecording() {
         pendingNewRecording = true
         newRecordingRequested &+= 1
+    }
+
+    /// "Continue recording" on the launch question.
+    func requestContinuation(_ r: InterruptedRecording) {
+        interruptedRecording = nil
+        pendingContinuation = r
+        requestNewRecording()
     }
 
     @MainActor

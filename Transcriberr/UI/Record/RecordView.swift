@@ -34,8 +34,11 @@ struct RecordView: View {
     private func consumePendingNewRecording() async {
         guard container.pendingNewRecording else { return }
         container.pendingNewRecording = false
+        let continuation = container.pendingContinuation
+        container.pendingContinuation = nil
         switch model.uiState {
-        case .idle, .finished: await model.toggleRecord()
+        case .idle, .finished:
+            if let continuation { await model.continueRecording(continuation) } else { await model.toggleRecord() }
         case .recording, .paused: break
         }
     }

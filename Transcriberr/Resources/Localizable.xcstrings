@@ -28906,19 +28906,19 @@
         }
       }
     },
-    "whole dictation rewritten as\na letter: greeting, body, closing": {
+    "whole dictation rewritten as\na letter, signed with your name": {
       "comment": "Dictation style hint",
       "localizations": {
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "весь надиктований текст\nпереписано як лист: звертання, текст, підпис"
+            "value": "весь надиктований текст\nпереписано як лист із вашим підписом"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "het hele dictaat herschreven als\neen brief: aanhef, tekst, afsluiting"
+            "value": "het hele dictaat herschreven als\neen brief, ondertekend met je naam"
           }
         }
       }

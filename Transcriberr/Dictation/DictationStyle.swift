@@ -29,7 +29,7 @@ nonisolated enum DictationStyle: String, CaseIterable, Codable, Sendable {
         switch self {
         case .off:     return String(localized: "the words as you said them,\nformatted by the mode", comment: "Dictation style hint")
         case .message: return String(localized: "whole dictation rewritten as\na clear, professional message", comment: "Dictation style hint")
-        case .letter:  return String(localized: "whole dictation rewritten as\na letter: greeting, body, closing", comment: "Dictation style hint")
+        case .letter:  return String(localized: "whole dictation rewritten as\na letter, signed with your name", comment: "Dictation style hint")
         case .bullets: return String(localized: "whole dictation rewritten as\na short bullet list", comment: "Dictation style hint")
         }
     }
@@ -82,8 +82,10 @@ nonisolated enum DictationStyle: String, CaseIterable, Codable, Sendable {
             formal greeting). Then the body in well-formed paragraphs with polite \
             phrasing ("Could you please…", "I would like to inform you…"), then a \
             formal closing on its own line ("Kind regards," or its equivalent). \
-            Put the speaker's name under the closing only if the speaker said it. \
-            No subject line unless the speaker dictated one.
+            End with that closing line and no name under it: the signature is \
+            added afterwards. Only when the speaker dictated a sign-off with a \
+            name ("best, Anna") keep that name under the closing. No subject \
+            line unless the speaker dictated one.
             """
         case .bullets:
             s += """
@@ -147,6 +149,56 @@ nonisolated enum DictationStyle: String, CaseIterable, Codable, Sendable {
             t = String(t.dropFirst().dropLast())
         }
         return t
+    }
+
+    /// Sign a letter: the user's name (Settings › My name) goes under the
+    /// closing line. The name never goes into the prompt, so a cloud text
+    /// engine never sees it and the model cannot respell or transliterate
+    /// it. Only a letter that ends on a bare closing ("Kind regards,",
+    /// "Met vriendelijke groet", "Thanks!") is signed, and a "[Your Name]"
+    /// placeholder is filled in. A letter the speaker signed themselves
+    /// ("Best regards, Anna", or a name, title or phone line under the
+    /// closing) is left as it is.
+    static func signed(_ letter: String, name: String?) -> String {
+        let name = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return letter }
+        let text = letter.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lines = text.components(separatedBy: "\n")
+        let filled = lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard let last = filled.last else { return letter }
+
+        // A placeholder the model left for the name: fill it in.
+        if last.hasPrefix("["), last.hasSuffix("]"), last.count <= 40,
+           let at = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == last }) {
+            lines[at] = name
+            return lines.joined(separator: "\n")
+        }
+        // Already signed with this name: whole words, last two lines only
+        // ("Tim" is not in "time", "Mark" not in "market").
+        let nameWords = words(name)
+        if filled.suffix(2).contains(where: { line in
+            let w = words(line)
+            return !nameWords.isEmpty && nameWords.allSatisfy(w.contains)
+        }) { return text }
+
+        let wordCount = last.split { $0.isWhitespace }.count
+        let commaClosing = last.hasSuffix(",") && wordCount <= 5
+            && !last.dropLast().contains(",")
+        // A closing without a comma ("Met vriendelijke groet", "Thanks!")
+        // follows the body, whose last line ends a sentence. A short line
+        // under anything else is the speaker's signature: a name, a title,
+        // a phone number, a company.
+        let previous = filled.dropLast().last ?? ""
+        let afterBody = previous.last.map { ".!?".contains($0) } ?? false
+        let endsOpen = !(last.last.map { ".?:;,".contains($0) } ?? true)
+        let bareClosing = wordCount <= 4 && endsOpen && afterBody
+            && !last.contains(",") && !last.hasPrefix("-") && !last.contains(where: \.isNumber)
+        guard commaClosing || bareClosing else { return text }
+        return text + "\n" + name
+    }
+
+    private static func words(_ s: String) -> [String] {
+        s.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
     }
 
     /// Whether two texts open with the same three words.

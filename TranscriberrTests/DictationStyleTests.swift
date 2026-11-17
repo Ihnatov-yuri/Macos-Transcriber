@@ -168,6 +168,73 @@ final class DictationStyleTests: XCTestCase {
         XCTAssertEqual(DictationStyle.tidy(out, draft: "budget venue speakers for friday"), "- Budget\n- Venue\n- Speakers")
     }
 
+    // MARK: - Signature (Settings › My name)
+
+    func testLetterIsSignedUnderABareClosing() {
+        let letter = "Dear Mark,\n\nThe Kaiko report will be two days late.\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(letter, name: "Yuri"), letter + "\nYuri")
+        let uk = "Шановна Оксано,\n\nПропоную перенести зустріч на середу.\n\nЗ повагою,"
+        XCTAssertEqual(DictationStyle.signed(uk, name: "Yuri"), uk + "\nYuri")
+        // Dutch closings often go without a comma.
+        let nl = "Beste Anna,\n\nDe factuur is betaald.\n\nMet vriendelijke groet"
+        XCTAssertEqual(DictationStyle.signed(nl, name: "Yuri"), nl + "\nYuri")
+    }
+
+    func testLetterTheSpeakerSignedKeepsTheirName() {
+        // Real output: the speaker dictated "best regards Pieter".
+        let signed = "Dear Anna,\n\nI would like to inform you that the invoice for October has been paid.\n\nBest regards,\nPieter"
+        XCTAssertEqual(DictationStyle.signed(signed, name: "Yuri"), signed)
+        let mine = "Dear Anna,\n\nThe invoice is paid.\n\nKind regards,\nYuri"
+        XCTAssertEqual(DictationStyle.signed(mine, name: "Yuri"), mine)
+    }
+
+    // Review findings for 5.9.1.
+
+    func testShortNameInsideAWordDoesNotCountAsSigned() {
+        let letter = "Dear Mark,\n\nI will finish it before the deadline, if time allows.\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(letter, name: "Tim"), letter + "\nTim")
+        let market = "Dear Anna,\n\nThe market report is attached.\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(market, name: "Mark"), market + "\nMark")
+    }
+
+    func testSignOffsTheSpeakerMadeAreNeverSignedTwice() {
+        let cases = [
+            "Beste Anna,\n\nDe factuur is betaald.\n\nMet vriendelijke groet\nPieter",
+            "Шановна Оксано,\n\nЗустріч у середу.\n\nЗ повагою\nОлена",
+            "Beste Anna,\n\nDe factuur is betaald.\n\nGroetjes\nJoeri",
+            "Dear Anna,\n\nThe invoice is paid.\n\nBest regards, Anna",
+            "Dear Mark,\n\nThe invoice is paid.\n\nKind regards,\nAnna Smit\nHead of Sales",
+            "Dear Mark,\n\nThe invoice is paid.\n\nKind regards,\nAnna\n+31 6 1234 5678",
+            "Dear Mark,\n\nThe invoice is paid.\n\nKind regards,\nAnna\nKaiko BV",
+        ]
+        for letter in cases {
+            XCTAssertEqual(DictationStyle.signed(letter, name: "Yuri"), letter, letter)
+        }
+    }
+
+    func testExclaimedClosingIsSignedAndPlaceholdersAreFilled() {
+        let thanks = "Hi Mark,\n\nThe invoice is paid.\n\nThanks!"
+        XCTAssertEqual(DictationStyle.signed(thanks, name: "Yuri"), thanks + "\nYuri")
+        XCTAssertEqual(DictationStyle.signed("Dear Anna,\n\nPaid.\n\nKind regards,\n[Your Name]", name: "Yuri"),
+                       "Dear Anna,\n\nPaid.\n\nKind regards,\nYuri")
+        XCTAssertEqual(DictationStyle.signed("Beste Anna,\n\nBetaald.\n\nMet vriendelijke groet\n[Uw naam]", name: "Yuri"),
+                       "Beste Anna,\n\nBetaald.\n\nMet vriendelijke groet\nYuri")
+    }
+
+    func testNoNameOrNoClosingLeavesTheLetterAlone() {
+        let letter = "Dear Mark,\n\nThe report is late.\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(letter, name: nil), letter)
+        XCTAssertEqual(DictationStyle.signed(letter, name: "  "), letter)
+        let noClosing = "Dear Mark,\n\nThe report will be two days late because the data was incomplete."
+        XCTAssertEqual(DictationStyle.signed(noClosing, name: "Yuri"), noClosing)
+    }
+
+    func testTheNameNeverGoesIntoThePrompt() {
+        // Signed on the Mac afterwards: a cloud text engine never sees it.
+        XCTAssertTrue(DictationStyle.letter.systemPrompt.contains("no name under it"))
+        XCTAssertFalse(DictationStyle.letter.userPrompt(draft: "hello").contains("Yuri"))
+    }
+
     // MARK: - Session lifecycle (review findings)
 
     func testQuietCancelKeepsWhatAStyledSessionCollected() {

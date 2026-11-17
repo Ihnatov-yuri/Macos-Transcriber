@@ -607,8 +607,12 @@ func cmdDictStyle(style: String, text: String) async -> Int32 {
                 systemInstruction: st.systemPrompt,
                 userMessage: st.userPrompt(draft: draft),
                 maxTokens: st.maxTokens(forDraft: draft))
-            let tidy = DictationStyle.tidy(out, draft: draft)
+            var tidy = DictationStyle.tidy(out, draft: draft)
             let ok = DictationStyle.accept(draft: draft, rewrite: tidy)
+            // The app signs with Settings › My name; the CLI reads the same value.
+            if ok, st == .letter {
+                tidy = DictationStyle.signed(tidy, name: UserDefaults(suiteName: "nl.ihnatov.Transcriberr")?.string(forKey: "ui.myName"))
+            }
             if !ok { rejected += 1 }
             print("\n== \(st.rawValue) · \(String(format: "%.1f", Date().timeIntervalSince(t0)))s · \(draft.count) → \(tidy.count) chars · \(ok ? "accepted" : "REJECTED")")
             print(tidy)

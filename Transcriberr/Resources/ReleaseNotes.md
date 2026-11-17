@@ -6,6 +6,10 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.9.1
+
+- Letters written by dictation are now signed with your name from Settings › My name, under the closing line. A letter where you said your own sign-off, such as "best regards, Pieter", keeps it. Your name is added on the Mac, so it is never sent to a text model.
+
 ## 5.9.0
 
 - Dictation can now write for you. Set Write as on the Dictate screen, or in the menu bar menu, to Message, Letter or Bullets: talk as you normally would, and when you stop, the whole dictation is rewritten as a clear professional message, a letter with a greeting and a closing, or a short bullet list, then inserted where you were typing. It stays in the language you spoke.

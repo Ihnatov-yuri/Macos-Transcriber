@@ -1462,8 +1462,11 @@ nonisolated final class DictationController: @unchecked Sendable {
                     }
                 }
             }
-            let text = DictationStyle.tidy(out, draft: draft)
+            var text = DictationStyle.tidy(out, draft: draft)
             let ok = DictationStyle.accept(draft: draft, rewrite: text)
+            if ok, style == .letter {
+                text = DictationStyle.signed(text, name: UserDefaults.standard.string(forKey: "ui.myName"))
+            }
             AppLog.info("dictation", String(format: "rewrite as %@: %d → %d chars in %.1fs%@",
                                             style.rawValue, draft.count, text.count,
                                             Date().timeIntervalSince(t0), ok ? "" : " — rejected, keeping the words as said"))

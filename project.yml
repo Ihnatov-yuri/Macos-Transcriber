@@ -17,7 +17,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: "5.8.0"
+    MARKETING_VERSION: "5.9.0"
     # Interface in English, Ukrainian and Dutch: SwiftUI literals and
     # String(localized:) are extracted into Transcriberr/Resources/*.xcstrings.
     SWIFT_EMIT_LOC_STRINGS: YES
@@ -181,6 +181,8 @@ targets:
       # AudioDecoder applies the mic-boost gain via UtteranceCapture.applyGain;
       # the rest of Dictation/ is GUI-only.
       - path: Transcriberr/Dictation/UtteranceCapture.swift
+      # The style prompt and guard, for `transcriberrcli dictstyle`.
+      - path: Transcriberr/Dictation/DictationStyle.swift
     dependencies:
       - package: FluidAudio
         product: FluidAudio

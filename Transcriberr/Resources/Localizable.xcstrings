@@ -5660,6 +5660,23 @@
         }
       }
     },
+    "As spoken": {
+      "comment": "Dictation style: no rewrite, the words as said",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Як сказано"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zoals gezegd"
+          }
+        }
+      }
+    },
     "Ask": {
       "localizations": {
         "uk": {
@@ -6180,6 +6197,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Zet terug"
+          }
+        }
+      }
+    },
+    "Bullets": {
+      "comment": "Dictation style: rewrite as a bullet list",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пункти"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opsomming"
           }
         }
       }
@@ -7677,6 +7711,38 @@
         }
       }
     },
+    "Couldn't rewrite this text — the pad is unchanged": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося переписати текст — чернетка без змін"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deze tekst herschrijven lukte niet — het kladblok is ongewijzigd"
+          }
+        }
+      }
+    },
+    "Couldn't rewrite — inserted as spoken": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося переписати — вставлено як сказано"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herschrijven lukte niet — ingevoegd zoals gezegd"
+          }
+        }
+      }
+    },
     "Count only meetings where you named or confirmed %@, not ones a voice match or a calendar invite named. Applies on every person page and the overview.": {
       "localizations": {
         "uk": {
@@ -8892,6 +8958,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "De download is groter dan het model zou moeten zijn — verwijderd."
+          }
+        }
+      }
+    },
+    "Download the text model in Settings to rewrite": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Щоб переписувати, завантажте текстову модель у Налаштуваннях"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download het tekstmodel in Instellingen om te herschrijven"
           }
         }
       }
@@ -13208,6 +13290,23 @@
         }
       }
     },
+    "Letter": {
+      "comment": "Dictation style: rewrite as a letter or email",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лист"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brief"
+          }
+        }
+      }
+    },
     "Level · clean": {
       "comment": "Record meter: input level fine",
       "localizations": {
@@ -14362,6 +14461,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Voeg samen met…"
+          }
+        }
+      }
+    },
+    "Message": {
+      "comment": "Dictation style: rewrite as a professional message",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повідомлення"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bericht"
           }
         }
       }
@@ -20259,6 +20375,22 @@
         }
       }
     },
+    "Rewrite the pad as": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Переписати чернетку як"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herschrijf het kladblok als"
+          }
+        }
+      }
+    },
     "Rewrite: gives back the whole transcript, changed": {
       "localizations": {
         "uk": {
@@ -23393,6 +23525,22 @@
         }
       }
     },
+    "Text model busy — inserted as spoken": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текстова модель зайнята — вставлено як сказано"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tekstmodel bezig — ingevoegd zoals gezegd"
+          }
+        }
+      }
+    },
     "Text model comparison and downloads": {
       "localizations": {
         "uk": {
@@ -23437,6 +23585,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tekstmodel voor al het andere"
+          }
+        }
+      }
+    },
+    "Text model not downloaded — inserted as spoken": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текстову модель не завантажено — вставлено як сказано"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tekstmodel niet gedownload — ingevoegd zoals gezegd"
           }
         }
       }
@@ -24067,6 +24231,22 @@
         }
       }
     },
+    "The pad changed while writing — nothing replaced": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чернетка змінилася під час написання — нічого не замінено"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Het kladblok veranderde tijdens het schrijven — niets vervangen"
+          }
+        }
+      }
+    },
     "The plug-in is missing from this copy of Transcriberr.": {
       "localizations": {
         "uk": {
@@ -24401,6 +24581,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "De tekstengine kon de coaching niet schrijven (%@). De doelen gebruiken eenvoudige bewoording."
+          }
+        }
+      }
+    },
+    "The text model is busy — try again in a moment": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текстова модель зайнята — спробуйте за хвилину"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Het tekstmodel is bezig — probeer het zo opnieuw"
           }
         }
       }
@@ -25162,6 +25358,38 @@
         }
       }
     },
+    "Too long to rewrite in one go — the pad is unchanged": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Задовго, щоб переписати за раз — чернетка без змін"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Te lang om in één keer te herschrijven — het kladblok is ongewijzigd"
+          }
+        }
+      }
+    },
+    "Too long to rewrite — inserted as spoken": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Задовго для переписування — вставлено як сказано"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Te lang om te herschrijven — ingevoegd zoals gezegd"
+          }
+        }
+      }
+    },
     "Total": {
       "comment": "Library metric: total recorded time",
       "localizations": {
@@ -25675,6 +25903,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Herstel"
+          }
+        }
+      }
+    },
+    "Undo rewrite": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скасувати переписування"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herschrijven ongedaan maken"
           }
         }
       }
@@ -26896,6 +27140,73 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bezig…"
+          }
+        }
+      }
+    },
+    "Write as": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Писати як"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schrijf als"
+          }
+        }
+      }
+    },
+    "Writing the bullet list…": {
+      "comment": "Dictation: the text model is rewriting as bullets",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пишу список пунктів…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opsomming schrijven…"
+          }
+        }
+      }
+    },
+    "Writing the letter…": {
+      "comment": "Dictation: the text model is rewriting as a letter",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пишу лист…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brief schrijven…"
+          }
+        }
+      }
+    },
+    "Writing the message…": {
+      "comment": "Dictation: the text model is rewriting as a message",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пишу повідомлення…"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bericht schrijven…"
           }
         }
       }
@@ -28433,6 +28744,23 @@
         }
       }
     },
+    "the words as you said them,\nformatted by the mode": {
+      "comment": "Dictation style hint",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "слова, як ви їх сказали,\nоформлені за режимом"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "de woorden zoals je ze zei,\nopgemaakt volgens de modus"
+          }
+        }
+      }
+    },
     "title or transcript": {
       "localizations": {
         "uk": {
@@ -28557,6 +28885,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "stem opgeslagen"
+          }
+        }
+      }
+    },
+    "whole dictation rewritten as\na clear, professional message": {
+      "comment": "Dictation style hint",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "весь надиктований текст\nпереписано як чітке, ділове повідомлення"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "het hele dictaat herschreven als\neen helder, zakelijk bericht"
+          }
+        }
+      }
+    },
+    "whole dictation rewritten as\na letter: greeting, body, closing": {
+      "comment": "Dictation style hint",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "весь надиктований текст\nпереписано як лист: звертання, текст, підпис"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "het hele dictaat herschreven als\neen brief: aanhef, tekst, afsluiting"
+          }
+        }
+      }
+    },
+    "whole dictation rewritten as\na short bullet list": {
+      "comment": "Dictation style hint",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "весь надиктований текст\nпереписано як короткий список пунктів"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "het hele dictaat herschreven als\neen korte opsomming"
           }
         }
       }

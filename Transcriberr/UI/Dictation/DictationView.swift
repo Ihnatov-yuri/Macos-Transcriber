@@ -226,6 +226,9 @@ struct DictationView: View {
                        defaultModeValue(s.defaultMode),
                        active: s.defaultMode == .smart,
                        hint: String(localized: "apps without a rule ·\nsmart = text model, context-aware")) { cycleMode(s) }
+                option(String(localized: "Write as", comment: "Dictation option: rewrite the whole dictation as a message, letter or bullets"),
+                       s.style.label, active: s.style != .off,
+                       hint: s.style.hint) { cycleStyle(s) }
                 option(String(localized: "History", comment: "Dictation option: keep dictated passages in the Library"),
                        s.keepHistory ? String(localized: "On", comment: "Option value: switched on")
                            : String(localized: "Off", comment: "Option value: switched off"),
@@ -278,6 +281,11 @@ struct DictationView: View {
     private func cycleMode(_ s: DictationSettings) {
         let opts = DictationSettings.FormatMode.allCases
         if let i = opts.firstIndex(of: s.defaultMode) { s.defaultMode = opts[(i + 1) % opts.count] }
+    }
+
+    private func cycleStyle(_ s: DictationSettings) {
+        let opts = DictationStyle.allCases
+        if let i = opts.firstIndex(of: s.style) { s.style = opts[(i + 1) % opts.count] }
     }
 
     private func cycleHotkey(_ s: DictationSettings) {
@@ -466,6 +474,7 @@ struct DictationView: View {
                     Spacer()
                 }
             }
+            rewriteRow(c, text: text.wrappedValue)
             ZStack(alignment: .topLeading) {
                 if text.wrappedValue.isEmpty {
                     Text(placeholder(c))
@@ -485,6 +494,33 @@ struct DictationView: View {
             }
             .background(AppColor.baseDeep)
             .overlay(Rectangle().stroke(AppColor.hair, lineWidth: 1))
+        }
+    }
+
+    /// "Rewrite as" — the whole pad becomes a message, a letter or a list.
+    @ViewBuilder
+    private func rewriteRow(_ c: DictationController, text: String) -> some View {
+        let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let busy = c.padRewriting != nil
+        HStack(spacing: AppMetric.m) {
+            Text("Rewrite the pad as").uiLabel(9, color: AppColor.ink2)
+            ForEach(DictationStyle.allCases.filter { $0 != .off }, id: \.rawValue) { style in
+                LitChip(label: style.label, active: c.padRewriting == style) {
+                    Task { await c.rewritePad(as: style) }
+                }
+                .disabled(empty || busy)
+                .opacity(empty || (busy && c.padRewriting != style) ? 0.45 : 1)
+            }
+            if c.canUndoPadRewrite, !busy {
+                LitChip(label: String(localized: "Undo rewrite")) { c.undoPadRewrite() }
+            }
+            if let style = c.padRewriting {
+                ProgressView().controlSize(.small)
+                Text(style.workingLabel).uiLabel(9, color: AppColor.accentOnLight)
+            } else if let notice = c.padNotice {
+                Text(notice).uiLabel(9, color: AppColor.statusWarning)
+            }
+            Spacer()
         }
     }
 
@@ -539,8 +575,10 @@ struct DictationView: View {
             }
         case .transcribing, .inserting:
             InverseFooter(String(localized: "Recognizing…"),
-                          subtitle: c.activeMode == .smart ? String(localized: "Speech, then the text model formats")
-                              : String(localized: "On the Neural Engine"), left: {
+                          subtitle: c.restyling?.workingLabel
+                              ?? (c.activeStyle != .off ? c.activeStyle.workingLabel
+                              : c.activeMode == .smart ? String(localized: "Speech, then the text model formats")
+                              : String(localized: "On the Neural Engine")), left: {
                 ProgressView().controlSize(.small).tint(AppColor.onNight)
             })
         default:

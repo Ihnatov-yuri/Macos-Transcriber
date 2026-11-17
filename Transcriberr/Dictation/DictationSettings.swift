@@ -194,6 +194,7 @@ nonisolated final class DictationSettings: @unchecked Sendable {
         static let livePreview       = "dictation.livePreview"
         static let onboarded         = "dictation.onboarded"
         static let voiceProcessing   = "dictation.voiceProcessing"
+        static let style             = "dictation.style"
     }
 
     var hotkey: Hotkey { didSet { defaults.set(hotkey.rawValue, forKey: Key.hotkey) } }
@@ -270,6 +271,9 @@ nonisolated final class DictationSettings: @unchecked Sendable {
     /// macOS turns other apps down while it exists. Independent of the
     /// recorder's noise-suppression setting.
     var voiceProcessing: Bool { didSet { defaults.set(voiceProcessing, forKey: Key.voiceProcessing) } }
+    /// Rewrite each whole dictation as a message, a letter or bullets
+    /// (text model). Sticky until changed; off = the words as said.
+    var style: DictationStyle { didSet { defaults.set(style.rawValue, forKey: Key.style) } }
 
     /// Learned spellings that are still active.
     var activeLearnedSpellings: [String] {
@@ -327,6 +331,7 @@ nonisolated final class DictationSettings: @unchecked Sendable {
         livePreview = (defaults.object(forKey: Key.livePreview) as? Bool) ?? true
         onboarded = defaults.bool(forKey: Key.onboarded)
         voiceProcessing = defaults.bool(forKey: Key.voiceProcessing)
+        style = DictationStyle(rawValue: defaults.string(forKey: Key.style) ?? "") ?? .off
         let storedPause = defaults.double(forKey: Key.pauseFlushSeconds)
         pauseFlushSeconds = storedPause > 0 ? min(4, max(0.8, storedPause)) : 1.5
         playSounds = (defaults.object(forKey: Key.playSounds) as? Bool) ?? true

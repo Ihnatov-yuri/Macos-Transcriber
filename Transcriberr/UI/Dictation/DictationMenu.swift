@@ -48,6 +48,9 @@ struct DictationMenu: View {
         Picker("Default formatting", selection: Binding(get: { s.defaultMode }, set: { s.defaultMode = $0 })) {
             ForEach(DictationSettings.FormatMode.allCases, id: \.rawValue) { Text($0.label).tag($0) }
         }
+        Picker("Write as", selection: Binding(get: { s.style }, set: { s.style = $0 })) {
+            ForEach(DictationStyle.allCases, id: \.rawValue) { Text($0.label).tag($0) }
+        }
         Toggle("Keep history in Library", isOn: Binding(get: { s.keepHistory }, set: { s.keepHistory = $0 }))
         MicrophonePicker()
         Divider()

@@ -109,6 +109,27 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// Formatting mode resolved from the per-app rules for this session.
     private(set) var activeMode: DictationSettings.FormatMode = .clean
     private var activeTone: DictationSettings.Tone = .neutral
+    /// Style resolved for this session (off for passwords and verbatim apps).
+    private(set) var activeStyle: DictationStyle = .off
+    /// The style the text model is writing for a dictation session — for
+    /// the footer and the HUD, and only while that session is the current
+    /// one (an earlier session's rewrite must not label a newer session).
+    /// A pad rewrite shows on the pad instead (`padRewriting`).
+    var restyling: DictationStyle? { restylingSession == sessionID ? restylingStyle : nil }
+    private var restylingStyle: DictationStyle?
+    private var restylingSession: Int?
+    /// A styled session's words, collected at every pause flush and
+    /// rewritten once when the session ends.
+    private struct StyledDraft {
+        var chunks: [String] = []
+        var samples: [Float] = []
+        @MainActor var text: String { chunks.reduce("") { DictationText.join(existing: $0, new: $1) } }
+    }
+    private var styledDrafts: [Int: StyledDraft] = [:]
+    /// The pad as it was before "Rewrite as…", for Undo.
+    private(set) var padBeforeRewrite: String?
+    /// The pad rewrite in progress, if any.
+    private(set) var padRewriting: DictationStyle?
 
     let settings: DictationSettings
     let capture = UtteranceCapture()
@@ -635,7 +656,8 @@ nonisolated final class DictationController: @unchecked Sendable {
         let rule = settings.rule(for: context.bundleId)
         activeMode = context.isSecure ? .verbatim : (rule?.mode ?? settings.defaultMode)
         if let tone = rule?.tone, tone != .auto { activeTone = tone } else { activeTone = context.inferredTone }
-        AppLog.info("dictation", "target \(context.appName ?? "?") [\(context.bundleId ?? "-")] role=\(context.role ?? "-") mode=\(activeMode.rawValue) tone=\(activeTone.rawValue) context=\(context.preceding?.count ?? 0)ch")
+        activeStyle = Self.resolveStyle(settings.style, mode: activeMode, context: context)
+        AppLog.info("dictation", "target \(context.appName ?? "?") [\(context.bundleId ?? "-")] role=\(context.role ?? "-") mode=\(activeMode.rawValue) tone=\(activeTone.rawValue) style=\(activeStyle.rawValue) context=\(context.preceding?.count ?? 0)ch")
         phase = .listening
         lastText = ""
         sessionStartedAt = Date()
@@ -763,6 +785,12 @@ nonisolated final class DictationController: @unchecked Sendable {
     private func endQuietly(_ reason: String) {
         guard phase == .listening else { return }
         AppLog.info("dictation", reason)
+        // A styled session has delivered nothing yet: its flushed words wait
+        // for the final pass, which writes and inserts them all.
+        if activeStyle != .off, flushedSessions.contains(sessionID) || styledDrafts[sessionID] != nil {
+            finish()
+            return
+        }
         flushLoop?.cancel()
         flushLoop = nil
         previewLoop?.cancel()
@@ -779,7 +807,22 @@ nonisolated final class DictationController: @unchecked Sendable {
 
     @MainActor
     func cancel(quiet: Bool = false) {
-        cancelledSessions.insert(sessionID)
+        let keepDraft = Self.keepsStyledDraftOnCancel(
+            quiet: quiet, style: activeStyle,
+            hasDraft: styledDrafts[sessionID] != nil || flushedSessions.contains(sessionID))
+        if keepDraft {
+            // A quiet cancel is a key combo while the hotkey is held, not the
+            // user throwing the dictation away. Unstyled, the words said
+            // before it were already pasted at the pauses; a styled session
+            // still holds them, so they are written and delivered (the
+            // unflushed tail is dropped, as before). An empty final pass
+            // queues behind the flushes still in flight.
+            AppLog.info("dictation", "quiet cancel of a styled session — delivering what was collected")
+            enqueue([], final: true, passage: currentPassage(session: sessionID))
+        } else {
+            cancelledSessions.insert(sessionID)
+            styledDrafts[sessionID] = nil
+        }
         flushLoop?.cancel()
         flushLoop = nil
         previewLoop?.cancel()
@@ -794,8 +837,10 @@ nonisolated final class DictationController: @unchecked Sendable {
         // still being recognized keeps "writing…" until it lands (a reset
         // to 0 would hide it, and its own decrements would then be clamped
         // away).
-        pendingCounter.cancel(session: sessionID)
-        pendingPasses = pendingCounter.total
+        if !keepDraft {
+            pendingCounter.cancel(session: sessionID)
+            pendingPasses = pendingCounter.total
+        }
         if quiet {
             phase = .idle
             updateHUD()
@@ -878,6 +923,7 @@ nonisolated final class DictationController: @unchecked Sendable {
         let context: DictationContext
         let mode: DictationSettings.FormatMode
         let tone: DictationSettings.Tone
+        let style: DictationStyle
         let session: Int
     }
 
@@ -885,7 +931,7 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// arrive in the order it was spoken).
     @MainActor
     private func currentPassage(session: Int) -> Passage {
-        Passage(target: target, context: context, mode: activeMode, tone: activeTone, session: session)
+        Passage(target: target, context: context, mode: activeMode, tone: activeTone, style: activeStyle, session: session)
     }
 
     @MainActor
@@ -921,7 +967,16 @@ nonisolated final class DictationController: @unchecked Sendable {
         // Empty / silent passes end quietly.
         guard samples.count >= 8_000, Self.hasSpeech(samples) else {
             AppLog.info("dictation", String(format: "skip %.2fs — no speech", seconds))
-            if final { endEmptyFinal(passage: passage) }
+            if final {
+                // A styled session's last pass may be a silent tail after
+                // words collected at the pauses: those still get written.
+                if passage.style != .off, let draft = styledDrafts.removeValue(forKey: passage.session),
+                   !draft.chunks.isEmpty {
+                    await deliverStyled(draft, passage: passage)
+                } else {
+                    endEmptyFinal(passage: passage)
+                }
+            }
             return
         }
 
@@ -968,6 +1023,22 @@ nonisolated final class DictationController: @unchecked Sendable {
             // "scratch that" would still Backspace the previous passage away.
             if settings.spokenCommands, passage.mode != .verbatim, DictationText.isScratchOnly(recognized),
                !cancelledSessions.contains(passage.session) {
+                // In a styled session nothing has been inserted yet: "scratch
+                // that" drops the last collected piece instead.
+                if passage.style != .off {
+                    var draft = styledDrafts.removeValue(forKey: passage.session) ?? StyledDraft()
+                    if !draft.chunks.isEmpty { draft.chunks.removeLast() }
+                    AppLog.info("dictation", "scratch that → dropped the last collected piece of a styled session")
+                    if !final {
+                        styledDrafts[passage.session] = draft
+                        lastText = draft.text
+                    } else if !draft.chunks.isEmpty {
+                        await deliverStyled(draft, passage: passage)
+                    } else {
+                        finalMessage(String(localized: "Removed the last passage"))
+                    }
+                    return
+                }
                 if !final { deliveredSessions.insert(passage.session) }
                 await scratchLastInsertion(final: final, passage: passage)
                 return
@@ -985,7 +1056,9 @@ nonisolated final class DictationController: @unchecked Sendable {
                     selfCorrections: settings.selfCorrections,
                     vocabulary: settings.applyVocabulary ? vocabularyTerms() : []
                 ))
-                if passage.mode == .smart, !cleaned.isEmpty {
+                // A styled session is rewritten whole at the end; polishing
+                // each piece first would only cost time.
+                if passage.mode == .smart, passage.style == .off, !cleaned.isEmpty {
                     cleaned = await polish(cleaned, passage: passage)
                 }
             }
@@ -993,14 +1066,55 @@ nonisolated final class DictationController: @unchecked Sendable {
         } catch {
             AppLog.error("dictation", "recognition failed: \(error.localizedDescription)")
             lastError = error.localizedDescription
-            if final { finalMessage(String(localized: "Recognition failed: \(error.localizedDescription)")) }
+            if final {
+                // The words collected before the failing pass are still written.
+                if passage.style != .off, let draft = styledDrafts.removeValue(forKey: passage.session),
+                   !draft.chunks.isEmpty, !cancelledSessions.contains(passage.session) {
+                    await deliverStyled(draft, passage: passage)
+                } else {
+                    finalMessage(String(localized: "Recognition failed: \(error.localizedDescription)"))
+                }
+            }
             return
         }
-        guard !cancelledSessions.contains(passage.session) else { return }
+        guard !cancelledSessions.contains(passage.session) else {
+            styledDrafts[passage.session] = nil
+            return
+        }
+
+        // Styled: collect at every pause, write once at the end.
+        if passage.style != .off {
+            var draft = styledDrafts.removeValue(forKey: passage.session) ?? StyledDraft()
+            if !text.isEmpty { draft.chunks.append(text) }
+            draft.samples += raw
+            guard final else {
+                styledDrafts[passage.session] = draft
+                lastText = draft.text
+                AppLog.info("dictation", "styled session: collected \(draft.chunks.count) piece(s), \(draft.text.count) chars")
+                return
+            }
+            if draft.chunks.isEmpty {
+                endEmptyFinal(passage: passage)
+            } else {
+                await deliverStyled(draft, passage: passage)
+            }
+            return
+        }
+
         guard !text.isEmpty else {
             if final { endEmptyFinal(passage: passage) }
             return
         }
+        land(text, raw: raw, final: final, passage: passage)
+    }
+
+    /// The end of every pass that has text: show it, deliver it, keep it in
+    /// the history, and close the session with the right notice. `notice`
+    /// replaces the quiet success ending (a styled rewrite that fell back
+    /// to the spoken words says so).
+    @MainActor
+    private func land(_ text: String, raw: [Float], final: Bool, passage: Passage, notice: String? = nil) {
+        let seconds = Double(raw.count) / UtteranceCapture.sampleRate
 
         // A password-field passage is pasted and nothing else. Switching the
         // mode to verbatim alone would still send it everywhere a normal one
@@ -1020,11 +1134,19 @@ nonisolated final class DictationController: @unchecked Sendable {
 
         if final {
             playSound("Tink")
-            // A new session may already be listening — never clobber it.
-            let stillOurs = phase == .transcribing || phase == .inserting
+            // A new session may already be listening, or recognizing its own
+            // final pass while this one was being rewritten — never clobber
+            // its phase or its notices.
+            let stillOurs = Self.ownsPhase(passageSession: passage.session, currentSession: sessionID, phase: phase)
+            guard stillOurs else {
+                AppLog.info("dictation", "passage of an earlier session landed (\(outcome)); the newer session keeps the screen")
+                return
+            }
             switch outcome {
             case .pasted, .paneAppended:
-                if stillOurs {
+                if let notice {
+                    finalMessage(notice)
+                } else {
                     phase = .idle
                     updateHUD(showResultBriefly: true)
                 }
@@ -1266,6 +1388,175 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// How long the optional polish may wait for the engines before the
     /// passage goes out without it.
     static let polishPatience: TimeInterval = 4
+
+    // MARK: - Style (rewrite a whole dictation)
+
+    /// The style a session gets: the user's choice, except where a rewrite
+    /// would be wrong — a password, a terminal or editor (verbatim rule).
+    /// One-line fields keep it: chat composers report themselves as one,
+    /// and a message or a list is exactly what goes there.
+    @MainActor
+    static func resolveStyle(_ chosen: DictationStyle, mode: DictationSettings.FormatMode,
+                              context: DictationContext) -> DictationStyle {
+        if context.isSecure || mode == .verbatim { return .off }
+        return chosen
+    }
+
+    enum RewriteFailure: Error, Equatable { case modelMissing, busy, tooLong, rejected, failed }
+
+    /// Whether `cancel(quiet:)` delivers what a styled session collected
+    /// instead of dropping it. Only the quiet cancel (a key combo while the
+    /// hotkey is held): Cancel pressed on purpose throws the dictation away.
+    static func keepsStyledDraftOnCancel(quiet: Bool, style: DictationStyle, hasDraft: Bool) -> Bool {
+        quiet && style != .off && hasDraft
+    }
+
+    /// Whether a final pass of `passageSession` may change the phase and
+    /// show its notice: only while it is still the current session and its
+    /// final pass is what the screen shows.
+    static func ownsPhase(passageSession: Int, currentSession: Int, phase: Phase) -> Bool {
+        passageSession == currentSession && (phase == .transcribing || phase == .inserting)
+    }
+
+    /// How long a rewrite may wait for a background job to free the text
+    /// model. The user asked for this one, so it waits longer than polish.
+    static let rewritePatience: TimeInterval = 20
+
+    /// Rewrite `draft` in `style` with the text model.
+    @MainActor
+    func rewrite(_ draft: String, style: DictationStyle, session: Int? = nil) async -> Result<String, RewriteFailure> {
+        guard style != .off else { return .success(draft) }
+        guard DictationStyle.canRewrite(draft) else {
+            AppLog.warn("dictation", "rewrite skipped — \(draft.count) chars is past the \(DictationStyle.maxDraftCharacters)-char limit")
+            return .failure(.tooLong)
+        }
+        let kind = uiPrefs.textEngine.supportsTextGeneration ? uiPrefs.textEngine : .localText
+        if kind == .localText, !ModelCatalog.isInstalled(ModelCatalog.selected(.general)) {
+            AppLog.warn("dictation", "rewrite skipped — the text model is not downloaded")
+            return .failure(.modelMissing)
+        }
+        if let session {
+            restylingStyle = style
+            restylingSession = session
+            updateHUD()
+        }
+        defer {
+            if let session, restylingSession == session {
+                restylingStyle = nil
+                restylingSession = nil
+            }
+        }
+        let backend = factory.backend(for: kind)
+        let system = style.systemPrompt
+        let user = style.userPrompt(draft: draft, vocabulary: vocabularyTerms())
+        let maxTokens = style.maxTokens(forDraft: draft)
+        do {
+            if await !backend.isReady {
+                try await Self.withTimeout(seconds: 120) { try await backend.load(modelPath: nil) }
+            }
+            let t0 = Date()
+            let out = try await GenerationQueue.$interactive.withValue(true) {
+                try await GenerationQueue.$patience.withValue(Self.rewritePatience) {
+                    try await Self.withTimeout(seconds: 90) {
+                        try await backend.generateText(systemInstruction: system, userMessage: user, maxTokens: maxTokens)
+                    }
+                }
+            }
+            let text = DictationStyle.tidy(out, draft: draft)
+            let ok = DictationStyle.accept(draft: draft, rewrite: text)
+            AppLog.info("dictation", String(format: "rewrite as %@: %d → %d chars in %.1fs%@",
+                                            style.rawValue, draft.count, text.count,
+                                            Date().timeIntervalSince(t0), ok ? "" : " — rejected, keeping the words as said"))
+            return ok ? .success(text) : .failure(.rejected)
+        } catch is GenerationQueue.Busy {
+            AppLog.info("dictation", "rewrite skipped — a background job has the text model")
+            return .failure(.busy)
+        } catch {
+            AppLog.warn("dictation", "rewrite failed (\(error.localizedDescription))")
+            return .failure(.failed)
+        }
+    }
+
+    /// The end of a styled session: write the collected words in the
+    /// session's style and deliver the result. When the model can't, the
+    /// words go out as said, with a notice saying why.
+    @MainActor
+    private func deliverStyled(_ draft: StyledDraft, passage: Passage) async {
+        let source = draft.text
+        guard !source.isEmpty else { endEmptyFinal(passage: passage); return }
+        lastText = source
+        let result = await rewrite(source, style: passage.style, session: passage.session)
+        guard !cancelledSessions.contains(passage.session) else { return }
+        switch result {
+        case .success(let text):
+            land(text, raw: draft.samples, final: true, passage: passage)
+        case .failure(let why):
+            land(source, raw: draft.samples, final: true, passage: passage, notice: Self.fallbackNotice(why))
+        }
+    }
+
+    static func fallbackNotice(_ why: RewriteFailure) -> String {
+        switch why {
+        case .modelMissing: return String(localized: "Text model not downloaded — inserted as spoken")
+        case .busy:         return String(localized: "Text model busy — inserted as spoken")
+        case .tooLong:      return String(localized: "Too long to rewrite — inserted as spoken")
+        case .rejected, .failed: return String(localized: "Couldn't rewrite — inserted as spoken")
+        }
+    }
+
+    /// "Rewrite as…" on the scratch pad: the whole pad, in one go. Text
+    /// dictated into the pad while the model writes is kept after the
+    /// rewrite. Undo puts the pad back as it was.
+    @MainActor
+    func rewritePad(as style: DictationStyle) async {
+        let original = paneText
+        guard style != .off, padRewriting == nil,
+              !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        padRewriting = style
+        defer { padRewriting = nil }
+        padNotice = nil
+        let result = await rewrite(original, style: style)
+        switch result {
+        case .success(let text):
+            // Only the part that was rewritten is replaced; the user may have
+            // typed or dictated more meanwhile.
+            guard paneText.hasPrefix(original) else {
+                padNotice = String(localized: "The pad changed while writing — nothing replaced")
+                return
+            }
+            let added = String(paneText.dropFirst(original.count))
+            padBeforeRewrite = paneText
+            paneText = added.isEmpty ? text : DictationText.join(existing: text, new: added)
+            padAfterRewrite = paneText
+        case .failure(let why):
+            switch why {
+            case .modelMissing: padNotice = String(localized: "Download the text model in Settings to rewrite")
+            case .busy:         padNotice = String(localized: "The text model is busy — try again in a moment")
+            case .tooLong:      padNotice = String(localized: "Too long to rewrite in one go — the pad is unchanged")
+            case .rejected, .failed: padNotice = String(localized: "Couldn't rewrite this text — the pad is unchanged")
+            }
+        }
+    }
+
+    /// The pad right after the last rewrite. Undo is offered only while the
+    /// pad still reads exactly that: once the user edits or dictates more,
+    /// an undo would throw their new words away.
+    private var padAfterRewrite: String?
+
+    var canUndoPadRewrite: Bool { padBeforeRewrite != nil && padAfterRewrite == paneText }
+
+    /// Put the pad back as it was before the last rewrite.
+    @MainActor
+    func undoPadRewrite() {
+        guard canUndoPadRewrite, let before = padBeforeRewrite else { return }
+        paneText = before
+        padBeforeRewrite = nil
+        padAfterRewrite = nil
+        padNotice = nil
+    }
+
+    /// One line under the pad about the last rewrite that didn't happen.
+    private(set) var padNotice: String?
 
     // MARK: - History
 

@@ -210,6 +210,7 @@ struct DictationHUDView: View {
                 ? String(localized: "Listening · \(time) · writing…", comment: "Dictation HUD status; the value is the elapsed time, e.g. 0:12")
                 : String(localized: "Listening · \(time)", comment: "Dictation HUD status; the value is the elapsed time, e.g. 0:12")
         case .transcribing:
+            if let style = controller.restyling { return style.workingLabel }
             return controller.activeMode == .smart
                 ? String(localized: "Recognizing · formatting", comment: "Dictation HUD status")
                 : String(localized: "Recognizing", comment: "Dictation HUD status")

@@ -70,6 +70,7 @@ func usage() {
       transcriberrcli refinalize <file>    rerun the finalize pass on a saved run dump
       transcriberrcli brief <file>         the meeting brief for a transcript
       transcriberrcli gentest              text model smoke test (three concurrent generations)
+      transcriberrcli dictstyle <message|letter|bullets|all> <text|@file>  dictation rewrite styles on a draft (local text model)
       transcriberrcli ask <question>       ask your meetings, on-device (read-only)
       transcriberrcli models [download <id>]  the text models: installed or not; download one
       transcriberrcli textbench <calls.jsonl> [model-id]
@@ -578,6 +579,47 @@ func cmdGenTest() async -> Int32 {
     }
 }
 
+/// Dictation styles on a draft with the local text model: the same prompt
+/// and guard the app uses. `style` is message, letter, bullets or all;
+/// `text` is the draft, or @path to read it from a file.
+func cmdDictStyle(style: String, text: String) async -> Int32 {
+    let styles: [DictationStyle] = style == "all"
+        ? DictationStyle.allCases.filter { $0 != .off }
+        : [DictationStyle(rawValue: style)].compactMap { $0 }
+    guard !styles.isEmpty, !styles.contains(.off) else {
+        print("[dictstyle] style must be message, letter, bullets or all"); return 64
+    }
+    var draft = text
+    if text.hasPrefix("@") {
+        guard let read = try? String(contentsOfFile: String(text.dropFirst()), encoding: .utf8) else {
+            print("[dictstyle] cannot read \(text.dropFirst())"); return 66
+        }
+        draft = read.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    let backend = BackendFactory(prompts: PromptStore(), apiKeys: APIKeyStore()).backend(for: .localText)
+    do {
+        print("[dictstyle] loading \(ModelCatalog.selected(.general).name)…")
+        try await backend.load(modelPath: nil)
+        var rejected = 0
+        for st in styles {
+            let t0 = Date()
+            let out = try await backend.generateText(
+                systemInstruction: st.systemPrompt,
+                userMessage: st.userPrompt(draft: draft),
+                maxTokens: st.maxTokens(forDraft: draft))
+            let tidy = DictationStyle.tidy(out, draft: draft)
+            let ok = DictationStyle.accept(draft: draft, rewrite: tidy)
+            if !ok { rejected += 1 }
+            print("\n== \(st.rawValue) · \(String(format: "%.1f", Date().timeIntervalSince(t0)))s · \(draft.count) → \(tidy.count) chars · \(ok ? "accepted" : "REJECTED")")
+            print(tidy)
+        }
+        return rejected == 0 ? 0 : 1
+    } catch {
+        print("[dictstyle] ❌ \(error)")
+        return 1
+    }
+}
+
 /// Meeting brief on a real transcript (.txt) with the local text model — shows
 /// what the model proposes, what the guards accept, and how long one
 /// whole-transcript read takes.
@@ -984,6 +1026,9 @@ func main() async -> Int32 {
         return await cmdVad(Array(args.dropFirst(2)))
     case "gentest":
         return await cmdGenTest()
+    case "dictstyle":
+        guard args.count > 3 else { usage(); return 64 }
+        return await cmdDictStyle(style: args[2], text: Array(args.dropFirst(3)).joined(separator: " "))
     case "ask":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdAsk(Array(args.dropFirst(2)).joined(separator: " "))

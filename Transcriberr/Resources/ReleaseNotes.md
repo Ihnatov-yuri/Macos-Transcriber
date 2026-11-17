@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.9.0
+
+- Dictation can now write for you. Set Write as on the Dictate screen, or in the menu bar menu, to Message, Letter or Bullets: talk as you normally would, and when you stop, the whole dictation is rewritten as a clear professional message, a letter with a greeting and a closing, or a short bullet list, then inserted where you were typing. It stays in the language you spoke.
+- The scratch pad has Rewrite the pad as Message, Letter or Bullets, for text you already dictated or typed. Undo rewrite puts the original back.
+- When the text model is not downloaded or cannot do it, your words go in as you said them, with a short note saying so. Passwords and apps set to Verbatim, such as Terminal, are never rewritten.
+
 ## 5.8.0
 
 - Transcriberr's own screens are now in Ukrainian and Dutch as well as English. Pick the language at the top of Settings, or leave it on System to follow macOS; the change shows after a restart. Transcripts, summaries and dictation are not affected: they follow the speech and your presets.

@@ -76,7 +76,7 @@ nonisolated final class UpdateChecker: @unchecked Sendable {
 
     init(currentVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0",
          defaults: UserDefaults = .standard,
-         askOnLaunch: Bool = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil) {
+         askOnLaunch: Bool = !AppContainer.isTestHost) {
         self.currentVersion = currentVersion
         self.defaults = defaults
         autoCheck = defaults.bool(forKey: Key.autoCheck)

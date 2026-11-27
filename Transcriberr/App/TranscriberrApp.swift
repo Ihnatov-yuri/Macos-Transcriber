@@ -23,6 +23,7 @@ struct TranscriberrApp: App {
         // The Transcriberr Microphone, when it is on: calls can use it from
         // launch, not only once a meeting records.
         if !AppContainer.isTestHost { VirtualMicrophone.shared.refresh() }
+        if AppContainer.selfTest != nil { MeetingSelfTest.start() }
     }
 
     var body: some Scene {

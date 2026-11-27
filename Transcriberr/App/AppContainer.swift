@@ -102,6 +102,12 @@ nonisolated final class AppContainer: @unchecked Sendable {
     /// second running copy: no global hotkey (both copies would paste), no
     /// mic prewarm, no writes to the user's real library, no model loads.
     static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        || selfTest != nil
+
+    /// `TRANSCRIBERR_SELFTEST=meetingmove`: the app runs `MeetingMoveCheck`
+    /// with its own permissions and quits (see `MeetingSelfTest`). Treated
+    /// as a test host: in-memory store, no hotkeys, its own log.
+    static let selfTest = ProcessInfo.processInfo.environment["TRANSCRIBERR_SELFTEST"]
 
     /// The test host is the app itself, launched by xcodebuild: on the
     /// named store it opened the user's real library while every test ran.

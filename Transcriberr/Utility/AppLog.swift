@@ -27,7 +27,8 @@ nonisolated enum AppLog {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // The unit-test host is this same app: its fixtures and fake
         // failures belong in a log of their own, not the user's.
-        let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let env = ProcessInfo.processInfo.environment
+        let isTestHost = env["XCTestConfigurationFilePath"] != nil || env["TRANSCRIBERR_SELFTEST"] != nil
         return dir.appendingPathComponent(
             logFileName(isTestHost: isTestHost, processName: ProcessInfo.processInfo.processName))
     }()

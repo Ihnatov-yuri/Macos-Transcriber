@@ -14177,6 +14177,23 @@
         }
       }
     },
+    "Meeting recording": {
+      "comment": "Pop-out note title: something happened to the meeting being recorded",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запис зустрічі"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vergaderopname"
+          }
+        }
+      }
+    },
     "Meetings": {
       "localizations": {
         "uk": {
@@ -24055,22 +24072,6 @@
         }
       }
     },
-    "The meeting audio device stopped, so the meeting recording stopped. Press Stop to keep what was recorded.": {
-      "localizations": {
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Аудіопристрій зустрічі перестав працювати, тому запис зустрічі зупинився. Натисніть «Зупинити», щоб зберегти записане."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Het geluidsapparaat van de vergadering is gestopt, dus de vergaderopname is gestopt. Klik op Stop om te bewaren wat is opgenomen."
-          }
-        }
-      }
-    },
     "The merged recording was deleted before its transcript was copied.": {
       "localizations": {
         "uk": {
@@ -24131,6 +24132,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "De microfoon is losgekoppeld, dus de vergaderopname is gestopt. Klik op Stop om te bewaren wat is opgenomen."
+          }
+        }
+      }
+    },
+    "The microphone was disconnected. The recording carries on with the call audio and takes a microphone as soon as one is connected.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мікрофон від’єднано. Запис продовжується зі звуком дзвінка і візьме мікрофон, щойно його буде під’єднано."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De microfoon is losgekoppeld. De opname gaat door met het geluid van het gesprek en neemt een microfoon zodra er een is aangesloten."
+          }
+        }
+      }
+    },
+    "The microphone was disconnected. The recording carries on with “%@”.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мікрофон від’єднано. Запис продовжується з «%@»."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De microfoon is losgekoppeld. De opname gaat door met “%@”."
           }
         }
       }
@@ -24388,6 +24421,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "De opname staat niet meer in de bibliotheek."
+          }
+        }
+      }
+    },
+    "The recording now uses “%@”.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тепер запис іде з «%@»."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De opname gebruikt nu “%@”."
           }
         }
       }

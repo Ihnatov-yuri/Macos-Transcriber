@@ -17,7 +17,7 @@ settings:
     CODE_SIGN_STYLE: Automatic
     GENERATE_INFOPLIST_FILE: YES
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: "5.9.1"
+    MARKETING_VERSION: "5.9.2"
     # Interface in English, Ukrainian and Dutch: SwiftUI literals and
     # String(localized:) are extracted into Transcriberr/Resources/*.xcstrings.
     SWIFT_EMIT_LOC_STRINGS: YES

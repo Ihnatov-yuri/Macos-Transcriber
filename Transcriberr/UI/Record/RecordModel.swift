@@ -259,6 +259,16 @@ final class RecordModel {
                         self.lastError = message
                     }
                 }
+                // The mic changed and the recording carried on: say so on
+                // the Record screen and in a pop-out note, since the user
+                // is usually in the call, not here.
+                container.meetingRecorder.onMicMoved = { [weak self] message in
+                    guard let self, self.activeMeeting, self.sessionRunning else { return }
+                    self.notice = message
+                    RecordingNoticeHUD.shared.show(
+                        title: String(localized: "Meeting recording", comment: "Pop-out note title: something happened to the meeting being recorded"),
+                        text: message)
+                }
                 try await container.meetingRecorder.start()
                 // The calendar question, asked now while the user is here
                 // (see MeetingContext.requestAccess); the run never asks.

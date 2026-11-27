@@ -119,6 +119,15 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
 
     init() {}
 
+    /// For `MeetingMoveCheck` only: record the plain mic and the call audio
+    /// into `recordingsDirectory` — no Transcriberr Microphone, no echo
+    /// filter, no mute following. A check run beside the user's own app
+    /// must not open a second unit on a mic a call is using (that breaks
+    /// the call's mic), duck other apps, or leave files where the library's
+    /// crash repair would import them.
+    @ObservationIgnored var plainCapture = false
+    @ObservationIgnored var recordingsDirectory: URL?
+
     /// Live captions consume these one-second chunks in real time; if the
     /// consumer falls behind (a stalled main thread), an unbounded stream
     /// grows for the whole session and the captions fall further and further
@@ -156,12 +165,37 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// react (say, run its normal Stop) without polling.
     @ObservationIgnored var onInterrupted: (@MainActor (String) -> Void)?
 
+    /// Called on the main actor when the recording moved to another
+    /// microphone (or to the call audio alone) and carries on, with a line
+    /// to show the user.
+    @ObservationIgnored var onMicMoved: (@MainActor (String) -> Void)?
+    /// The microphone this meeting started on (it is moved back to it when
+    /// it returns) and the one it records from now; nil: the call audio
+    /// alone. Main actor.
+    @ObservationIgnored private var sessionMicUID: String?
+    @ObservationIgnored private var currentMicUID: String?
+    /// A move is under way: device events wait for it to finish.
+    @ObservationIgnored private var isMoving = false
+    /// Watches that audio keeps arriving (see `watchForStalls`).
+    @ObservationIgnored private var stallWatch: Task<Void, Never>?
+    /// Counts recording sessions, so a move still finishing from the last
+    /// one never touches the next. Main actor.
+    @ObservationIgnored private var session = 0
+    /// Microphones that would not open (or were just lost), and until when
+    /// they are left alone: a headset reconnecting is listed before it can
+    /// record, and moving onto it again and again would cut a gap into the
+    /// files each time. Main actor.
+    @ObservationIgnored private var coolingDown: [String: Date] = [:]
+    static let coolDownSeconds: TimeInterval = 20
+
     /// The microphone the aggregate was built on, watched for removal.
     @ObservationIgnored private var micDeviceID = AudioObjectID(kAudioObjectUnknown)
     /// Main-actor copies of the devices being watched (the pool-side IDs
     /// are reset by teardown while a listener callback may be queued).
     @ObservationIgnored private var watchedMic = AudioObjectID(kAudioObjectUnknown)
     @ObservationIgnored private var watchedAggregate = AudioObjectID(kAudioObjectUnknown)
+    /// The output kept running for the tap (main-actor copy).
+    @ObservationIgnored private var watchedClock = AudioObjectID(kAudioObjectUnknown)
     /// The rate the converters were built for (main-actor copy).
     @ObservationIgnored private var watchedRate: Double = 0
     @ObservationIgnored private var deviceListeners: [(object: AudioObjectID, address: AudioObjectPropertyAddress,
@@ -180,10 +214,17 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// runs on its caller's actor, which for the Record button is main.
     @concurrent
     func start() async throws {
+        // A move from the last session (Stop landed during it) finishes
+        // first: it must not rebuild the graph this start is building.
+        while await MainActor.run(body: { self.isMoving }) {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
         let claimed = await MainActor.run { () -> Bool in
             guard !isStarting, !isRunning else { return false }
             isStarting = true
             interruption = nil
+            session += 1
+            coolingDown.removeAll()
             return true
         }
         guard claimed else { return }
@@ -193,7 +234,8 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
                 watchDevices()
                 isRunning = true
                 isStarting = false
-                startFollowingMute()
+                if !plainCapture { startFollowingMute() }
+                watchForStalls()
                 // A device lost while starting was ignored (not running yet).
                 handleDeviceChange()
             }
@@ -256,6 +298,8 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         let wasRunning = await MainActor.run { () -> Bool in
             guard isRunning else { return false }
             isRunning = false
+            stallWatch?.cancel()
+            stallWatch = nil
             return true
         }
         guard wasRunning else { return nil }
@@ -340,6 +384,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         watchedMic = micDeviceID
         watchedAggregate = aggID
         watchedRate = ioQueue.sync { io.nativeRate }
+        watchedClock = clockDevice
         func listen(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) {
             guard object != kAudioObjectUnknown else { return }
             var address = AudioObjectPropertyAddress(
@@ -362,6 +407,8 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         listen(watchedMic, kAudioDevicePropertyNominalSampleRate)
         listen(watchedAggregate, kAudioDevicePropertyNominalSampleRate)
         listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
+        // The tap follows the default output; the output clock must too.
+        listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice)
     }
 
     /// Called with `captureLock` held.
@@ -381,29 +428,320 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// rebuild fails.
     @MainActor
     private func handleDeviceChange() {
-        guard isRunning, interruption == nil else { return }
-        let reason: String
-        let message: String
-        if !Self.isAlive(watchedMic) {
-            reason = "The microphone was disconnected"
-            message = String(localized: "The microphone was disconnected, so the meeting recording stopped. Press Stop to keep what was recorded.")
-        } else if !Self.isAlive(watchedAggregate) {
-            reason = "The meeting audio device stopped"
-            message = String(localized: "The meeting audio device stopped, so the meeting recording stopped. Press Stop to keep what was recorded.")
-        } else if let newRate = deviceSampleRate(watchedAggregate),
-                  Self.rateChanged(capture: watchedRate, now: newRate) {
+        guard isRunning, interruption == nil, !isMoving else { return }
+        let micGone = !Self.isAlive(watchedMic)
+        if micGone || !Self.isAlive(watchedAggregate) {
+            // The meeting goes on without that microphone, so the recording
+            // does too: before v5.9.2 this ended the recording, and the rest
+            // of a meeting whose headset dropped was never captured.
+            AppLog.warn("meeting", "\(micGone ? "the microphone was disconnected" : "the meeting audio device stopped") mid-meeting — moving the recording to another microphone")
+            moveMicrophone(micLost: micGone)
+            return
+        }
+        if Self.outputMoved(clock: watchedClock, now: Self.defaultOutputDevice()) {
+            // Headphones in or out, a headset gone: the tap follows the new
+            // default output by itself, but only the old one is kept
+            // running. Move just the output clock: no gap in the files, the
+            // mic and the echo filter untouched.
+            moveOutputClock()
+            return
+        }
+        if let newRate = deviceSampleRate(watchedAggregate),
+           Self.rateChanged(capture: watchedRate, now: newRate) {
             // A rate change is survivable: rebuild the converters for the
             // new rate and keep writing the same files. Only a rebuild that
             // cannot be done ends the recording.
             AppLog.warn("meeting", "aggregate rate moved from \(Int(watchedRate)) Hz to \(Int(newRate)) Hz — rebuilding converters")
             if rebuildConverters(forRate: newRate) { return }
-            reason = "The audio device changed its sample rate"
-            message = String(localized: "The audio device changed its sample rate, so the meeting recording stopped. Press Stop to keep what was recorded.")
-        } else {
+            endOnDeviceLoss(reason: "The audio device changed its sample rate",
+                            message: String(localized: "The audio device changed its sample rate, so the meeting recording stopped. Press Stop to keep what was recorded."))
             return
         }
+        // The device list moved (a headset back, a mic plugged in): back to
+        // the microphone the meeting started on, or onto any microphone
+        // while only the call audio is recording.
+        let devices = AudioInputDevices.available()
+        let pick = Self.pickMic(startedOn: sessionMicUID, avoiding: coolingSet(),
+                                chosen: RecorderSettings.inputDeviceUIDNow,
+                                systemDefault: AudioInputDevices.systemDefault()?.uid,
+                                available: devices.map(\.uid))
+        guard Self.shouldMoveBack(current: currentMicUID, pick: pick, startedOn: sessionMicUID),
+              let id = devices.first(where: { $0.uid == pick })?.id, Self.isAlive(id) else { return }
+        moveMicrophone(micLost: false)
+    }
+
+    /// The microphones still cooling down (see `coolingDown`).
+    @MainActor
+    private func coolingSet() -> Set<String> {
+        let now = Date()
+        coolingDown = coolingDown.filter { $0.value > now }
+        return Set(coolingDown.keys)
+    }
+
+    @MainActor
+    private func coolDown(_ uid: String?) {
+        guard let uid else { return }
+        coolingDown[uid] = Date().addingTimeInterval(Self.coolDownSeconds)
+    }
+
+    /// An aggregate can stay "alive" and still stop calling the IO proc,
+    /// or never start calling it after a rebuild (seen in the move checks:
+    /// a rebuilt graph delivered under a second, then nothing): the file
+    /// stops growing with no notification at all. Once a second, check that
+    /// frames still arrive; after two seconds without any (not paused, no
+    /// move under way) rebuild the graph the way a lost device is.
+    @MainActor
+    private func watchForStalls() {
+        stallWatch?.cancel()
+        stallWatch = Task { @MainActor [weak self] in
+            var last: Int64 = -1
+            var state = StallState()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled, self.isRunning, self.interruption == nil else { return }
+                let (frames, paused) = self.ioQueue.sync { (self.io.framesSeen, self.io.paused) }
+                if self.isMoving {
+                    // A rebuild is under way: wait for audio from the new
+                    // graph before judging it.
+                    last = frames
+                    state.still = 0
+                    state.armed = false
+                    continue
+                }
+                let rebuild = Self.stallStep(frames: frames, last: last, paused: paused, state: &state)
+                last = frames
+                if rebuild {
+                    AppLog.warn("meeting", "no audio for \(Self.stallSeconds) s with the device still there — rebuilding the capture (\(state.rebuilds) of \(Self.maxStallRebuilds))")
+                    self.moveMicrophone(micLost: false)
+                }
+            }
+        }
+    }
+
+    static let stallSeconds = 2
+    /// Stall rebuilds per recording. A graph that never delivers (no
+    /// System Audio Recording permission, say) is not rebuilt at all — the
+    /// watchdog arms only once audio has flowed — and one that keeps dying
+    /// is not torn down forever, each time toggling the echo filter's duck
+    /// and the Transcriberr Microphone's unit.
+    static let maxStallRebuilds = 3
+
+    struct StallState: Equatable {
+        /// Audio has arrived since the last (re)build.
+        var armed = false
+        var still = 0
+        var rebuilds = 0
+    }
+
+    /// One watchdog tick (once a second): true when the capture should be
+    /// rebuilt now. Paused counts as moving.
+    nonisolated static func stallStep(frames: Int64, last: Int64, paused: Bool,
+                                      state: inout StallState) -> Bool {
+        if paused { state.still = 0; return false }
+        if frames > max(last, 0) { state.armed = true; state.still = 0; return false }
+        guard state.armed else { return false }
+        state.still += 1
+        guard state.still >= stallSeconds, state.rebuilds < maxStallRebuilds else { return false }
+        state.rebuilds += 1
+        state.still = 0
+        state.armed = false
+        return true
+    }
+
+    /// For `transcriberrcli meetingmove`: act as if the current microphone
+    /// had just been unplugged, through the same move a real removal takes.
+    @MainActor
+    func simulateMicLoss() {
+        guard isRunning, interruption == nil else { return }
+        AppLog.warn("meeting", "simulated microphone loss — moving the recording to another microphone")
+        // It is still plugged in: without the cool-down the recording
+        // would move straight back to it.
+        coolDown(currentMicUID)
+        moveMicrophone(micLost: true)
+    }
+
+    /// The microphone being recorded now (nil: the call audio alone).
+    @MainActor var currentMicrophoneUID: String? { currentMicUID }
+
+    /// The default output is no longer the one the output clock runs. With
+    /// no output to follow, or no clock running (it could not be started:
+    /// rebuilding would only fail again, in a loop), nothing moved.
+    nonisolated static func outputMoved(clock: AudioObjectID, now: AudioObjectID?) -> Bool {
+        guard let now, clock != kAudioObjectUnknown else { return false }
+        return now != clock
+    }
+
+    /// The microphone to record from: the one the meeting started on while
+    /// it is connected, else the one picked in Settings, else the system
+    /// default; never one in `avoiding` — the one that just went away (the
+    /// system default can still name it for a moment) or one cooling down
+    /// after it would not open. Nil: no microphone left — the call audio
+    /// records alone.
+    nonisolated static func pickMic(startedOn: String?, avoiding: Set<String>, chosen: String?,
+                                    systemDefault: String?, available: [String]) -> String? {
+        for uid in [startedOn, chosen, systemDefault] {
+            if let uid, !uid.isEmpty, !avoiding.contains(uid), available.contains(uid) { return uid }
+        }
+        return nil
+    }
+
+    /// What a move tries, in order: the picked mic twice (a device still
+    /// coming up refuses for a moment), then the mic it was on if that one
+    /// still works, then the call audio alone. Never the same one twice
+    /// in a row beyond the first retry.
+    nonisolated static func moveAttempts(target: String?, previous: String?, previousUsable: Bool) -> [String?] {
+        var out: [String?] = [target, target]
+        if previousUsable, let previous, previous != target { out.append(previous) }
+        if target != nil { out.append(nil) }
+        return out
+    }
+
+    /// With the current microphone still working, move only back to the one
+    /// the meeting started on, or onto any microphone while there is none.
+    /// A mic plugged in mid-meeting does not take over a working one.
+    nonisolated static func shouldMoveBack(current: String?, pick: String?, startedOn: String?) -> Bool {
+        guard let pick, pick != current else { return false }
+        return current == nil || pick == startedOn
+    }
+
+    /// Rebuild the capture graph on another microphone (or on the call
+    /// audio alone) and keep writing the same three files. Off the main
+    /// actor: tearing the graph down waits for the IO proc. `micLost`: the
+    /// current microphone went away (otherwise the aggregate died under a
+    /// working mic, or a mic came back).
+    /// Only when even the call audio cannot be captured does the recording
+    /// end, the way it did before.
+    @MainActor
+    private func moveMicrophone(micLost: Bool) {
+        guard !isMoving else { return }
+        isMoving = true
+        let previous = currentMicUID
+        if micLost { coolDown(previous) }
+        let avoiding = coolingSet()
+        let previousUsable = !micLost && previous.flatMap { AudioInputDevices.resolve(uid: $0) }.map { Self.isAlive($0.id) } == true
+        let started = sessionMicUID
+        let mySession = session
+        Task.detached(priority: .userInitiated) { [self] in
+            // Right after a removal the system default can still name the
+            // lost device, or nothing: give it a second to settle before
+            // falling back to the call audio alone.
+            var target: String?
+            for attempt in 0..<10 {
+                target = Self.pickMic(startedOn: started, avoiding: avoiding,
+                                      chosen: RecorderSettings.inputDeviceUIDNow,
+                                      systemDefault: AudioInputDevices.systemDefault()?.uid,
+                                      available: AudioInputDevices.available().map(\.uid))
+                if target != nil || !micLost || attempt == 9 { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            var moved = false
+            var onto: AudioInputDevices.Device?
+            var failed: Set<String> = []
+            let attempts = Self.moveAttempts(target: target, previous: previous, previousUsable: previousUsable)
+            for (i, uid) in attempts.enumerated() {
+                let current = await MainActor.run { self.isRunning && self.session == mySession }
+                guard current else { break }
+                let mic = uid.flatMap { AudioInputDevices.resolve(uid: $0) }
+                if uid != nil, mic == nil { if let uid { failed.insert(uid) }; continue }
+                if self.rebuildGraph(on: mic) { moved = true; onto = mic; break }
+                if let uid { failed.insert(uid) }
+                if i < attempts.count - 1 { try? await Task.sleep(nanoseconds: 250_000_000) }
+            }
+            let movedOnto = onto
+            await MainActor.run {
+                // Always cleared: Start waits on it.
+                self.isMoving = false
+                guard self.session == mySession else { return }
+                for uid in failed where uid != movedOnto?.uid { self.coolDown(uid) }
+                guard self.isRunning else { return }
+                guard moved else {
+                    self.endOnDeviceLoss(
+                        reason: "The microphone was disconnected",
+                        message: String(localized: "The microphone was disconnected, so the meeting recording stopped. Press Stop to keep what was recorded."))
+                    return
+                }
+                self.currentMicUID = movedOnto?.uid
+                self.watchDevices()
+                if movedOnto?.uid == previous {
+                    // Same source, rebuilt (a dead aggregate, a stall):
+                    // nothing the user needs to hear about.
+                    AppLog.info("meeting", "recording continues on \(movedOnto.map { "'\($0.name)'" } ?? "the call audio alone")")
+                } else {
+                    let message: String
+                    if let mic = movedOnto {
+                        AppLog.info("meeting", "recording continues on '\(mic.name)' into the same files")
+                        message = micLost
+                            ? String(localized: "The microphone was disconnected. The recording carries on with “\(mic.name)”.")
+                            : String(localized: "The recording now uses “\(mic.name)”.")
+                    } else {
+                        AppLog.warn("meeting", "no microphone left — recording continues with the call audio only")
+                        message = String(localized: "The microphone was disconnected. The recording carries on with the call audio and takes a microphone as soon as one is connected.")
+                    }
+                    self.onMicMoved?(message)
+                }
+                // Anything that changed while the graph was rebuilt.
+                self.handleDeviceChange()
+            }
+        }
+    }
+
+    /// One attempt at the move, holding `captureLock` so a Stop waits for
+    /// it (and finds a graph it can tear down). False when the graph could
+    /// not be built, or the files are already closed (a Stop got there
+    /// first). The gap is what the rebuild takes: well under a second.
+    private nonisolated func rebuildGraph(on mic: AudioInputDevices.Device?) -> Bool {
+        captureLock.lock()
+        defer { captureLock.unlock() }
+        removeDeviceListeners()
+        teardownCoreAudio()
+        let open = ioQueue.sync { () -> Bool in
+            let io = self.io
+            guard io.audioFile != nil else { return false }
+            // What the old converters still hold goes into the files first.
+            self.flushConverterTail(feedLive: true)
+            self.flushTrackTail(converter: io.micConverter, file: io.micFile)
+            self.flushTrackTail(converter: io.sysConverter, file: io.sysFile)
+            return true
+        }
+        guard open else { return false }
+        do {
+            let graph = try buildGraph(micUID: mic?.uid, micID: mic?.id ?? AudioObjectID(kAudioObjectUnknown),
+                                       echoFilterInput: mic?.uid)
+            guard let mix = Self.makeConverter(nativeRate: graph.rate),
+                  let micConv = Self.makeConverter(nativeRate: graph.rate),
+                  let sysConv = Self.makeConverter(nativeRate: graph.rate) else {
+                throw MeetingError.coreAudio("Audio converter setup", -1)
+            }
+            ioQueue.sync {
+                let io = self.io
+                io.converter = mix
+                io.micConverter = io.micFile == nil ? nil : micConv
+                io.sysConverter = io.sysFile == nil ? nil : sysConv
+                io.framesSeen = Self.convertFrameCount(io.framesSeen, from: io.nativeRate, to: graph.rate)
+                io.nativeRate = graph.rate
+                io.tapChannels = graph.tapChannels
+                io.warnedPositionalFallback = false
+                io.micGain = 1
+                io.voiceMic?.setTargetRate(graph.rate)
+            }
+            try startIO()
+            AppLog.info("meeting", "capture rebuilt on \(mic.map { "'\($0.name)'" } ?? "the call audio alone") @\(Int(graph.rate)) Hz")
+            return true
+        } catch {
+            AppLog.warn("meeting", "moving the recording to \(mic?.name ?? "the call audio") failed: \(error.localizedDescription)")
+            teardownCoreAudio()
+            return false
+        }
+    }
+
+    /// End the recording because its audio device is gone for good: the
+    /// files are closed with everything captured, and the owner is told.
+    @MainActor
+    private func endOnDeviceLoss(reason: String, message: String) {
         AppLog.warn("meeting", "\(reason.lowercased()) mid-meeting — closing capture, audio so far is kept")
         interruption = message
+        stallWatch?.cancel()
+        stallWatch = nil
         // Off the main actor: AudioDeviceStop waits for the IO proc to return.
         Task.detached(priority: .userInitiated) { [self] in
             let ms = self.finishCapture()
@@ -511,88 +849,14 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         // start that fails before then would delete that meeting's audio in the
         // cleanup (its tracks may not be compressed or rebuilt yet).
         fileURL = nil
-        // 0. Apple's echo filter, before the aggregate reads the mic's
-        //    format (bringing it up can change that format). Skipped on
-        //    headphones: no echo to remove, and it would still turn every
-        //    other app down 4 dB. Assigned at once so a throw further down
-        //    still releases it through `teardownCoreAudio`.
-        //    With the Transcriberr Microphone on, the call and the recording
-        //    share its one unit (a second one on the same mic breaks the
-        //    call's mic), whatever the output.
-        let shared = VirtualMicrophone.shared.acquireForRecording()
-        if shared.held {
-            ioQueue.sync { io.voiceMic = shared.unit; io.voiceMicBorrowed = true }
-            AppLog.info("meeting", "mic shared with the Transcriberr Microphone")
-        } else if RecorderSettings.meetingEchoFilterNow {
-            let route = VoiceProcessedMic.outputRoute()
-            if route.headphones {
-                AppLog.info("meeting", "echo filter off — output '\(route.name)' is headphones")
-            } else {
-                AppLog.info("meeting", "output '\(route.name)' — starting the echo filter")
-                // Told first: a call opening the Transcriberr Microphone
-                // from here on gets the raw mic, never a second unit.
-                VirtualMicrophone.shared.recorderVoiceProcessing(true)
-                let vp = VoiceProcessedMic()
-                if vp.start(inputUID: RecorderSettings.inputDeviceUIDNow) {
-                    ioQueue.sync { io.voiceMic = vp }
-                } else {
-                    VirtualMicrophone.shared.recorderVoiceProcessing(false)
-                }
-            }
-        }
-
-        // 1. System-audio process tap (all processes, mixed down). Its
-        //    channel count is picked so it can never equal the microphone's:
-        //    `handleIO` tells the two apart by channel count, and with an
-        //    always-stereo tap a stereo microphone would leave it guessing by
-        //    position. A wrong guess reverses the split: the mic gate mutes
-        //    everyone else in the meeting instead of the room. Next to a
-        //    stereo mic the tap is mono; the downmix
-        //    treats both the same.
         let mic = selectedInputDevice()
-        let micStreams = mic.map { AudioInputDevices.inputStreamChannelCounts($0.id) } ?? []
-        let tapChannels = Self.tapChannelCount(forMicStreams: micStreams)
-        // With the Transcriberr Microphone on, our own process is never the
-        // far side: its feed is the user's mic played into a hidden device,
-        // and it can start at any point of the recording (a call opens the
-        // device), after this tap is built. Left in, the user would be
-        // recorded as the far side too. With it off, nothing of ours feeds
-        // anything, and sound played from Transcriberr during a call (a clip
-        // shared with the others) stays in the call track.
-        let excludeOwn = RecorderSettings.virtualMicrophoneNow || VirtualMicrophone.shared.isActive
-        let excluded = excludeOwn ? VirtualMicrophone.ownProcessObject().map { [$0] } ?? [] : []
-        let desc = tapChannels == 1
-            ? CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
-            : CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
-        desc.name = "Transcriberr System Tap"
-        desc.isPrivate = true
-        desc.muteBehavior = .unmuted
-        try check(AudioHardwareCreateProcessTap(desc, &tapID), "System-audio tap")
-        tapDesc = desc
-
-        // 2. Aggregate device: the chosen mic + the tap, one clock.
         let micUID = try mic?.uid ?? defaultInputUID()
-        micDeviceID = mic?.id ?? AudioInputDevices.systemDefault()?.id ?? AudioObjectID(kAudioObjectUnknown)
-        let aggDict: [String: Any] = [
-            kAudioAggregateDeviceNameKey as String: "Transcriberr Meeting",
-            kAudioAggregateDeviceUIDKey as String: "nl.ihnatov.Transcriberr.meeting.\(UUID().uuidString)",
-            kAudioAggregateDeviceIsPrivateKey as String: true,
-            kAudioAggregateDeviceTapAutoStartKey as String: true,
-            kAudioAggregateDeviceSubDeviceListKey as String: [
-                [kAudioSubDeviceUIDKey as String: micUID,
-                 kAudioSubDeviceDriftCompensationKey as String: true]
-            ],
-            kAudioAggregateDeviceTapListKey as String: [
-                [kAudioSubTapUIDKey as String: desc.uuid.uuidString,
-                 kAudioSubTapDriftCompensationKey as String: true]
-            ],
-        ]
-        try check(AudioHardwareCreateAggregateDevice(aggDict as CFDictionary, &aggID), "Aggregate device")
-
-        let nativeRate = deviceSampleRate(aggID) ?? 48_000
-        let layout = AudioInputDevices.inputStreamChannelCounts(aggID)
-        let tapIndex = Self.tapBufferIndex(channelCounts: layout, tapChannels: tapChannels)
-        AppLog.info("meeting", "aggregate input streams \(layout) (mic \(micStreams), tap \(tapChannels)ch) → tap buffer \(tapIndex.map(String.init) ?? "by position")")
+        let graph = try buildGraph(micUID: micUID,
+                                   micID: mic?.id ?? AudioInputDevices.systemDefault()?.id ?? AudioObjectID(kAudioObjectUnknown),
+                                   echoFilterInput: RecorderSettings.inputDeviceUIDNow)
+        let nativeRate = graph.rate
+        let tapChannels = graph.tapChannels
+        await MainActor.run { sessionMicUID = micUID; currentMicUID = micUID }
 
         // 3. Converter + output file: 16 kHz mono Float32, identical to WavRecorder.
         guard
@@ -603,7 +867,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
             throw MeetingError.coreAudio("Audio converter setup", -1)
         }
 
-        let dir = FileManager.default
+        let dir = recordingsDirectory ?? FileManager.default
             .urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Transcriberr/Recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -655,17 +919,216 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         }
         await MainActor.run { elapsedMs = 0 }
 
-        // 4. IO callback on our serial queue.
+        try startIO()
+        AppLog.info("meeting", "recording mic + system audio @\(Int(nativeRate)) Hz → \(base).wav (+ .mic/.sys tracks)")
+    }
+
+    /// What `buildGraph` made: the aggregate's rate and the tap's width.
+    private struct Graph {
+        let rate: Double
+        let tapChannels: Int
+    }
+
+    /// Steps 0–2 of a capture graph: the echo filter, the system tap and
+    /// the aggregate pairing the tap with the microphone `micUID`. A nil
+    /// `micUID` builds the aggregate on the tap alone — the call audio
+    /// keeps recording while no microphone is connected. Shared by Start
+    /// and by moving a running meeting onto another microphone.
+    private func buildGraph(micUID: String?, micID: AudioObjectID,
+                            echoFilterInput: String?) throws -> Graph {
+        // 0. Apple's echo filter, before the aggregate reads the mic's
+        //    format (bringing it up can change that format). Skipped on
+        //    headphones: no echo to remove, and it would still turn every
+        //    other app down 4 dB. Assigned at once so a throw further down
+        //    still releases it through `teardownCoreAudio`.
+        //    With the Transcriberr Microphone on, the call and the recording
+        //    share its one unit (a second one on the same mic breaks the
+        //    call's mic), whatever the output.
+        if micUID != nil, !plainCapture {
+            let shared = VirtualMicrophone.shared.acquireForRecording()
+            if shared.held {
+                ioQueue.sync { io.voiceMic = shared.unit; io.voiceMicBorrowed = true }
+                AppLog.info("meeting", "mic shared with the Transcriberr Microphone")
+            } else if RecorderSettings.meetingEchoFilterNow {
+                let route = VoiceProcessedMic.outputRoute()
+                if route.headphones {
+                    AppLog.info("meeting", "echo filter off — output '\(route.name)' is headphones")
+                } else {
+                    AppLog.info("meeting", "output '\(route.name)' — starting the echo filter")
+                    // Told first: a call opening the Transcriberr Microphone
+                    // from here on gets the raw mic, never a second unit.
+                    VirtualMicrophone.shared.recorderVoiceProcessing(true)
+                    let vp = VoiceProcessedMic()
+                    if vp.start(inputUID: echoFilterInput) {
+                        ioQueue.sync { io.voiceMic = vp }
+                    } else {
+                        VirtualMicrophone.shared.recorderVoiceProcessing(false)
+                    }
+                }
+            }
+        }
+
+        // 1. System-audio process tap (all processes, mixed down). Its
+        //    channel count is picked so it can never equal the microphone's:
+        //    `handleIO` tells the two apart by channel count, and with an
+        //    always-stereo tap a stereo microphone would leave it guessing by
+        //    position. A wrong guess reverses the split: the mic gate mutes
+        //    everyone else in the meeting instead of the room. Next to a
+        //    stereo mic the tap is mono; the downmix
+        //    treats both the same.
+        let micStreams = micUID != nil && micID != kAudioObjectUnknown
+            ? AudioInputDevices.inputStreamChannelCounts(micID) : []
+        let tapChannels = Self.tapChannelCount(forMicStreams: micStreams)
+        // With the Transcriberr Microphone on, our own process is never the
+        // far side: its feed is the user's mic played into a hidden device,
+        // and it can start at any point of the recording (a call opens the
+        // device), after this tap is built. Left in, the user would be
+        // recorded as the far side too. With it off, nothing of ours feeds
+        // anything, and sound played from Transcriberr during a call (a clip
+        // shared with the others) stays in the call track.
+        let excludeOwn = RecorderSettings.virtualMicrophoneNow || VirtualMicrophone.shared.isActive
+        let excluded = excludeOwn ? VirtualMicrophone.ownProcessObject().map { [$0] } ?? [] : []
+        let desc = tapChannels == 1
+            ? CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
+            : CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
+        desc.name = "Transcriberr System Tap"
+        desc.isPrivate = true
+        desc.muteBehavior = .unmuted
+        try check(AudioHardwareCreateProcessTap(desc, &tapID), "System-audio tap")
+        tapDesc = desc
+
+        // 2. Aggregate device: the chosen mic + the tap, one clock. With no
+        //    mic, the tap alone.
+        micDeviceID = micUID == nil ? AudioObjectID(kAudioObjectUnknown) : micID
+        let subDevices: [[String: Any]] = micUID.map {
+            [[kAudioSubDeviceUIDKey as String: $0,
+              kAudioSubDeviceDriftCompensationKey as String: true]]
+        } ?? []
+        let aggDict: [String: Any] = [
+            kAudioAggregateDeviceNameKey as String: "Transcriberr Meeting",
+            kAudioAggregateDeviceUIDKey as String: "nl.ihnatov.Transcriberr.meeting.\(UUID().uuidString)",
+            kAudioAggregateDeviceIsPrivateKey as String: true,
+            kAudioAggregateDeviceTapAutoStartKey as String: true,
+            kAudioAggregateDeviceSubDeviceListKey as String: subDevices,
+            kAudioAggregateDeviceTapListKey as String: [
+                [kAudioSubTapUIDKey as String: desc.uuid.uuidString,
+                 kAudioSubTapDriftCompensationKey as String: true]
+            ],
+        ]
+        try check(AudioHardwareCreateAggregateDevice(aggDict as CFDictionary, &aggID), "Aggregate device")
+
+        let nativeRate = deviceSampleRate(aggID) ?? 48_000
+        let layout = AudioInputDevices.inputStreamChannelCounts(aggID)
+        let tapIndex = Self.tapBufferIndex(channelCounts: layout, tapChannels: tapChannels)
+        AppLog.info("meeting", "aggregate input streams \(layout) (mic \(micStreams), tap \(tapChannels)ch) → tap buffer \(tapIndex.map(String.init) ?? "by position")")
+        return Graph(rate: nativeRate, tapChannels: tapChannels)
+    }
+
+    /// Step 4: the IO callback on our serial queue, and the device started.
+    private func startIO() throws {
         var pid: AudioDeviceIOProcID?
         try check(AudioDeviceCreateIOProcIDWithBlock(&pid, aggID, ioQueue) { [weak self] _, inData, _, _, _ in
             self?.handleIO(inData)
         }, "Audio IO callback")
         procID = pid
         try check(AudioDeviceStart(aggID, procID), "Audio device start")
-        AppLog.info("meeting", "recording mic + system audio @\(Int(nativeRate)) Hz → \(base).wav (+ .mic/.sys tracks)")
+        startOutputClock()
+    }
+
+    // MARK: - Output clock
+
+    @ObservationIgnored private var clockDevice = AudioObjectID(kAudioObjectUnknown)
+    @ObservationIgnored private var clockProcID: AudioDeviceIOProcID?
+    private let clockQueue = DispatchQueue(label: "meeting.rec.clock")
+
+    /// The system tap is fed by the output device's IO cycle: while
+    /// nothing plays, the output device stops, and the aggregate built on
+    /// the tap delivers nothing at all — the call side, and the microphone
+    /// with it (measured 2026-11-27: mic + tap 0 callbacks in 2 s with
+    /// nothing playing, 183 with the output running; making the mic the
+    /// aggregate's clock changed nothing). A meeting recording in silence
+    /// — before the call starts, an in-person meeting with Meeting on, a
+    /// lull in which the call app stops its output — captured nothing. So
+    /// while capture runs, the default output runs too, playing silence.
+    /// Our own zeros add nothing to the tap. Followed to a new default
+    /// output (`handleDeviceChange`) by rebuilding the graph.
+    private func startOutputClock() {
+        stopOutputClock()
+        guard let out = Self.defaultOutputDevice() else { return }
+        var pid: AudioDeviceIOProcID?
+        let made = AudioDeviceCreateIOProcIDWithBlock(&pid, out, clockQueue) { _, _, _, outData, _ in
+            for b in UnsafeMutableAudioBufferListPointer(outData) {
+                if let d = b.mData { memset(d, 0, Int(b.mDataByteSize)) }
+            }
+        }
+        guard made == noErr, let pid else {
+            AppLog.warn("meeting", "cannot keep the output running (\(made)) — the recording depends on something playing")
+            return
+        }
+        guard AudioDeviceStart(out, pid) == noErr else {
+            AudioDeviceDestroyIOProcID(out, pid)
+            AppLog.warn("meeting", "cannot start the output clock — the recording depends on something playing")
+            return
+        }
+        clockDevice = out
+        clockProcID = pid
+    }
+
+    /// The default output changed mid-meeting: restart the silent output
+    /// on the new one. Off the main actor (stopping the old device waits for
+    /// its IO proc), under `captureLock` like every graph handle.
+    @MainActor
+    private func moveOutputClock() {
+        guard !isMoving else { return }
+        isMoving = true
+        let mySession = session
+        Task.detached(priority: .userInitiated) { [self] in
+            let (running, now) = self.restartOutputClock()
+            await MainActor.run {
+                self.isMoving = false
+                guard self.session == mySession, self.isRunning, running else { return }
+                AppLog.info("meeting", "default output changed — the silent output moved with it")
+                self.watchedClock = now
+                // Anything that changed meanwhile.
+                self.handleDeviceChange()
+            }
+        }
+    }
+
+    /// Under `captureLock`: restart the output clock on the current default
+    /// output while capture runs. Returns whether it was running, and the
+    /// device the clock now runs on.
+    private nonisolated func restartOutputClock() -> (Bool, AudioObjectID) {
+        captureLock.lock()
+        defer { captureLock.unlock() }
+        guard procID != nil else { return (false, clockDevice) }
+        startOutputClock()
+        return (true, clockDevice)
+    }
+
+    private func stopOutputClock() {
+        if let clockProcID, clockDevice != kAudioObjectUnknown {
+            AudioDeviceStop(clockDevice, clockProcID)
+            AudioDeviceDestroyIOProcID(clockDevice, clockProcID)
+        }
+        clockProcID = nil
+        clockDevice = AudioObjectID(kAudioObjectUnknown)
+    }
+
+    nonisolated static func defaultOutputDevice() -> AudioObjectID? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var id = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id) == noErr,
+              id != kAudioObjectUnknown else { return nil }
+        return id
     }
 
     private func teardownCoreAudio() {
+        stopOutputClock()
         if let procID, aggID != kAudioObjectUnknown {
             AudioDeviceStop(aggID, procID)
             AudioDeviceDestroyIOProcID(aggID, procID)

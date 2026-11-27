@@ -67,7 +67,9 @@ struct AppShell: View {
                 askUpdateConsent = container.updates.needsConsent
             }
             .task {
-                guard !textModelPrompted, !ModelCatalog.anyInstalled else { return }
+                // Not in a self-test copy: it shares the user's preferences,
+                // and would mark the question as asked for the real app.
+                guard !AppContainer.isTestHost, !textModelPrompted, !ModelCatalog.anyInstalled else { return }
                 try? await Task.sleep(for: .seconds(2))
                 // The update question, when there is one, goes first.
                 while askUpdateConsent || resumeOffer != nil { try? await Task.sleep(for: .seconds(1)) }

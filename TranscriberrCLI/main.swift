@@ -22,6 +22,10 @@ func usage() {
 
     USAGE
       transcriberrcli record [seconds]     capture seconds (default 5) from the mic
+      transcriberrcli meetingmove [seconds]
+                                            meeting capture (mic + call audio) that loses its mic
+                                            halfway: checks the recording carries on into the same
+                                            files, then deletes them (default 12 s)
       transcriberrcli decode <file>        decode to 16k mono Float32 and chunk it
       transcriberrcli noisesup <file>      run the offline noise-suppression pass
       transcriberrcli transcribe <file> [--json] [--language Dutch]
@@ -144,6 +148,19 @@ func cmdRecord(seconds: Double) async -> Int32 {
         return 2
     }
     return 0
+}
+
+/// See `MeetingMoveCheck`. Needs the shell to hold the System Audio
+/// Recording permission; otherwise the app's self-test launch runs it.
+@MainActor
+func cmdMeetingMove(seconds: Double) async -> Int32 {
+    guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+        print("[meetingmove] ❌ microphone not authorized for this CLI — see `record`")
+        return 2
+    }
+    let outcome = await MeetingMoveCheck.run(seconds: seconds)
+    for line in outcome.lines { print("[meetingmove] \(line)") }
+    return outcome.ok ? 0 : 1
 }
 
 @MainActor
@@ -988,6 +1005,9 @@ func main() async -> Int32 {
     case "record":
         let s = (args.count > 2 ? Double(args[2]) : nil) ?? 5
         return await cmdRecord(seconds: s)
+    case "meetingmove":
+        let s = (args.count > 2 ? Double(args[2]) : nil) ?? 12
+        return await cmdMeetingMove(seconds: s)
     case "decode":
         guard args.count > 2 else { usage(); return 64 }
         return await cmdDecode(path: args[2])

@@ -6,6 +6,12 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.9.2
+
+- A meeting recording no longer stops when your microphone goes away. When a headset drops or a mic is unplugged, the recording carries on with the next microphone (or with the call audio alone until one is connected) in the same recording, and moves back to your own mic when it returns. A note pops up to say which microphone it now uses.
+- A meeting recording now captures while nothing plays on the Mac. Before, recording the call audio needed something playing: in a silent stretch, such as before a call starts, both the call audio and your microphone could go unrecorded.
+- If the meeting audio still stops arriving with the device present, the recording rebuilds its capture after two seconds instead of carrying on with nothing.
+
 ## 5.9.1
 
 - Letters written by dictation are now signed with your name from Settings › My name, under the closing line. A letter where you said your own sign-off, such as "best regards, Pieter", keeps it. Your name is added on the Mac, so it is never sent to a text model.

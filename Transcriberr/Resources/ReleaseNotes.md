@@ -6,6 +6,14 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.10.0
+
+- Splitting a recording now shows the whole recording as a picture: you above the line and the call below, so the silence between two meetings is easy to see.
+- The longest pauses are marked with numbers. Press a mark, or its chip, to put the cut there.
+- Drag anywhere on the picture to move the cut. What becomes the second recording is tinted, and the sheet says which line the first recording ends with and which line the second starts with.
+- "1 s earlier", "1 s later" and "Listen from here" let you settle the exact place before anything is split. Typing a time still works.
+- When the cut falls inside a spoken line, the sheet says which recording gets the whole line.
+
 ## 5.9.2
 
 - A meeting recording no longer stops when your microphone goes away. When a headset drops or a mic is unplugged, the recording carries on with the next microphone (or with the call audio alone until one is connected) in the same recording, and moves back to your own mic when it returns. A note pops up to say which microphone it now uses.

@@ -498,6 +498,21 @@ struct SplitRecordingSheet: View {
     @State private var timeText: String
     @State private var isWorking = false
     @State private var error: String?
+    /// Where the cut is, to the fraction of a second the pointer gave.
+    @State private var cut: Double
+    @State private var upperPeaks: [Float] = []
+    @State private var lowerPeaks: [Float] = []
+    /// Filled once when the sheet appears. The sheet's init runs again on
+    /// every tick of the shared player, so nothing that walks the transcript
+    /// belongs there.
+    @State private var lines: [SplitPlan.Line] = []
+    @State private var pauses: [SplitPlan.Pause] = []
+    @State private var prepared = false
+    /// Whether "Listen from here" started the player, so closing the sheet
+    /// stops only what the sheet began.
+    @State private var listening = false
+    @FocusState private var typing: Bool
+    private let total: Double
 
     init(recording: Recording, container: AppContainer, initialSeconds: Double,
          onDone: @escaping (Bool) -> Void) {
@@ -505,7 +520,32 @@ struct SplitRecordingSheet: View {
         self.container = container
         self.initialSeconds = initialSeconds
         self.onDone = onDone
-        _timeText = State(initialValue: Self.format(initialSeconds))
+        self.total = recording.durationSeconds
+        let start = SplitPlan.clamp(initialSeconds, total: recording.durationSeconds)
+        _cut = State(initialValue: start)
+        _timeText = State(initialValue: Self.format(start))
+    }
+
+    /// Reads the transcript once. A player that was moved somewhere is the
+    /// user pointing at the place; one still at the start says nothing, and
+    /// then the longest pause is the likeliest border between two meetings.
+    private func prepare() {
+        guard !prepared else { return }
+        prepared = true
+        lines = recording.segments
+            .map { SplitPlan.Line(start: $0.startSeconds, end: $0.endSeconds, text: $0.text) }
+            .sorted { $0.start < $1.start }
+        pauses = SplitPlan.pauses(in: lines, total: total)
+        if initialSeconds < 1 {
+            cut = pauses.max { $0.length < $1.length }?.at ?? SplitPlan.clamp(total / 2, total: total)
+        }
+    }
+
+    /// Every way of moving the cut other than typing: the time field then
+    /// shows the new place, so it must not keep the keyboard.
+    private func moveCut(to seconds: Double) {
+        typing = false
+        cut = SplitPlan.clamp(seconds, total: total)
     }
 
     var body: some View {
@@ -517,17 +557,70 @@ struct SplitRecordingSheet: View {
                     Text("Length \(Self.format(recording.durationSeconds))").uiLabel(9, color: AppColor.ink2)
                 }
                 Hairline()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Split at (mm:ss)").uiLabel(9, color: AppColor.ink2)
-                    TextField("0:00", text: $timeText).onSubmit { split() }
-                        .textFieldStyle(.plain)
-                        .font(AppFont.text(15))
-                        .foregroundStyle(AppColor.ink)
-                        .tint(AppColor.accentOnLight)
+                if SplitPlan.range(total: total) != nil {
+                    Text(pauses.isEmpty
+                         ? String(localized: "This is the whole recording. Drag on the picture to put the cut where the second recording starts.")
+                         : String(localized: "This is the whole recording. The numbered marks are the longest pauses. Drag on the picture, or press a mark, to put the cut where the second recording starts."))
+                        .font(AppFont.text(12))
+                        .foregroundStyle(AppColor.ink3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(spacing: 3) {
+                        SplitTimeline(upper: upperPeaks, lower: lowerPeaks, total: total, pauses: pauses,
+                                      cut: Binding(get: { cut }, set: { moveCut(to: $0) }))
+                            .disabled(isWorking)
+                        HStack {
+                            Text(verbatim: "0:00").uiLabel(9, color: AppColor.ink3)
+                            Spacer()
+                            Text(verbatim: Self.format(total)).uiLabel(9, color: AppColor.ink3)
+                        }
+                        .monospacedDigit()
+                    }
+                    if !pauses.isEmpty {
+                        // Side by side when they fit; three marks of an
+                        // hours-long recording do not.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: AppMetric.s) { pauseChips }
+                            VStack(alignment: .leading, spacing: AppMetric.xs) { pauseChips }
+                        }
                         .disabled(isWorking)
-                    Hairline()
+                    }
                 }
-                Text("Defaults to the player's current position. Produces two new recordings; the original is kept until you choose to delete it.")
+                // Above the text that changes with the cut: a row that moved
+                // under the pointer would make a second press of "1 s later" miss.
+                HStack(alignment: .bottom, spacing: AppMetric.m) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Split at (mm:ss)").uiLabel(9, color: AppColor.ink2)
+                        TextField("0:00", text: $timeText).onSubmit { split() }
+                            .textFieldStyle(.plain)
+                            .font(AppFont.text(15))
+                            .foregroundStyle(AppColor.ink)
+                            .tint(AppColor.accentOnLight)
+                            .focused($typing)
+                            .disabled(isWorking)
+                            .frame(width: 90)
+                        Hairline().frame(width: 90)
+                    }
+                    Spacer()
+                    LitChip(label: String(localized: "1 s earlier")) { moveCut(to: cut - 1) }
+                    LitChip(label: String(localized: "1 s later")) { moveCut(to: cut + 1) }
+                    LitChip(label: String(localized: "Listen from here")) {
+                        listening = true
+                        container.audioPlayer.seek(to: cut)
+                        container.audioPlayer.play()
+                    }
+                }
+                .disabled(isWorking)
+                if SplitPlan.range(total: total) != nil {
+                    Text("First recording \(Self.format(0)) to \(Self.format(cut)). Second recording \(Self.format(cut)) to \(Self.format(total)).")
+                        .font(AppFont.display(13, weight: .semibold))
+                        .foregroundStyle(AppColor.ink)
+                        .monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true)
+                    // A fixed height: the lines below it must not move either.
+                    sidesText
+                        .frame(maxWidth: .infinity, minHeight: 66, alignment: .topLeading)
+                }
+                Text("Produces two new recordings; the original is kept until you choose to delete it.")
                     .font(AppFont.text(12))
                     .foregroundStyle(AppColor.ink3)
                 if let error {
@@ -535,7 +628,9 @@ struct SplitRecordingSheet: View {
                 }
                 Spacer()
                 HStack {
-                    TapButton { onDone(false) } label: {
+                    TapButton {
+                        onDone(false)
+                    } label: {
                         LitButtonChrome(.ghost) { Text("Cancel") }
                     }
                     // Once the split is running it can't actually be
@@ -558,20 +653,113 @@ struct SplitRecordingSheet: View {
             }
             .padding(AppMetric.l)
         }
-        .frame(minWidth: 420, minHeight: 280)
+        .frame(minWidth: 640, minHeight: 610)
         // Esc or a sheet dismissal other than Cancel would leave the split
         // running unattended, as above: not while it works.
         .interactiveDismissDisabled(isWorking)
+        // The field follows the cut, except while somebody is typing in it.
+        .onChange(of: cut) { _, new in
+            if !typing { timeText = Self.format(new) }
+        }
+        // A time being typed moves the cut as soon as it is a time, so the
+        // picture and the two quoted lines always describe what Split will do.
+        .onChange(of: timeText) { _, new in
+            guard typing, let typed = Self.parse(new),
+                  let moved = SplitPlan.typed(typed, replacing: cut, total: total) else { return }
+            cut = moved
+        }
+        .onChange(of: typing) { _, now in
+            if !now { timeText = Self.format(cut) }
+        }
+        .onAppear { prepare() }
+        // Esc and every other way out: stop what "Listen from here" started.
+        .onDisappear {
+            if listening { container.audioPlayer.pause() }
+        }
+        .task { await loadPeaks() }
+    }
+
+    @ViewBuilder private var pauseChips: some View {
+        ForEach(Array(pauses.enumerated()), id: \.element.id) { index, pause in
+            LitChip(label: String(localized: "\(String(index + 1)): \(Self.format(pause.at)) · pause \(Self.format(pause.length))",
+                                  comment: "A suggested place to split: its number on the picture, the time, the length of the pause as m:ss"),
+                    active: abs(cut - pause.at) < 0.05) { moveCut(to: pause.at) }
+        }
+    }
+
+    /// What the cut does to the transcript, in the reader's words: the line
+    /// the first recording ends on and the one the second begins with.
+    @ViewBuilder private var sidesText: some View {
+        let sides = SplitPlan.sides(of: lines, cut: cut)
+        VStack(alignment: .leading, spacing: 4) {
+            if lines.isEmpty {
+                Text("This recording has no transcript yet, so only the sound can guide the cut.")
+            } else {
+                if let before = sides.before {
+                    Text("The first recording ends: “…\(SplitPlan.tail(before.text))”")
+                } else {
+                    Text("Nothing is said before this point.")
+                }
+                if let after = sides.after {
+                    Text("The second recording starts: “\(SplitPlan.head(after.text))…”")
+                } else {
+                    Text("Nothing is said after this point.")
+                }
+                if sides.through != nil {
+                    // The audio is cut where the line is, but its text cannot
+                    // be sliced: say where the whole line goes.
+                    Text(sides.throughStaysInFirst
+                         ? String(localized: "The cut falls inside a spoken line. The whole line stays in the first recording.")
+                         : String(localized: "The cut falls inside a spoken line. The whole line goes to the second recording."))
+                        .foregroundStyle(AppColor.statusWarning)
+                }
+            }
+        }
+        .font(AppFont.text(12.5))
+        .foregroundStyle(AppColor.ink2)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The two tracks when the recording kept them (you above, the call
+    /// below), otherwise the mix on both sides.
+    private func loadPeaks() async {
+        let main = URL(fileURLWithPath: recording.audioPath)
+        let mic = AudioCompressor.sidecarURL(for: main, kind: "mic")
+        let sys = AudioCompressor.sidecarURL(for: main, kind: "sys")
+        if let mic, let sys {
+            async let upper = WaveformLoader.extractPeaks(from: mic, buckets: 900)
+            async let lower = WaveformLoader.extractPeaks(from: sys, buckets: 900)
+            let (u, l) = await (upper, lower)
+            if !u.isEmpty || !l.isEmpty {
+                upperPeaks = u
+                lowerPeaks = l
+                return
+            }
+        }
+        upperPeaks = await WaveformLoader.extractPeaks(from: main, buckets: 900)
     }
 
     private func split() {
         guard !isWorking else { return }
-        guard let secs = Self.parse(timeText) else {
+        guard let typed = Self.parse(timeText) else {
             error = String(localized: "Enter a time as mm:ss.")
             return
         }
+        // A typed time has already moved the cut. This is the same rule once
+        // more, for a time typed outside the recording: it is passed on as
+        // typed, and the repository says why it cannot be used.
+        let secs: Double
+        if let moved = SplitPlan.typed(typed, replacing: cut, total: total) {
+            secs = moved
+        } else if let range = SplitPlan.range(total: total), !range.contains(typed) {
+            secs = typed
+        } else {
+            secs = cut
+        }
         error = nil
         isWorking = true
+        typing = false
+        if listening { container.audioPlayer.pause() }
         Task { @MainActor in
             do {
                 let result = try await container.repository.split(recording, atSeconds: secs)

@@ -1195,6 +1195,23 @@
         }
       }
     },
+    "%@: %@ · pause %@": {
+      "comment": "A suggested place to split: its number on the picture, the time, the length of the pause as m:ss",
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@ · пауза %@"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@ · pauze %@"
+          }
+        }
+      }
+    },
     "%@: %@, best": {
       "localizations": {
         "uk": {
@@ -4095,6 +4112,38 @@
       }
     },
     "0:00": {},
+    "1 s earlier": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На 1 с раніше"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 s eerder"
+          }
+        }
+      }
+    },
+    "1 s later": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На 1 с пізніше"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 s later"
+          }
+        }
+      }
+    },
     "1 setting matches, an Advanced one.": {
       "localizations": {
         "uk": {
@@ -7888,22 +7937,6 @@
         }
       }
     },
-    "Defaults to the player's current position. Produces two new recordings; the original is kept until you choose to delete it.": {
-      "localizations": {
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "За замовчуванням — поточна позиція програвача. Буде створено два нові записи; оригінал зберігається, доки ви не вирішите його видалити."
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Standaard de huidige positie van de speler. Er komen twee nieuwe opnamen; het origineel blijft bewaard tot je besluit het te verwijderen."
-          }
-        }
-      }
-    },
     "Delete": {
       "localizations": {
         "uk": {
@@ -10230,6 +10263,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fijn — elke tussenwerping behouden"
+          }
+        }
+      }
+    },
+    "First recording %@ to %@. Second recording %@ to %@.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перший запис: від %@ до %@. Другий запис: від %@ до %@."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eerste opname van %@ tot %@. Tweede opname van %@ tot %@."
           }
         }
       }
@@ -13385,6 +13434,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Luister"
+          }
+        }
+      }
+    },
+    "Listen from here": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слухати звідси"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Luister vanaf hier"
           }
         }
       }
@@ -16737,6 +16802,38 @@
         }
       }
     },
+    "Nothing is said after this point.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Після цього місця ніхто нічого не каже."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Na dit punt wordt niets meer gezegd."
+          }
+        }
+      }
+    },
+    "Nothing is said before this point.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "До цього місця ніхто нічого не каже."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voor dit punt wordt niets gezegd."
+          }
+        }
+      }
+    },
     "Nothing matched inside those dates, so this looked through every recording.": {
       "localizations": {
         "uk": {
@@ -18168,6 +18265,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Vorige"
+          }
+        }
+      }
+    },
+    "Produces two new recordings; the original is kept until you choose to delete it.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Буде два нові записи; оригінал залишається, доки ви самі його не видалите."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Er komen twee nieuwe opnames; het origineel blijft bewaard tot je het zelf verwijdert."
           }
         }
       }
@@ -23799,6 +23912,38 @@
         }
       }
     },
+    "The cut falls inside a spoken line. The whole line goes to the second recording.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Розріз припадає на середину репліки. Уся репліка перейде до другого запису."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De knip valt midden in een gesproken regel. De hele regel gaat naar de tweede opname."
+          }
+        }
+      }
+    },
+    "The cut falls inside a spoken line. The whole line stays in the first recording.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Розріз припадає на середину репліки. Уся репліка залишиться в першому записі."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De knip valt midden in een gesproken regel. De hele regel blijft in de eerste opname."
+          }
+        }
+      }
+    },
     "The diarizer split one person in two: join this speaker to another.": {
       "localizations": {
         "uk": {
@@ -23988,6 +24133,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "De snelle. Ongeveer twee keer zo snel bij opschonen en dicteren, omdat een klein hulpmodel vooruit raadt. Duidelijk beter dan E4B in het Oekraïens, achter 26B."
+          }
+        }
+      }
+    },
+    "The first recording ends: “…%@”": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перший запис закінчується: «…%@»"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De eerste opname eindigt: “…%@”"
           }
         }
       }
@@ -24537,6 +24698,22 @@
         }
       }
     },
+    "The second recording starts: “%@…”": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другий запис починається: «%@…»"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De tweede opname begint: “%@…”"
+          }
+        }
+      }
+    },
     "The settings most people change": {
       "localizations": {
         "uk": {
@@ -24860,6 +25037,22 @@
         }
       }
     },
+    "The whole recording. The cut is at %@.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Увесь запис. Розріз на %@."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "De hele opname. De knip staat op %@."
+          }
+        }
+      }
+    },
     "Their matches are close to the bar. Confirm the suggested recordings to sharpen the voice.": {
       "localizations": {
         "uk": {
@@ -25084,6 +25277,38 @@
         }
       }
     },
+    "This is the whole recording. Drag on the picture to put the cut where the second recording starts.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Це весь запис. Потягніть по зображенню, щоб поставити розріз там, де починається другий запис."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dit is de hele opname. Sleep over het beeld om de knip te zetten waar de tweede opname begint."
+          }
+        }
+      }
+    },
+    "This is the whole recording. The numbered marks are the longest pauses. Drag on the picture, or press a mark, to put the cut where the second recording starts.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Це весь запис. Позначки з номерами показують найдовші паузи. Потягніть по зображенню або натисніть позначку, щоб поставити розріз там, де починається другий запис."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dit is de hele opname. De genummerde markeringen zijn de langste pauzes. Sleep over het beeld of klik op een markering om de knip te zetten waar de tweede opname begint."
+          }
+        }
+      }
+    },
     "This line goes to a speaker of that name, or a new one.": {
       "localizations": {
         "uk": {
@@ -25160,6 +25385,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Deze voorlezing is met een ander stemmodel gemaakt dan je bewaarde stem, dus hij is niet toegevoegd; er is niets veranderd."
+          }
+        }
+      }
+    },
+    "This recording has no transcript yet, so only the sound can guide the cut.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цей запис ще не має транскрипту, тож орієнтуватися можна лише на звук."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deze opname heeft nog geen transcript, dus alleen het geluid kan je helpen bij de knip."
           }
         }
       }

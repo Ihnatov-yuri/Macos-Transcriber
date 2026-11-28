@@ -69,6 +69,9 @@ nonisolated final class UpdateChecker: @unchecked Sendable {
     var skippedVersion: String? { didSet { defaults.set(skippedVersion, forKey: Key.skipped) } }
     private(set) var lastCheck: Date? { didSet { defaults.set(lastCheck, forKey: Key.lastCheck) } }
     private(set) var status: Status = .idle
+    /// The newest release a check has found. A later check that fails (a Mac
+    /// waking offline) must not take the notice away again.
+    private(set) var found: Release?
 
     let currentVersion: String
     let installer = UpdateInstaller()
@@ -96,7 +99,7 @@ nonisolated final class UpdateChecker: @unchecked Sendable {
 
     /// The release to show in the sidebar, if any.
     var pendingNotice: Release? {
-        guard case .available(let r) = status, r.version != skippedVersion else { return nil }
+        guard let r = found, r.version != skippedVersion else { return nil }
         return r
     }
 
@@ -114,6 +117,18 @@ nonisolated final class UpdateChecker: @unchecked Sendable {
                 }
                 try? await Task.sleep(for: .seconds(6 * 60 * 60))
             }
+        }
+    }
+
+    /// Takes a check's answer. Only a check that reached GitHub changes
+    /// what is known about a newer release.
+    func finish(_ result: Status) {
+        status = result
+        switch result {
+        case .available(let r): found = r; lastCheck = Date()
+        case .upToDate: found = nil; lastCheck = Date()
+        case .failed: break
+        case .idle, .checking: break
         }
     }
 
@@ -141,10 +156,7 @@ nonisolated final class UpdateChecker: @unchecked Sendable {
             result = .failed(String(localized: "Couldn't reach GitHub"))
             AppLog.info("update", "check failed: \(error.localizedDescription)")
         }
-        await MainActor.run {
-            status = result
-            if case .failed = result {} else { lastCheck = Date() }
-        }
+        await MainActor.run { finish(result) }
         return result
     }
 

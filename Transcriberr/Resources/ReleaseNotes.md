@@ -6,6 +6,23 @@
 # fails when MARKETING_VERSION has no entry here. One user-facing line per
 # change. The how and the learning belong in the GitHub release.
 
+## 5.10.1
+
+Fixes from a review of the whole app.
+
+- Quitting the app twice during one long transcription no longer drops it. Before, the second quit was read as a second crash and the run did not come back.
+- Cancelling a transcription no longer leaves a progress row that never ends.
+- Update no longer warns that a transcription is running when the last one has finished, and a check that fails later no longer hides an update already found.
+- "Save to library" on the Dictate screen while you are still dictating no longer leaves the microphone open behind a screen that says it has stopped.
+- A dictated bullet list starts on its own line instead of sticking to the text before it.
+- A letter is signed with your name even when your name also appears in its last paragraph. A "[Your Name]" placeholder is never pasted as it is.
+- Splitting a recording at its very start or end now cuts where the picture shows, instead of refusing. A recording whose length could not be read can be split by typing a time.
+- A split that fails no longer leaves its audio files on disk.
+- Merge waits until a transcription of either recording has finished, so the merged recording gets the whole transcript.
+- A meeting recording takes your headset back when it returns within a few seconds of dropping, picks up a microphone plugged in while only the call was recording, and rebuilds a capture that stays silent after a microphone move.
+- "Mic off" for a meeting no longer carries over after you turn Meeting off.
+- The You page describes your own voice as yours, and the cards on the People pages are the same width.
+
 ## 5.10.0
 
 - Splitting a recording now shows the whole recording as a picture: you above the line and the call below, so the silence between two meetings is easy to see.

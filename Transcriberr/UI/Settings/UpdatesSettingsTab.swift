@@ -15,7 +15,7 @@ struct UpdatesSettingsTab: View {
                     Text("This Mac runs \(u.currentVersion)")
                     Spacer()
                     Text(statusText(u)).foregroundStyle(.secondary)
-                    if case .available(let r) = u.status {
+                    if let r = u.found {
                         if r.installable, !u.installer.phase.isWorking {
                             TapButton { container.installUpdate(r) } label: {
                                 LitButtonChrome(.accent, compact: true) { Text("Update") }
@@ -38,6 +38,17 @@ struct UpdatesSettingsTab: View {
     }
 
     private func statusText(_ u: UpdateChecker) -> String {
+        // An install under way speaks first: the update may have been found
+        // by an earlier check than the one `status` now describes.
+        if let r = u.found {
+            switch u.installer.phase {
+            case .downloading: return String(localized: "Downloading \(r.version)…")
+            case .verifying: return String(localized: "Checking signature…")
+            case .relaunching: return String(localized: "Reopening…")
+            case .failed(let why): return why
+            case .idle: break
+            }
+        }
         switch u.status {
         case .checking: return String(localized: "Checking…")
         case .upToDate: return String(localized: "Up to date")

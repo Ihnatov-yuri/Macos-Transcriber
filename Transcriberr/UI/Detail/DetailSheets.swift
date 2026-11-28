@@ -748,14 +748,7 @@ struct SplitRecordingSheet: View {
         // A typed time has already moved the cut. This is the same rule once
         // more, for a time typed outside the recording: it is passed on as
         // typed, and the repository says why it cannot be used.
-        let secs: Double
-        if let moved = SplitPlan.typed(typed, replacing: cut, total: total) {
-            secs = moved
-        } else if let range = SplitPlan.range(total: total), !range.contains(typed) {
-            secs = typed
-        } else {
-            secs = cut
-        }
+        let secs = SplitPlan.secondsToSplit(typed: typed, cut: cut, total: total)
         error = nil
         isWorking = true
         typing = false

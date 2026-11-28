@@ -160,4 +160,21 @@ final class SplitPlanTests: XCTestCase {
         XCTAssertGreaterThan(png.count, 5_000)
         try png.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("transcriberr-split-sheet.png"))
     }
+
+    // Review findings for 5.10.1.
+
+    /// Dragged to either end the field reads a time just outside the
+    /// recording; Split then refused the cut its own preview had shown.
+    func testACutAtEitherEndSplitsWhereThePreviewShowed() {
+        XCTAssertEqual(SplitPlan.secondsToSplit(typed: 600, cut: 599.75, total: 600), 599.75)
+        XCTAssertEqual(SplitPlan.secondsToSplit(typed: 0, cut: 0.25, total: 600), 0.25)
+        // A time really typed outside the recording is passed on, for the repository to refuse.
+        XCTAssertEqual(SplitPlan.secondsToSplit(typed: 700, cut: 300, total: 600), 700)
+        XCTAssertEqual(SplitPlan.secondsToSplit(typed: 0, cut: 300, total: 600), 0)
+        // Untouched field, typed time inside: as before.
+        XCTAssertEqual(SplitPlan.secondsToSplit(typed: 420, cut: 419.6, total: 600), 419.6)
+        XCTAssertEqual(SplitPlan.secondsToSplit(typed: 200, cut: 419.6, total: 600), 200)
+        // Length unknown (the file's duration could not be read): the typed time goes through.
+        XCTAssertEqual(SplitPlan.secondsToSplit(typed: 95, cut: 0, total: 0), 95)
+    }
 }

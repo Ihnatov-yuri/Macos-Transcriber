@@ -4448,6 +4448,22 @@
         }
       }
     },
+    "A transcription is still running": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Транскрибування ще триває"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Er loopt nog een transcriptie"
+          }
+        }
+      }
+    },
     "A voice in %lld of your meetings": {
       "localizations": {
         "uk": {
@@ -14511,6 +14527,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Voeg samen met…"
+          }
+        }
+      }
+    },
+    "Merge these two when it has finished, so the merged recording gets the whole transcript.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Об’єднайте ці два записи, коли воно завершиться, щоб об’єднаний запис отримав увесь транскрипт."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voeg deze twee samen als die klaar is, zodat de samengevoegde opname het hele transcript krijgt."
           }
         }
       }
@@ -27706,6 +27738,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Je opnames geven hier geen antwoord op."
+          }
+        }
+      }
+    },
+    "Your samples score %@ against your own voice and %@ against %@'s, the closest saved voice. A gap over %@ tells you apart.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваші зразки дають %@ проти власного голосу і %@ проти голосу %@ — найближчого зі збережених. Різниця понад %@ дає змогу вас розрізнити."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je voorbeelden scoren %@ tegen je eigen stem en %@ tegen die van %@, de dichtstbijzijnde bewaarde stem. Een verschil van meer dan %@ houdt jullie uit elkaar."
           }
         }
       }

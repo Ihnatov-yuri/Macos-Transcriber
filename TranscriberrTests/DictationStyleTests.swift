@@ -221,6 +221,48 @@ final class DictationStyleTests: XCTestCase {
                        "Beste Anna,\n\nBetaald.\n\nMet vriendelijke groet\nYuri")
     }
 
+    // Review findings for 5.10.1.
+
+    func testTheNameInTheLastParagraphIsNotASignature() {
+        let intro = "Dear Sir,\n\nThis is Yuri from Kaiko, I would like to meet next week.\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(intro, name: "Yuri"), intro + "\nYuri")
+        let will = "Dear Anna,\n\nI will send it tomorrow.\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(will, name: "Will"), will + "\nWill")
+        let short = "Dear Anna,\n\nI will send it.\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(short, name: "Will"), short + "\nWill")
+        let greeting = "Hi Anna,\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(greeting, name: "Anna"), greeting + "\nAnna")
+        // A name over a title is still a signature.
+        let titled = "Dear Anna,\n\nThe invoice is paid.\n\nKind regards,\nYuri Ihnatov\nCTO"
+        XCTAssertEqual(DictationStyle.signed(titled, name: "Yuri"), titled)
+    }
+
+    func testPlaceholdersAreNeverPastedAsTheyAre() {
+        let letter = "Dear Anna,\n\nPaid.\n\nKind regards,"
+        XCTAssertEqual(DictationStyle.signed(letter + "\n[Your Name]", name: nil), letter)
+        XCTAssertEqual(DictationStyle.signed(letter + "\n[Your Name]\n[Your Title]", name: "Yuri"), letter + "\nYuri")
+        XCTAssertEqual(DictationStyle.signed(letter + "\n\n[Your Name]\n[Your Title]", name: ""), letter)
+    }
+
+    func testANoticeNeverReplacesALiveSession() {
+        XCTAssertTrue(DictationController.noticeMayReplace(.idle))
+        XCTAssertTrue(DictationController.noticeMayReplace(.message("x")))
+        XCTAssertFalse(DictationController.noticeMayReplace(.listening), "Save to library while listening left the mic open")
+        XCTAssertFalse(DictationController.noticeMayReplace(.transcribing))
+        XCTAssertFalse(DictationController.noticeMayReplace(.inserting))
+    }
+
+    func testAListStartsOnItsOwnLine() {
+        XCTAssertEqual(DictationText.join(existing: "Notes for today", new: "- milk\n- eggs"), "Notes for today\n- milk\n- eggs")
+        XCTAssertEqual(DictationText.join(existing: "Notes:\n", new: "- milk"), "Notes:\n- milk")
+        XCTAssertEqual(DictationText.join(existing: "Wait", new: ", what?"), "Wait, what?")
+        XCTAssertEqual(DictationText.forInsertion("- First point", spacing: .auto, preceding: "A sentence."), "\n- First point")
+        XCTAssertEqual(DictationText.forInsertion("- First point", spacing: .auto, preceding: "A sentence.\n"), "- First point")
+        XCTAssertEqual(DictationText.forInsertion("- milk", spacing: .auto, preceding: "Notes: "), "\n- milk")
+        XCTAssertEqual(DictationText.forInsertion("- milk", spacing: .auto, preceding: ""), "- milk")
+        XCTAssertEqual(DictationText.forInsertion("next", spacing: .auto, preceding: "word"), " next")
+    }
+
     func testNoNameOrNoClosingLeavesTheLetterAlone() {
         let letter = "Dear Mark,\n\nThe report is late.\n\nKind regards,"
         XCTAssertEqual(DictationStyle.signed(letter, name: nil), letter)

@@ -768,7 +768,9 @@ nonisolated final class DictationController: @unchecked Sendable {
                 // Too short to hold a word and nothing delivered earlier:
                 // back to idle without a notice.
                 AppLog.info("dictation", String(format: "session ended with %.2fs of audio — dropped quietly", seconds))
-                if self.phase == .transcribing {
+                // .inserting too: an earlier session's passage may have
+                // landed meanwhile, and nothing else would end that phase.
+                if self.phase == .transcribing || self.phase == .inserting {
                     self.phase = .idle
                     self.updateHUD()
                 }
@@ -1414,6 +1416,15 @@ nonisolated final class DictationController: @unchecked Sendable {
     /// Whether a final pass of `passageSession` may change the phase and
     /// show its notice: only while it is still the current session and its
     /// final pass is what the screen shows.
+    /// A HUD notice takes over the phase, so it may only stand in for a
+    /// phase with nothing running behind it.
+    static func noticeMayReplace(_ phase: Phase) -> Bool {
+        switch phase {
+        case .idle, .message: return true
+        case .listening, .transcribing, .inserting: return false
+        }
+    }
+
     static func ownsPhase(passageSession: Int, currentSession: Int, phase: Phase) -> Bool {
         passageSession == currentSession && (phase == .transcribing || phase == .inserting)
     }
@@ -1585,7 +1596,10 @@ nonisolated final class DictationController: @unchecked Sendable {
         do {
             let silence = [Float](repeating: 0, count: Int(UtteranceCapture.sampleRate / 2))
             try store(samples: silence, seconds: 0.5, text: text, versionLabel: "Dictation scratch pad")
-            showMessage(String(localized: "Saved to Library → Dictation"))
+            // A notice replaces the phase. Over a live session that left the
+            // microphone open behind a screen that said idle.
+            let saved = String(localized: "Saved to Library → Dictation")
+            if Self.noticeMayReplace(phase) { showMessage(saved) } else { padNotice = saved }
         } catch {
             AppLog.error("dictation", "scratch pad save failed: \(error.localizedDescription)")
             lastError = error.localizedDescription

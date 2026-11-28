@@ -410,6 +410,7 @@ struct PeopleOverview: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -473,6 +474,7 @@ struct PeopleOverview: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -523,6 +525,7 @@ struct PeopleOverview: View {
                 .accessibilityLabel("\(r.person.name): \(r.recent.count) meetings")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -567,6 +570,7 @@ struct PeopleOverview: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -585,6 +589,7 @@ struct PeopleOverview: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }

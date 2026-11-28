@@ -448,10 +448,18 @@ enum DictationText {
         guard !n.isEmpty else { return existing }
         guard !existing.isEmpty else { return n }
         if existing.hasSuffix("\n") { return existing + n }
+        // A list starts on its own line: "-" is punctuation, and the rule
+        // below glued "Notes for today" and "- milk" together.
+        if startsList(n) { return existing + "\n" + n }
         if let first = n.first, first.isPunctuation, first != "“", first != "(" {
             return existing + n
         }
         return existing + " " + n
+    }
+
+    /// Whether a passage opens with a list item ("- milk", "• milk").
+    static func startsList(_ text: String) -> Bool {
+        text.hasPrefix("- ") || text.hasPrefix("• ") || text.hasPrefix("* ")
     }
 
     /// Text exactly as it will be typed into the target app.
@@ -482,8 +490,10 @@ enum DictationText {
             if atSentenceStart, let first = out.first, first.isLowercase {
                 out = first.uppercased() + out.dropFirst()
             }
-            if let last = preceding.last, !last.isWhitespace, !last.isNewline,
-               let first = out.first, !first.isPunctuation {
+            if startsList(out) {
+                if !trimmed.isEmpty, !preceding.hasSuffix("\n") { out = "\n" + out }
+            } else if let last = preceding.last, !last.isWhitespace, !last.isNewline,
+                      let first = out.first, !first.isPunctuation {
                 out = " " + out
             }
             return out

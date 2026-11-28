@@ -53,6 +53,12 @@ final class DetailModel {
             if final != main { try? container.repository.updateAudioPath(final, for: recording) }
             await tracker.markIdle(id)
             isApplyingMic = false
+            // The rebuild takes tens of seconds and nothing stops a delete
+            // meanwhile: a run would write to the deleted recording.
+            guard Self.isLive(recording) else {
+                AppLog.info("mute", "recording deleted while its mic mode was applied — no re-run")
+                return
+            }
             backend = Self.engineForRerun(transcribedWith: recording.transcribedWithBackend, panel: backend)
             run()
         }
@@ -89,7 +95,12 @@ final class DetailModel {
 
     /// Write the panel's state back onto the recording so it survives
     /// closing/reopening and is independent of every other recording.
+    static func isLive(_ recording: Recording) -> Bool {
+        !recording.isDeleted && recording.modelContext != nil
+    }
+
     private func persistRunSettings() {
+        guard Self.isLive(recording) else { return }
         recording.runBackend = backend.rawValue
         recording.runLanguages = languages.sorted().joined(separator: ",")
         recording.runDiarize = diarize

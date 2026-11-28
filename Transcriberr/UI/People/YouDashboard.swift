@@ -123,6 +123,7 @@ struct YouDashboard: View {
                 .font(AppFont.text(13)).foregroundStyle(AppColor.ink2)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -176,6 +177,7 @@ struct YouDashboard: View {
                 GoalCard(goal: goal, verdict: GoalJudge.judge(goal, meetings: meetings))
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -228,6 +230,7 @@ struct YouDashboard: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -284,6 +287,7 @@ struct YouDashboard: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -325,6 +329,7 @@ struct YouDashboard: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }

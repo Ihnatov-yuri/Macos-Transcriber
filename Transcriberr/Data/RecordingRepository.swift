@@ -48,6 +48,16 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
 
     /// `<base>.<ext>` sibling of `path` — e.g. the `.mic.wav` or `.me.json`
     /// sidecar path for a recording's main audio file.
+    /// A half's audio and what was written beside it.
+    static func removeSplitFiles(main: URL) {
+        let fm = FileManager.default
+        let stem = main.deletingPathExtension()
+        for url in [main, stem.appendingPathExtension("mic.wav"), stem.appendingPathExtension("sys.wav"),
+                    stem.appendingPathExtension("me.json")] {
+            try? fm.removeItem(at: url)
+        }
+    }
+
     private func sidecarPath(_ path: String, _ ext: String) -> URL {
         URL(fileURLWithPath: path).deletingPathExtension().appendingPathExtension(ext)
     }
@@ -482,6 +492,15 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         let stamp = Int(Date().timeIntervalSince1970 * 1000)
         let urlA = dir.appendingPathComponent("split_\(stamp)_a_\(UUID().uuidString.prefix(8)).wav")
         let urlB = dir.appendingPathComponent("split_\(stamp)_b_\(UUID().uuidString.prefix(8)).wav")
+        // Until both halves are saved, a throw (a full disk under the second
+        // half, the recording deleted meanwhile) must not leave their audio
+        // on disk with no recording: about 230 MB per hour each.
+        var halvesSaved = false
+        defer {
+            if !halvesSaved {
+                for url in [urlA, urlB] { Self.removeSplitFiles(main: url) }
+            }
+        }
         // Fade across the cut (see fadeEdge's doc comment) — otherwise both
         // halves meet the cut at whatever amplitude the source happened to
         // be at, not silence.
@@ -616,6 +635,7 @@ nonisolated final class RecordingRepository: @unchecked Sendable {
         do {
             try save(first)
             try save(second)
+            halvesSaved = true
 
             // Reclaim disk space now that every WAV involved is fully
             // written AND both recordings are safely persisted. A failure

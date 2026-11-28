@@ -161,22 +161,37 @@ nonisolated enum DictationStyle: String, CaseIterable, Codable, Sendable {
     /// closing) is left as it is.
     static func signed(_ letter: String, name: String?) -> String {
         let name = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return letter }
-        let text = letter.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = letter.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Placeholders the model left under the closing ("[Your Name]",
+        // "[Your Title]"): never pasted as they are. The name takes their
+        // place; with no name set they are dropped.
         var lines = text.components(separatedBy: "\n")
+        var placeholders = 0
+        while let tail = lines.last?.trimmingCharacters(in: .whitespaces) {
+            if tail.isEmpty, placeholders > 0 || lines.count > 1 { lines.removeLast(); continue }
+            guard tail.hasPrefix("["), tail.hasSuffix("]"), tail.count <= 40 else { break }
+            lines.removeLast(); placeholders += 1
+        }
+        if placeholders > 0 {
+            if !name.isEmpty { lines.append(name) }
+            return lines.joined(separator: "\n")
+        }
+        guard !name.isEmpty else { return letter }
+        text = lines.joined(separator: "\n")
         let filled = lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard let last = filled.last else { return letter }
 
-        // A placeholder the model left for the name: fill it in.
-        if last.hasPrefix("["), last.hasSuffix("]"), last.count <= 40,
-           let at = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces) == last }) {
-            lines[at] = name
-            return lines.joined(separator: "\n")
-        }
-        // Already signed with this name: whole words, last two lines only
-        // ("Tim" is not in "time", "Mark" not in "market").
+        // Already signed with this name: whole words ("Tim" is not in
+        // "time"), on the last line, or on a short line above it (a name
+        // over a title). The line above is otherwise the letter's last
+        // paragraph, where "This is Yuri from Kaiko" or "I will send it"
+        // (for a Will) is no signature.
         let nameWords = words(name)
-        if filled.suffix(2).contains(where: { line in
+        let above = filled.dropLast().last.flatMap { line in
+            line.split { $0.isWhitespace }.count <= 4 && !(line.last.map { ".!?,:;".contains($0) } ?? true) ? line : nil
+        }
+        if ([last] + (above.map { [$0] } ?? [])).contains(where: { line in
             let w = words(line)
             return !nameWords.isEmpty && nameWords.allSatisfy(w.contains)
         }) { return text }

@@ -82,7 +82,8 @@ final class RecordModel {
         didSet {
             UserDefaults.standard.set(meetingMode, forKey: "ui.meetingMode")
             // A choice made for a meeting does not wait for the next one.
-            if !meetingMode, !activeMeeting { container.meetingRecorder.setMicSwitch(.auto) }
+            // Not `activeMeeting`: that stays set after a meeting has ended.
+            if !meetingMode, Self.micChoiceEnds(activeMeeting: activeMeeting, sessionRunning: sessionRunning) { container.meetingRecorder.setMicSwitch(.auto) }
         }
     }
     /// Which recorder the CURRENT session started with (the toggle may move
@@ -179,6 +180,14 @@ final class RecordModel {
         Self.showsMicSwitch(meetingMode: meetingMode, activeMeeting: activeMeeting,
                             recording: uiState == .recording || uiState == .paused)
     }
+    /// Meeting switched off: the mic choice made for a meeting goes back to
+    /// Auto, unless that meeting is still recording. `activeMeeting` alone
+    /// stays set after a meeting has ended, so once one had been recorded
+    /// a "Mic off" outlived the switch and left the mic out of the next.
+    nonisolated static func micChoiceEnds(activeMeeting: Bool, sessionRunning: Bool) -> Bool {
+        !(activeMeeting && sessionRunning)
+    }
+
     nonisolated static func showsMicSwitch(meetingMode: Bool, activeMeeting: Bool, recording: Bool) -> Bool {
         recording ? activeMeeting : meetingMode
     }

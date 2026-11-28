@@ -94,6 +94,19 @@ nonisolated enum SplitPlan {
         return abs(seconds - cut.rounded()) > 0.5 || seconds != seconds.rounded() ? seconds : nil
     }
 
+    /// Where Split cuts, from the time in the field and the cut on the
+    /// picture. The field shows the cut rounded to a second, so at either
+    /// end it reads a time just outside the recording ("10:00" for a cut at
+    /// 9:59.75): that is still the cut, not a typed time to refuse. A time
+    /// really typed outside the recording, or any time when the length is
+    /// unknown, is passed on as typed and the repository says why not.
+    static func secondsToSplit(typed seconds: Double, cut: Double, total: Double) -> Double {
+        if let moved = typed(seconds, replacing: cut, total: total) { return moved }
+        guard let r = range(total: total) else { return seconds }
+        if !r.contains(seconds), seconds != cut.rounded() { return seconds }
+        return cut
+    }
+
     /// A suggested pause under a press on the picture, if the press is on its
     /// mark. One point of width is several seconds of a long recording, so a
     /// press on a mark's number would otherwise land well inside the line

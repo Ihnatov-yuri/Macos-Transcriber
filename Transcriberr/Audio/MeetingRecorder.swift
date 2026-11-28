@@ -187,6 +187,9 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
     /// files each time. Main actor.
     @ObservationIgnored private var coolingDown: [String: Date] = [:]
     static let coolDownSeconds: TimeInterval = 20
+    /// Cooling down because they went away, not because they would not
+    /// open (see `lostMicsDue`). Main actor.
+    @ObservationIgnored private var lostMics: Set<String> = []
 
     /// The microphone the aggregate was built on, watched for removal.
     @ObservationIgnored private var micDeviceID = AudioObjectID(kAudioObjectUnknown)
@@ -409,6 +412,10 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDevices)
         // The tap follows the default output; the output clock must too.
         listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice)
+        // A microphone plugged in while only the call records is picked as
+        // the system default, and macOS may name it the default only after
+        // the device-list change above has come and gone.
+        listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice)
     }
 
     /// Called with `captureLock` held.
@@ -478,9 +485,30 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         return Set(coolingDown.keys)
     }
 
+    /// True once when a cool-down has run out. A headset back within its
+    /// cool-down is skipped by the device-list event that announces it, and
+    /// no later event comes: without a second look the rest of the meeting
+    /// stayed on the wrong microphone, or on none.
     @MainActor
-    private func coolDown(_ uid: String?) {
+    private func coolDownJustEnded() -> Bool {
+        let ended = Self.lostMicsDue(coolingDown, lost: lostMics, now: Date())
+        lostMics.subtract(ended)
+        if !ended.isEmpty { _ = coolingSet() }
+        return !ended.isEmpty
+    }
+
+    /// The lost microphones whose cool-down has run out. Only a mic that
+    /// went away gets the second look, once: one that is there but will
+    /// not open would be tried again every cool-down, each try a gap in
+    /// the files.
+    nonisolated static func lostMicsDue(_ cooling: [String: Date], lost: Set<String>, now: Date) -> Set<String> {
+        Set(cooling.filter { $0.value <= now && lost.contains($0.key) }.keys)
+    }
+
+    @MainActor
+    private func coolDown(_ uid: String?, lost: Bool = false) {
         guard let uid else { return }
+        if lost { lostMics.insert(uid) } else { lostMics.remove(uid) }
         coolingDown[uid] = Date().addingTimeInterval(Self.coolDownSeconds)
     }
 
@@ -510,8 +538,12 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
                 }
                 let rebuild = Self.stallStep(frames: frames, last: last, paused: paused, state: &state)
                 last = frames
+                if !rebuild, self.coolDownJustEnded() {
+                    self.handleDeviceChange()
+                    continue
+                }
                 if rebuild {
-                    AppLog.warn("meeting", "no audio for \(Self.stallSeconds) s with the device still there — rebuilding the capture (\(state.rebuilds) of \(Self.maxStallRebuilds))")
+                    AppLog.warn("meeting", "no audio for \(state.everDelivered && frames == 0 ? Self.rebuiltGraceSeconds : Self.stallSeconds) s with the device still there — rebuilding the capture (\(state.rebuilds) of \(Self.maxStallRebuilds))")
                     self.moveMicrophone(micLost: false)
                 }
             }
@@ -531,17 +563,27 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         var armed = false
         var still = 0
         var rebuilds = 0
+        /// Audio has arrived at some point in this recording.
+        var everDelivered = false
     }
+
+    /// How long a rebuilt graph may stay silent before it is rebuilt again.
+    /// Longer than `stallSeconds`: a device still coming up needs a moment.
+    static let rebuiltGraceSeconds = 6
 
     /// One watchdog tick (once a second): true when the capture should be
     /// rebuilt now. Paused counts as moving.
     nonisolated static func stallStep(frames: Int64, last: Int64, paused: Bool,
                                       state: inout StallState) -> Bool {
         if paused { state.still = 0; return false }
-        if frames > max(last, 0) { state.armed = true; state.still = 0; return false }
-        guard state.armed else { return false }
+        if frames > max(last, 0) { state.armed = true; state.everDelivered = true; state.still = 0; return false }
+        // Not armed, but audio has flowed before: a rebuilt graph that never
+        // delivers. It used to be waited on for ever, the screen showing a
+        // recording over files that had stopped growing.
+        guard state.armed || state.everDelivered else { return false }
         state.still += 1
-        guard state.still >= stallSeconds, state.rebuilds < maxStallRebuilds else { return false }
+        let patience = state.armed ? stallSeconds : rebuiltGraceSeconds
+        guard state.still >= patience, state.rebuilds < maxStallRebuilds else { return false }
         state.rebuilds += 1
         state.still = 0
         state.armed = false
@@ -556,7 +598,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         AppLog.warn("meeting", "simulated microphone loss — moving the recording to another microphone")
         // It is still plugged in: without the cool-down the recording
         // would move straight back to it.
-        coolDown(currentMicUID)
+        coolDown(currentMicUID, lost: true)
         moveMicrophone(micLost: true)
     }
 
@@ -616,7 +658,7 @@ nonisolated final class MeetingRecorder: @unchecked Sendable {
         guard !isMoving else { return }
         isMoving = true
         let previous = currentMicUID
-        if micLost { coolDown(previous) }
+        if micLost { coolDown(previous, lost: true) }
         let avoiding = coolingSet()
         let previousUsable = !micLost && previous.flatMap { AudioInputDevices.resolve(uid: $0) }.map { Self.isAlive($0.id) } == true
         let started = sessionMicUID

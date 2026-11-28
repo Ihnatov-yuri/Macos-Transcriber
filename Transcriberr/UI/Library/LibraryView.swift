@@ -335,7 +335,7 @@ struct LibraryView: View {
                     }
                     if all.count > 1 {
                         Button("Merge with…") { mergeSourceID = rec.id }
-                            .disabled(!mergingIDs.isEmpty)
+                            .disabled(!mergingIDs.isEmpty || container.jobManager.isActive(rec.id))
                     }
                     Divider()
                     Button("Delete…", role: .destructive) { deleting = rec }
@@ -388,6 +388,15 @@ struct LibraryView: View {
 
     private func merge(_ rec: Recording, _ other: Recording) {
         guard mergingIDs.isEmpty else { return }
+        // Merge copies the lines as they stand: mid-run that is a partial
+        // draft, and the merged recording would never get the finished one.
+        guard !container.jobManager.isActive(rec.id), !container.jobManager.isActive(other.id) else {
+            let alert = NSAlert()
+            alert.messageText = String(localized: "A transcription is still running")
+            alert.informativeText = String(localized: "Merge these two when it has finished, so the merged recording gets the whole transcript.")
+            alert.runModal()
+            return
+        }
         mergingIDs = [rec.id, other.id]
         Task { @MainActor in
             defer { mergingIDs = [] }

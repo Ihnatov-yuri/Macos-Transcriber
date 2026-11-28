@@ -101,6 +101,45 @@ final class MeetingMicMoveTests: XCTestCase {
         XCTAssertEqual(rebuilds, MeetingRecorder.maxStallRebuilds)
     }
 
+    // Review findings for 5.10.1.
+
+    func testARebuiltCaptureThatNeverDeliversIsRebuiltAgain() {
+        var s = MeetingRecorder.StallState()
+        _ = MeetingRecorder.stallStep(frames: 4800, last: -1, paused: false, state: &s)
+        _ = MeetingRecorder.stallStep(frames: 4800, last: 4800, paused: false, state: &s)
+        XCTAssertTrue(MeetingRecorder.stallStep(frames: 4800, last: 4800, paused: false, state: &s))
+        // The watchdog's moving tick: disarmed, counter back to zero.
+        s.armed = false; s.still = 0
+        var again = 0
+        for tick in 1...MeetingRecorder.rebuiltGraceSeconds {
+            if MeetingRecorder.stallStep(frames: 0, last: 0, paused: false, state: &s) { again = tick }
+        }
+        XCTAssertEqual(again, MeetingRecorder.rebuiltGraceSeconds, "given a longer wait than a running capture, then rebuilt")
+        // Never more than the limit, however long it stays silent.
+        var total = s.rebuilds
+        for _ in 0..<100 where MeetingRecorder.stallStep(frames: 0, last: 0, paused: false, state: &s) { total += 1 }
+        XCTAssertEqual(total, MeetingRecorder.maxStallRebuilds)
+        // A capture that never delivered at all (no permission) is left alone.
+        var never = MeetingRecorder.StallState()
+        for _ in 0..<30 { XCTAssertFalse(MeetingRecorder.stallStep(frames: 0, last: 0, paused: false, state: &never)) }
+    }
+
+    func testMicOffDoesNotOutliveTheMeetingSwitch() {
+        XCTAssertTrue(RecordModel.micChoiceEnds(activeMeeting: false, sessionRunning: false))
+        XCTAssertTrue(RecordModel.micChoiceEnds(activeMeeting: true, sessionRunning: false), "a meeting that has ended")
+        XCTAssertFalse(RecordModel.micChoiceEnds(activeMeeting: true, sessionRunning: true), "still recording: the choice stays")
+    }
+
+    func testAMicBackInsideItsCoolDownGetsASecondLook() {
+        let now = Date()
+        let lost: Set<String> = ["headset"]
+        XCTAssertTrue(MeetingRecorder.lostMicsDue([:], lost: lost, now: now).isEmpty)
+        XCTAssertTrue(MeetingRecorder.lostMicsDue(["headset": now.addingTimeInterval(5)], lost: lost, now: now).isEmpty)
+        XCTAssertEqual(MeetingRecorder.lostMicsDue(["headset": now.addingTimeInterval(-1)], lost: lost, now: now), lost)
+        // A mic that is there but would not open is not tried again on a timer.
+        XCTAssertTrue(MeetingRecorder.lostMicsDue(["hogged": now.addingTimeInterval(-1)], lost: lost, now: now).isEmpty)
+    }
+
     func testTheOutputClockFollowsTheDefaultOutputWithoutLooping() {
         // Headphones out: the tap follows the speakers, so must the clock.
         XCTAssertTrue(MeetingRecorder.outputMoved(clock: 105, now: 120))

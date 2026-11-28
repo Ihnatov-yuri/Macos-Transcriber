@@ -460,7 +460,7 @@ nonisolated final class AppContainer: @unchecked Sendable {
             alert.runModal()
             return
         }
-        if jobManager.statuses.values.contains(where: { !$0.failed }) {
+        if !jobManager.isIdle {
             let alert = NSAlert()
             alert.messageText = String(localized: "A transcription is running")
             alert.informativeText = String(localized: "Transcriberr quits to update, and the transcription starts again after it reopens.")

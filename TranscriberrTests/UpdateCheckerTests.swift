@@ -39,6 +39,47 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertNil(UpdateChecker.parse(Data("not json".utf8)))
     }
 
+    /// A check that fails later (a Mac waking offline) took the sidebar
+    /// notice away until the next successful check.
+    func testAFailedCheckKeepsTheUpdateAlreadyFound() throws {
+        let u = UpdateChecker(currentVersion: "5.10.0", defaults: freshDefaults(), askOnLaunch: false)
+        let r = try XCTUnwrap(UpdateChecker.parse(Data(#"{"tag_name":"v5.10.1","name":"v5.10.1","draft":false,"prerelease":false}"#.utf8)))
+        u.finish(.available(r))
+        XCTAssertEqual(u.pendingNotice?.version, "5.10.1")
+        let checked = u.lastCheck
+        u.finish(.failed("offline"))
+        XCTAssertEqual(u.pendingNotice?.version, "5.10.1")
+        XCTAssertEqual(u.lastCheck, checked, "a failed check does not count as checked")
+        u.finish(.upToDate)
+        XCTAssertNil(u.pendingNotice)
+    }
+
+    /// Quitting twice during one long run read as two crashes: the run was
+    /// dropped at the third launch.
+    func testACleanQuitIsNotACrash() {
+        let d = freshDefaults(), id = UUID()
+        // Two real crashes in a row: poisoned.
+        TranscriptionJobManager.markRunning(id, d)
+        XCTAssertEqual(TranscriptionJobManager.takeInterruptedRun(d).id, id.uuidString)
+        TranscriptionJobManager.markRunning(id, d)
+        XCTAssertTrue(TranscriptionJobManager.takeInterruptedRun(d).poisoned)
+        // Two quits in a row: resumed both times.
+        let e = freshDefaults()
+        for _ in 0..<3 {
+            TranscriptionJobManager.markRunning(id, e)
+            TranscriptionJobManager.noteCleanQuit(e)
+            let next = TranscriptionJobManager.takeInterruptedRun(e)
+            XCTAssertNil(next.id); XCTAssertFalse(next.poisoned)
+        }
+    }
+
+    func testACancelledRunLeavesNoSpinningRow() {
+        let id = UUID()
+        XCTAssertTrue(TranscriptionJobManager.dropStatusAfterCancel(.init(id: id, stage: "Reading… 40%", fraction: 0.4, failed: false, failureReason: nil)))
+        XCTAssertFalse(TranscriptionJobManager.dropStatusAfterCancel(.init(id: id, stage: "Failed", fraction: 1, failed: true, failureReason: "x")))
+        XCTAssertFalse(TranscriptionJobManager.dropStatusAfterCancel(nil))
+    }
+
     private func freshDefaults() -> UserDefaults {
         let name = "UpdateCheckerTests.\(UUID().uuidString)"
         let d = UserDefaults(suiteName: name)!

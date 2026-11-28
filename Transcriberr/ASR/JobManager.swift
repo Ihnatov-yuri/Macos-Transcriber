@@ -206,17 +206,37 @@ final class TranscriptionJobManager: @unchecked Sendable {
     private static let runningKey = "jobs.runningRecordingId"
     private static let retriedKey = "jobs.retriedRecordingId"
 
+    /// The run that was in flight when the app last died, and whether it
+    /// was in flight the time before as well. Moves the marker on, so each
+    /// launch reads it once.
+    static func takeInterruptedRun(_ defaults: UserDefaults) -> (id: String?, poisoned: Bool) {
+        let interrupted = defaults.string(forKey: runningKey)
+        let poisoned = interrupted != nil && interrupted == defaults.string(forKey: retriedKey)
+        defaults.set(poisoned ? nil : interrupted, forKey: retriedKey)
+        defaults.removeObject(forKey: runningKey)
+        return (interrupted, poisoned)
+    }
+
+    /// The app is quitting on purpose (Quit, an update, a restart). A run
+    /// cut short by that did not crash the app: without this, quitting
+    /// twice during one long run read as two crashes and the run was
+    /// dropped. The pending rows still bring it back at the next launch.
+    static func noteCleanQuit(_ defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: runningKey)
+        defaults.removeObject(forKey: retriedKey)
+    }
+
+    static func markRunning(_ id: UUID, _ defaults: UserDefaults = .standard) {
+        defaults.set(id.uuidString, forKey: runningKey)
+    }
+
     /// Re-queue whatever was still waiting (or running) when the app last
     /// went away. Called once at launch.
     func resumePendingTasks() {
         // The run that was IN FLIGHT when the app died gets one more go. If
         // it was in flight the time before as well, it is what kills the app
         // (a native crash in an engine) — drop it instead of crash-looping.
-        let defaults = UserDefaults.standard
-        let interrupted = defaults.string(forKey: Self.runningKey)
-        let poisoned = interrupted != nil && interrupted == defaults.string(forKey: Self.retriedKey)
-        defaults.set(poisoned ? nil : interrupted, forKey: Self.retriedKey)
-        defaults.removeObject(forKey: Self.runningKey)
+        let (interrupted, poisoned) = Self.takeInterruptedRun(.standard)
         for task in repository.pendingTasks() {
             if poisoned, task.recordingId.uuidString == interrupted {
                 AppLog.warn("job", "run for \(task.recordingId.uuidString) interrupted the app twice — not resuming it")
@@ -263,6 +283,13 @@ final class TranscriptionJobManager: @unchecked Sendable {
         statuses.removeValue(forKey: recordingId)
     }
 
+    /// After a cancelled run ends: a row still showing progress belongs to
+    /// nothing and would spin for ever. A failure note stays.
+    static func dropStatusAfterCancel(_ status: Status?) -> Bool {
+        guard let status else { return false }
+        return !status.failed && status.fraction < 1
+    }
+
     /// True while a job for this recording is running or queued.
     func isActive(_ recordingId: UUID) -> Bool {
         currentRecordingId == recordingId || queue.contains { $0.0.id == recordingId }
@@ -280,7 +307,7 @@ final class TranscriptionJobManager: @unchecked Sendable {
         let (recording, params, onSourceConsumed) = queue.removeFirst()
         let recordingId = recording.id
         currentRecordingId = recordingId
-        UserDefaults.standard.set(recordingId.uuidString, forKey: Self.runningKey)
+        Self.markRunning(recordingId)
         currentJob = Task { @MainActor [weak self] in
             defer {
                 self?.currentJob = nil
@@ -417,6 +444,10 @@ final class TranscriptionJobManager: @unchecked Sendable {
         var runDisputes: [WordDispute] = []
         do {
             for try await event in stream {
+                // Events yielded before a Cancel still arrive after it. One
+                // of them used to put the status row back, as a run that
+                // never ends, or wipe the transcript the user chose to keep.
+                if Task.isCancelled { break }
                 // The recording can be deleted mid-run (library context
                 // menu, detail MORE menu, the split flow's "Delete
                 // Original"). Cancellation is cooperative and a chunk in
@@ -636,7 +667,13 @@ final class TranscriptionJobManager: @unchecked Sendable {
             }
             // A cancelled consumer ends the stream quietly instead of
             // throwing, so the catch below never sees a user's Cancel.
-            if Task.isCancelled { AppLog.warn("job", "cancelled") }
+            if Task.isCancelled {
+                AppLog.warn("job", "cancelled")
+                // Not when the recording is queued again already: that row
+                // ("Queued…") belongs to the new run.
+                if !queue.contains(where: { $0.0.id == recording.id }),
+                   Self.dropStatusAfterCancel(statuses[recording.id]) { statuses.removeValue(forKey: recording.id) }
+            }
         } catch is CancellationError {
             AppLog.warn("job", "cancelled")
             statuses[recording.id] = Status(

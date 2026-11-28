@@ -120,7 +120,9 @@ enum PeopleConfidence {
             factors.append(.init(
                 kind: .distinct, title: String(localized: "Stands apart", comment: "Voice confidence factor: how different the voice is from other saved voices"),
                 value: clamp((gap - margin) / 0.25),
-                detail: String(localized: "Their samples score \(ownText) against their own voice and \(otherText) against \(nearest.name)'s, the closest saved voice. A gap over \(needed) tells them apart.")))
+                detail: ownVoice
+                    ? String(localized: "Your samples score \(ownText) against your own voice and \(otherText) against \(nearest.name)'s, the closest saved voice. A gap over \(needed) tells you apart.")
+                    : String(localized: "Their samples score \(ownText) against their own voice and \(otherText) against \(nearest.name)'s, the closest saved voice. A gap over \(needed) tells them apart.")))
         } else {
             factors.append(.init(kind: .distinct, title: String(localized: "Stands apart", comment: "Voice confidence factor: how different the voice is from other saved voices"), value: 1,
                                  detail: String(localized: "No other saved voice to mix them up with.")))

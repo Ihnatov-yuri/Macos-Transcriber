@@ -311,6 +311,7 @@ struct PersonPage: View {
                     .uiLabel(10, color: AppColor.ink2)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -369,6 +370,7 @@ struct PersonPage: View {
                 HairlineSoft()
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -412,6 +414,7 @@ struct PersonPage: View {
                 HairlineSoft()
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -444,6 +447,7 @@ struct PersonPage: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -540,6 +544,7 @@ struct PersonPage: View {
             }
             briefBody(period)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }
@@ -788,6 +793,7 @@ struct PersonPage: View {
                 HairlineSoft()
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(AppMetric.l)
         .litGlass()
     }

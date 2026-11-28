@@ -68,6 +68,20 @@ final class PeopleV5Tests: XCTestCase {
         XCTAssertEqual(p.print.embeddings.count, Person.maxEmbeddings)
     }
 
+    /// The You page read "Their samples score … against their own voice"
+    /// about the user's own voice: only the first factor knew whose it was.
+    func testYourOwnVoiceIsNotDescribedAsTheirs() {
+        let me = Person(id: UUID(), name: "You", created: Date(), updated: Date(), print: print([1, 0, 0, 0]), sources: 1)
+        let others: [(name: String, centroid: [Float])] = [(name: "Rado", centroid: [0, 1, 0, 0])]
+        let mine = PeopleConfidence.assess(me, others: others, ownVoice: true)
+        for f in mine.factors {
+            XCTAssertFalse(f.detail.lowercased().contains("their"), "\(f.kind): \(f.detail)")
+        }
+        XCTAssertTrue(mine.factors.first { $0.kind == .distinct }?.detail.hasPrefix("Your samples") ?? false)
+        let theirs = PeopleConfidence.assess(me, others: others)
+        XCTAssertTrue(theirs.factors.first { $0.kind == .distinct }?.detail.hasPrefix("Their samples") ?? false)
+    }
+
     func testOlderFilesBecomeOneEarlierSample() {
         let p = Person(id: UUID(), name: "Kate", created: Date(), updated: Date(), print: print([1, 0, 0, 0]), sources: 2)
         XCTAssertEqual(p.allSamples.count, 1)

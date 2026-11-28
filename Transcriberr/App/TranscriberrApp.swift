@@ -211,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        TranscriptionJobManager.noteCleanQuit()
         VirtualMicrophone.shared.shutdown()
     }
 }
